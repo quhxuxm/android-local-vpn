@@ -23,7 +23,6 @@
 //
 // For more information, please refer to <https://unlicense.org>
 
-use crate::core::tun_callbacks::on_socket_created;
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Interest, Poll, Token};
 use std::io::{ErrorKind, Result};
@@ -54,7 +53,7 @@ impl Socket {
     pub(crate) fn new(transport_protocol: TransportProtocol, internet_protocol: InternetProtocol, remote_address: SocketAddr) -> Option<Socket> {
         let socket = Self::create_socket(&transport_protocol, &internet_protocol);
 
-        on_socket_created(socket.as_raw_fd());
+        crate::android::on_socket_created(socket.as_raw_fd());
 
         let socket_address = socket2::SockAddr::from(remote_address);
 
