@@ -23,16 +23,13 @@
 //
 // For more information, please refer to <https://unlicense.org>
 
-#[macro_use]
-extern crate lazy_static;
-
 mod vpn;
 
 pub mod tun {
 
     extern crate log;
 
-    use crate::vpn::Vpn;
+    use crate::core::vpn::Vpn;
     use std::process;
     use std::sync::Mutex;
 

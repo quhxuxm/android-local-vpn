@@ -23,7 +23,7 @@
 //
 // For more information, please refer to <https://unlicense.org>
 
-use crate::tun_callbacks::on_socket_created;
+use crate::core::tun_callbacks::on_socket_created;
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Interest, Poll, Token};
 use std::io::{ErrorKind, Result};

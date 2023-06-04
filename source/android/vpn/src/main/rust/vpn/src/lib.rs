@@ -23,6 +23,8 @@
 //
 // For more information, please refer to <https://unlicense.org>
 
+mod core;
+
 #[macro_use]
 mod jni;
 
@@ -40,9 +42,9 @@ pub mod android {
     use crate::jni::Jni;
     use crate::socket_protector::SocketProtector;
 
+    use crate::core::tun;
+    use crate::core::tun_callbacks;
     use android_logger::Config;
-    use core::tun;
-    use core::tun_callbacks;
     use jni::objects::{JClass, JObject};
     use jni::JNIEnv;
     use std::process;
