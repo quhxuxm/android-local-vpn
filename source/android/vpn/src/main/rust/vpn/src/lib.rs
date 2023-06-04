@@ -36,7 +36,7 @@ pub mod android {
         set_panic_handler();
         Jni::init(env, class, java_vpn_service);
         SocketProtector::init();
-        tun::create();
+        log::trace!("create, pid={}", process::id());
     }
 
     /// # Safety
@@ -45,7 +45,7 @@ pub mod android {
     #[no_mangle]
     pub unsafe extern "C" fn Java_com_github_jonforshort_androidlocalvpn_vpn_LocalVpnService_onDestroyNative(_: JNIEnv, _: JClass) {
         log::trace!("onDestroyNative");
-        tun::destroy();
+        log::trace!("destroy, pid={}", process::id());
         SocketProtector::release();
         Jni::release();
         remove_panic_handler();
