@@ -33,7 +33,10 @@ pub(crate) enum Buffers {
 
 pub(crate) enum WriteError {
     Stderr(std::io::Error),
-    SmoltcpErr(smoltcp::Error),
+    SmoltcpUdpRecvErr(smoltcp::socket::udp::RecvError),
+    SmoltcpUdpSendErr(smoltcp::socket::udp::SendError),
+    SmoltcpTcpRecvErr(smoltcp::socket::tcp::RecvError),
+    SmoltcpTcpSendErr(smoltcp::socket::tcp::SendError),
 }
 
 impl Buffers {
@@ -66,11 +69,24 @@ impl Buffers {
                                 );
                             }
                         }
-                        WriteError::SmoltcpErr(err) => {
+                        WriteError::SmoltcpTcpRecvErr(err) => {
                             log::error!(
                                 "failed to write tcp, direction: {:?}, error={:?}",
                                 direction,
                                 err
+                            );
+                        }
+                        WriteError::SmoltcpTcpSendErr(err) => {
+                            log::error!(
+                                "failed to write tcp, direction: {:?}, error={:?}",
+                                direction,
+                                err
+                            );
+                        }
+                        _ => {
+                            log::error!(
+                                "failed to write tcp, direction: {:?}, because of unknown error",
+                                direction,
                             );
                         }
                     },
@@ -94,8 +110,8 @@ impl Buffers {
                                     );
                                 }
                             }
-                            WriteError::SmoltcpErr(err) => {
-                                if err == smoltcp::Error::Exhausted || err == smoltcp::Error::Truncated {
+                            WriteError::SmoltcpUdpRecvErr(err) => {
+                                if err == smoltcp::socket::udp::RecvError::Exhausted {
                                     break;
                                 } else {
                                     log::error!(
@@ -105,6 +121,18 @@ impl Buffers {
                                     );
                                 }
                             }
+                            WriteError::SmoltcpUdpSendErr(err) => {
+                                if err == smoltcp::socket::udp::SendError::Unaddressable {
+                                    break;
+                                } else {
+                                    log::error!(
+                                        "failed to write udp, direciton: {:?}, error={:?}",
+                                        direction,
+                                        err
+                                    );
+                                }
+                            }
+                            _ => break,
                         }
                     }
                     consumed += 1;

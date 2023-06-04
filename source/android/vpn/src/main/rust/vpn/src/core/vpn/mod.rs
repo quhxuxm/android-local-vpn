@@ -34,6 +34,7 @@ mod vpn_device;
 
 use mio::Waker;
 use processor::Processor;
+use smoltcp::iface::SocketSet;
 use std::thread;
 
 pub(super) struct Vpn {
@@ -54,6 +55,7 @@ impl Vpn {
     pub fn start(&mut self) {
         let mut processor = Processor::new(self.file_descriptor);
         self.stop_waker = Some(processor.new_stop_waker());
+
         self.thread_join_handle = Some(thread::spawn(move || processor.run()));
     }
 

@@ -23,40 +23,49 @@
 //
 // For more information, please refer to <https://unlicense.org>
 
-use super::buffers::{Buffers, TcpBuffers, UdpBuffers};
 use super::mio_socket::{InternetProtocol as MioInternetProtocol, Socket as MioSocket, TransportProtocol as MioTransportProtocol};
 use super::session_info::{InternetProtocol, SessionInfo, TransportProtocol};
 use super::smoltcp_socket::{Socket as SmoltcpSocket, TransportProtocol as SmoltcpProtocol};
 use super::vpn_device::VpnDevice;
+use super::{
+    buffers::{Buffers, TcpBuffers, UdpBuffers},
+    Vpn,
+};
 use mio::{Poll, Token};
-use smoltcp::iface::{Interface, InterfaceBuilder, Routes};
+use smoltcp::iface::{Config, Interface, Routes, SocketSet};
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
-use std::collections::btree_map::BTreeMap;
 
-pub(crate) struct Session<'a> {
+pub(crate) struct Session {
     pub(crate) smoltcp_socket: SmoltcpSocket,
     pub(crate) mio_socket: MioSocket,
     pub(crate) token: Token,
     pub(crate) buffers: Buffers,
-    pub(crate) interface: Interface<'a, VpnDevice>,
+    pub(crate) interface: Interface,
+    pub(crate) vpn_device: VpnDevice,
 }
 
-impl<'a> Session<'a> {
-    pub(crate) fn new(session_info: &SessionInfo, poll: &mut Poll, token: Token) -> Option<Session<'a>> {
-        let mut interface = Self::create_interface();
+impl Session {
+    pub(crate) fn new(session_info: &SessionInfo, poll: &mut Poll, token: Token, sockets: &mut SocketSet<'_>) -> Option<Session> {
+        let (mut interface, mut vpn_device) = Self::init();
 
         let session = Session {
-            smoltcp_socket: Self::create_smoltcp_socket(session_info, &mut interface)?,
+            smoltcp_socket: Self::create_smoltcp_socket(session_info, &mut interface, &mut vpn_device, sockets)?,
             mio_socket: Self::create_mio_socket(session_info, poll, token)?,
             token,
             buffers: Self::create_buffer(session_info),
             interface,
+            vpn_device,
         };
 
         Some(session)
     }
 
-    fn create_smoltcp_socket(session_info: &SessionInfo, interface: &mut Interface<VpnDevice>) -> Option<SmoltcpSocket> {
+    fn create_smoltcp_socket(
+        session_info: &SessionInfo,
+        interface: &mut Interface,
+        vpn_device: &mut VpnDevice,
+        sockets: &mut SocketSet,
+    ) -> Option<SmoltcpSocket> {
         let transport_protocol = match session_info.transport_protocol {
             TransportProtocol::Tcp => SmoltcpProtocol::Tcp,
             TransportProtocol::Udp => SmoltcpProtocol::Udp,
@@ -67,6 +76,8 @@ impl<'a> Session<'a> {
             session_info.source,
             session_info.destination,
             interface,
+            vpn_device,
+            sockets,
         )
     }
 
@@ -95,18 +106,26 @@ impl<'a> Session<'a> {
         Some(mio_socket)
     }
 
-    fn create_interface() -> Interface<'a, VpnDevice> {
-        let mut routes = Routes::new(BTreeMap::new());
+    fn init() -> (Interface, VpnDevice) {
+        let mut routes = Routes::new();
         let default_gateway_ipv4 = Ipv4Address::new(0, 0, 0, 1);
         routes.add_default_ipv4_route(default_gateway_ipv4).unwrap();
-
-        let interface = InterfaceBuilder::new(VpnDevice::new(), vec![])
-            .any_ip(true)
-            .ip_addrs([IpCidr::new(IpAddress::v4(0, 0, 0, 1), 0)])
-            .routes(routes)
-            .finalize();
-
+        let mut interface_config = Config::default();
+        interface_config.random_seed = rand::random::<u64>();
+        let mut vpn_device = VpnDevice::new();
+        let mut interface = Interface::new(interface_config, &mut vpn_device);
+        interface.set_any_ip(true);
+        interface.update_ip_addrs(|ip_addrs| {
+            ip_addrs
+                .push(IpCidr::new(IpAddress::v4(0, 0, 0, 1), 0))
+                .unwrap();
+        });
         interface
+            .routes_mut()
+            .add_default_ipv4_route(Ipv4Address::new(0, 0, 0, 1))
+            .unwrap();
+
+        (interface, vpn_device)
     }
 
     fn create_buffer(session_info: &SessionInfo) -> Buffers {
