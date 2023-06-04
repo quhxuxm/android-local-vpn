@@ -1,28 +1,3 @@
-// This is free and unencumbered software released into the public domain.
-//
-// Anyone is free to copy, modify, publish, use, compile, sell, or
-// distribute this software, either in source code form or as a compiled
-// binary, for any purpose, commercial or non-commercial, and by any
-// means.
-//
-// In jurisdictions that recognize copyright laws, the author or authors
-// of this software dedicate any and all copyright interest in the
-// software to the public domain. We make this dedication for the benefit
-// of the public at large and to the detriment of our heirs and
-// successors. We intend this dedication to be an overt act of
-// relinquishment in perpetuity of all present and future rights to this
-// software under copyright law.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-// IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-// OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-// ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-// OTHER DEALINGS IN THE SOFTWARE.
-//
-// For more information, please refer to <https://unlicense.org>
-
 mod jni_context;
 
 use jni::objects::{GlobalRef, JClass, JMethodID, JObject};
@@ -44,15 +19,18 @@ macro_rules! jni {
 
 pub struct Jni {
     java_vm: Arc<JavaVM>,
-    object: GlobalRef,
+    java_vpn_service: GlobalRef,
 }
 
 impl Jni {
-    pub fn init(env: JNIEnv, _: JClass, object: JObject) {
+    pub fn init(env: JNIEnv, _: JClass, java_vpn_service: JObject) {
         let mut jni = JNI.lock().unwrap();
         let java_vm = Arc::new(env.get_java_vm().unwrap());
-        let object = env.new_global_ref(object).unwrap();
-        *jni = Some(Jni { java_vm, object });
+        let java_vpn_service = env.new_global_ref(java_vpn_service).unwrap();
+        *jni = Some(Jni {
+            java_vm,
+            java_vpn_service,
+        });
     }
 
     pub fn release() {
@@ -64,10 +42,10 @@ impl Jni {
         match self.java_vm.attach_current_thread_permanently() {
             Ok(mut jni_env) => match Jni::get_protect_method_id(&mut jni_env) {
                 Some(protect_method_id) => {
-                    let object = self.object.as_obj();
+                    let java_vpn_service = self.java_vpn_service.as_obj();
                     return Some(JniContext {
                         jni_env,
-                        object,
+                        java_vpn_service,
                         protect_method_id,
                     });
                 }
