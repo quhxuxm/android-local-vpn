@@ -32,13 +32,7 @@ mod jni;
 mod socket_protector;
 
 #[macro_use]
-extern crate lazy_static;
-
 pub mod android {
-    extern crate android_logger;
-    extern crate jni;
-    extern crate log;
-
     use crate::jni::Jni;
     use crate::socket_protector::SocketProtector;
 

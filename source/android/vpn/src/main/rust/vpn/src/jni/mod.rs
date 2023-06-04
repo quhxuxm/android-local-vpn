@@ -23,14 +23,12 @@
 //
 // For more information, please refer to <https://unlicense.org>
 
-extern crate jni;
-
 mod jni_context;
-
-pub use jni_context::JniContext;
 
 use jni::objects::{GlobalRef, JClass, JMethodID, JObject};
 use jni::{JNIEnv, JavaVM};
+pub use jni_context::JniContext;
+use lazy_static::lazy_static;
 use std::sync::Arc;
 use std::sync::Mutex;
 

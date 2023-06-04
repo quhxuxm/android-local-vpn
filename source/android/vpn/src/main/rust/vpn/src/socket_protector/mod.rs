@@ -23,17 +23,14 @@
 //
 // For more information, please refer to <https://unlicense.org>
 
-extern crate crossbeam;
-extern crate jni;
-
 use crate::jni::JniContext;
 use crossbeam::channel::unbounded;
 use crossbeam::channel::{Receiver, Sender};
+use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
-
 lazy_static! {
     pub static ref SOCKET_PROTECTOR: Mutex<Option<SocketProtector>> = Mutex::new(None);
 }

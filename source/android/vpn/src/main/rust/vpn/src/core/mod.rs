@@ -27,7 +27,7 @@ mod vpn;
 
 pub mod tun {
 
-    extern crate log;
+    use lazy_static::lazy_static;
 
     use crate::core::vpn::Vpn;
     use std::process;
@@ -71,7 +71,7 @@ pub mod tun {
 }
 
 pub mod tun_callbacks {
-
+    use lazy_static::lazy_static;
     use std::sync::RwLock;
 
     lazy_static! {
