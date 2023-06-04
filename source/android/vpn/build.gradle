@@ -67,7 +67,7 @@ apply plugin: 'org.mozilla.rust-android-gradle.rust-android'
 cargo {
     module = "src/main/rust/vpn"
     libname = "vpn"
-    targets = ["arm64", "arm", "x86_64", "x86"]
+    targets = ['arm64', 'x86_64']
 }
 
 tasks.whenTaskAdded { task ->
