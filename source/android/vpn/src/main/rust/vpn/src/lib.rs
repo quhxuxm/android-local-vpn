@@ -41,6 +41,7 @@ pub mod android {
     use android_logger::Config;
     use jni::objects::{JClass, JObject};
     use jni::JNIEnv;
+    use log::LevelFilter;
     use std::process;
 
     /// # Safety
@@ -51,7 +52,7 @@ pub mod android {
         android_logger::init_once(
             Config::default()
                 .with_tag("nativeVpn")
-                .with_min_level(log::Level::Trace),
+                .with_max_level(LevelFilter::Trace),
         );
         log::trace!("onCreateNative");
         set_panic_handler();
