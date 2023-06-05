@@ -27,7 +27,7 @@
             </intent-filter>
         </activity>
         <service
-                android:name="com.github.jonforshort.androidlocalvpn.vpn.LocalVpnService"
+                android:name="com.ppaass.agent.vpn.LocalVpnService"
                 android:exported="false"
                 android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter>

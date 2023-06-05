@@ -1,4 +1,4 @@
-package com.github.jonforshort.androidlocalvpn.vpn
+package com.ppaass.agent.vpn
 
 import android.net.VpnService
 import androidx.activity.ComponentActivity

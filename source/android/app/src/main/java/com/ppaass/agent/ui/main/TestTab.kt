@@ -24,7 +24,7 @@
 //
 // For more information, please refer to <https://unlicense.org>
 //
-package com.github.jonforshort.androidlocalvpn.ui.main
+package com.ppaass.agent.ui.main
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth

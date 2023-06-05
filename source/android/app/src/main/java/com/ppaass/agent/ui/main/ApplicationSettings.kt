@@ -24,14 +24,19 @@
 //
 // For more information, please refer to <https://unlicense.org>
 //
-package com.github.jonforshort.androidlocalvpn.ui.theme
+package com.ppaass.agent.ui.main
 
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.Shapes
-import androidx.compose.ui.unit.dp
+import android.graphics.drawable.Drawable
 
-val Shapes = Shapes(
-    small = RoundedCornerShape(4.dp),
-    medium = RoundedCornerShape(4.dp),
-    large = RoundedCornerShape(0.dp)
+internal data class ApplicationSettings(
+    val appName: String,
+    val appIcon: Drawable,
+    val packageName: String,
+    val policy: VpnPolicy
 )
+
+internal enum class VpnPolicy {
+    DEFAULT,
+    ALLOW,
+    DISALLOW
+}

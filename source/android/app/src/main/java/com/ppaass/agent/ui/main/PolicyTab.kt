@@ -24,7 +24,7 @@
 //
 // For more information, please refer to <https://unlicense.org>
 //
-package com.github.jonforshort.androidlocalvpn.ui.main
+package com.ppaass.agent.ui.main
 
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.compose.foundation.Image
@@ -46,8 +46,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
-import com.github.jonforshort.androidlocalvpn.R
-import com.github.jonforshort.androidlocalvpn.ui.theme.AndroidLocalVpnTheme
+import com.ppaass.agent.R
+import com.ppaass.agent.ui.theme.AndroidLocalVpnTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.util.*
 

@@ -24,15 +24,15 @@
 //
 // For more information, please refer to <https://unlicense.org>
 //
-package com.github.jonforshort.androidlocalvpn.ui.main
+package com.ppaass.agent.ui.main
 
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.lifecycle.MutableLiveData
-import com.github.jonforshort.androidlocalvpn.vpn.LocalVpnActivity
-import com.github.jonforshort.androidlocalvpn.vpn.LocalVpnConfiguration
-import com.github.jonforshort.androidlocalvpn.vpn.PackageName
+import com.ppaass.agent.vpn.LocalVpnActivity
+import com.ppaass.agent.vpn.LocalVpnConfiguration
+import com.ppaass.agent.vpn.PackageName
 
 class MainActivity : LocalVpnActivity() {
 

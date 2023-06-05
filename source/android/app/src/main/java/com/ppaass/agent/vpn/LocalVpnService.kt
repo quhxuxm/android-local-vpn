@@ -24,7 +24,7 @@
 //
 // For more information, please refer to <https://unlicense.org>
 //
-package com.github.jonforshort.androidlocalvpn.vpn
+package com.ppaass.agent.vpn
 
 import android.app.ActivityManager
 import android.content.Context
@@ -34,9 +34,9 @@ import android.os.Build.VERSION
 import android.os.Build.VERSION_CODES
 import android.os.ParcelFileDescriptor
 import android.os.Parcelable
-import com.github.jonforshort.androidlocalvpn.vpn.LocalVpnService.Companion.INTENT_ACTION_START_VPN
-import com.github.jonforshort.androidlocalvpn.vpn.LocalVpnService.Companion.INTENT_ACTION_STOP_VPN
-import com.github.jonforshort.androidlocalvpn.vpn.LocalVpnService.Companion.INTENT_EXTRA_CONFIGURATION
+import com.ppaass.agent.vpn.LocalVpnService.Companion.INTENT_ACTION_START_VPN
+import com.ppaass.agent.vpn.LocalVpnService.Companion.INTENT_ACTION_STOP_VPN
+import com.ppaass.agent.vpn.LocalVpnService.Companion.INTENT_EXTRA_CONFIGURATION
 import timber.log.Timber.e
 import java.io.IOException
 import java.net.NetworkInterface

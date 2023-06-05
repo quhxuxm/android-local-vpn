@@ -24,19 +24,20 @@
 //
 // For more information, please refer to <https://unlicense.org>
 //
-package com.github.jonforshort.androidlocalvpn.ui.main
+package com.ppaass.agent
 
-import android.graphics.drawable.Drawable
+import android.app.Application
+import com.ppaass.agent.BuildConfig
+import timber.log.Timber
+import timber.log.Timber.DebugTree
 
-internal data class ApplicationSettings(
-    val appName: String,
-    val appIcon: Drawable,
-    val packageName: String,
-    val policy: VpnPolicy
-)
+class AndroidLocalVpnApp : Application() {
 
-internal enum class VpnPolicy {
-    DEFAULT,
-    ALLOW,
-    DISALLOW
+    override fun onCreate() {
+        super.onCreate()
+
+        if (BuildConfig.DEBUG) {
+            Timber.plant(DebugTree())
+        }
+    }
 }

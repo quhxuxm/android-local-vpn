@@ -22,7 +22,7 @@ pub mod android {
     ///
     /// This function should only be used in jni context.
     #[no_mangle]
-    pub unsafe extern "C" fn Java_com_github_jonforshort_androidlocalvpn_vpn_LocalVpnService_onCreateNative(
+    pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onCreateNative(
         env: JNIEnv,
         class: JClass,
         java_vpn_service: JObject,
@@ -43,7 +43,7 @@ pub mod android {
     ///
     /// This function should only be used in jni context.
     #[no_mangle]
-    pub unsafe extern "C" fn Java_com_github_jonforshort_androidlocalvpn_vpn_LocalVpnService_onDestroyNative(_: JNIEnv, _: JClass) {
+    pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onDestroyNative(_: JNIEnv, _: JClass) {
         log::trace!("onDestroyNative");
         log::trace!("destroy, pid={}", process::id());
         SocketProtector::release();
@@ -55,7 +55,7 @@ pub mod android {
     ///
     /// This function should only be used in jni context.
     #[no_mangle]
-    pub unsafe extern "C" fn Java_com_github_jonforshort_androidlocalvpn_vpn_LocalVpnService_onStartVpn(_: JNIEnv, _: JClass, file_descriptor: i32) {
+    pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(_: JNIEnv, _: JClass, file_descriptor: i32) {
         log::trace!("onStartVpn, pid={}, fd={}", process::id(), file_descriptor);
         socket_protector!().start();
         tun::start(file_descriptor);
@@ -65,7 +65,7 @@ pub mod android {
     ///
     /// This function should only be used in jni context.
     #[no_mangle]
-    pub unsafe extern "C" fn Java_com_github_jonforshort_androidlocalvpn_vpn_LocalVpnService_onStopVpn(_: JNIEnv, _: JClass) {
+    pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStopVpn(_: JNIEnv, _: JClass) {
         log::trace!("onStopVpn, pid={}", process::id());
         tun::stop();
         socket_protector!().stop();

@@ -24,7 +24,7 @@
 //
 // For more information, please refer to <https://unlicense.org>
 //
-package com.github.jonforshort.androidlocalvpn.ui.theme
+package com.ppaass.agent.ui.theme
 
 import androidx.compose.material.Typography
 import androidx.compose.ui.text.TextStyle

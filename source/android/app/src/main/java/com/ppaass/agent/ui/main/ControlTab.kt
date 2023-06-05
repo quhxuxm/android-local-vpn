@@ -24,7 +24,7 @@
 //
 // For more information, please refer to <https://unlicense.org>
 //
-package com.github.jonforshort.androidlocalvpn.ui.main
+package com.ppaass.agent.ui.main
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.MaterialTheme
@@ -34,7 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
-import com.github.jonforshort.androidlocalvpn.ui.theme.AndroidLocalVpnTheme
+import com.ppaass.agent.ui.theme.AndroidLocalVpnTheme
 
 @Composable
 internal fun ControlTab(

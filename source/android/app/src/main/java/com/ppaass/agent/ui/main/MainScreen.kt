@@ -24,7 +24,7 @@
 //
 // For more information, please refer to <https://unlicense.org>
 //
-package com.github.jonforshort.androidlocalvpn.ui.main
+package com.ppaass.agent.ui.main
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.*
@@ -39,13 +39,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.github.jonforshort.androidlocalvpn.ui.theme.AndroidLocalVpnTheme
+import com.ppaass.agent.ui.theme.AndroidLocalVpnTheme
 import com.google.accompanist.pager.ExperimentalPagerApi
 import com.google.accompanist.pager.HorizontalPager
 import com.google.accompanist.pager.pagerTabIndicatorOffset
 import com.google.accompanist.pager.rememberPagerState
 import kotlinx.coroutines.launch
-import org.xbill.DNS.*
 
 @Composable
 internal fun MainScreen(
