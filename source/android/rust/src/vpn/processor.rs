@@ -2,6 +2,7 @@ use super::buffers::{IncomingDataEvent, IncomingDirection, OutgoingDirection, Wr
 use super::session::Session;
 use super::session_info::SessionInfo;
 use super::utils::log_packet;
+use log::debug;
 use mio::event::Event;
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token, Waker};
