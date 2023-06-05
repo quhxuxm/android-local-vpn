@@ -13,9 +13,6 @@ use std::io::ErrorKind;
 use std::io::{Read, Write};
 use std::os::unix::io::FromRawFd;
 
-type Sessions = HashMap<SessionInfo, Session>;
-type TokensToSessions = HashMap<Token, SessionInfo>;
-
 const EVENTS_CAPACITY: usize = 1024;
 
 const TOKEN_TUN: Token = Token(0);
@@ -26,8 +23,8 @@ pub(crate) struct Processor {
     file_descriptor: i32,
     file: File,
     poll: Poll,
-    sessions: Sessions,
-    tokens_to_sessions: TokensToSessions,
+    sessions: HashMap<SessionInfo, Session>,
+    tokens_to_sessions: HashMap<Token, SessionInfo>,
     next_token_id: usize,
 }
 
@@ -37,8 +34,8 @@ impl Processor {
             file_descriptor,
             file: unsafe { File::from_raw_fd(file_descriptor) },
             poll: Poll::new().unwrap(),
-            sessions: Sessions::new(),
-            tokens_to_sessions: TokensToSessions::new(),
+            sessions: HashMap::new(),
+            tokens_to_sessions: HashMap::new(),
             next_token_id: TOKEN_START_ID,
         }
     }

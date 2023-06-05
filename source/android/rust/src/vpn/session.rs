@@ -2,7 +2,7 @@ use super::buffers::{Buffers, TcpBuffers, UdpBuffers};
 use super::mio_socket::{InternetProtocol as MioInternetProtocol, Socket as MioSocket, TransportProtocol as MioTransportProtocol};
 use super::session_info::{InternetProtocol, SessionInfo, TransportProtocol};
 use super::smoltcp_socket::{Socket as SmoltcpSocket, TransportProtocol as SmoltcpProtocol};
-use super::vpn_device::VpnDevice;
+use super::device::VpnDevice;
 use mio::{Poll, Token};
 use smoltcp::iface::{Config, Interface, Routes, SocketSet};
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};

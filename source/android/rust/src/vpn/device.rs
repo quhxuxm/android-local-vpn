@@ -1,7 +1,11 @@
 extern crate smoltcp;
 
-use smoltcp::phy::{self, Device, DeviceCapabilities, Medium};
+use log::debug;
 use smoltcp::time::Instant;
+use smoltcp::{
+    phy::{self, Device, DeviceCapabilities, Medium},
+    wire::{Ipv4Packet, PrettyPrinter},
+};
 
 use std::collections::VecDeque;
 
@@ -65,7 +69,12 @@ impl phy::RxToken for RxToken {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        f(&mut self.buffer)
+        let result = f(&mut self.buffer);
+        debug!(
+            ">>>> Ppaass vpn receive token rx from device:{}",
+            PrettyPrinter::<Ipv4Packet<&'static [u8]>>::new("", &self.buffer)
+        );
+        result
     }
 }
 
@@ -80,6 +89,10 @@ impl<'a> phy::TxToken for TxToken<'a> {
     {
         let mut buffer = vec![0; len];
         let result = f(&mut buffer);
+        debug!(
+            "<<<< Ppaass vpn send tx token to device:{}",
+            PrettyPrinter::<Ipv4Packet<&'static [u8]>>::new("", &buffer)
+        );
         self.queue.push_back(buffer);
         result
     }

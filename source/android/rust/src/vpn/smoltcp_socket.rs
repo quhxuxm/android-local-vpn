@@ -1,4 +1,4 @@
-use super::{buffers::WriteError, vpn_device::VpnDevice};
+use super::{buffers::WriteError, device::VpnDevice};
 use smoltcp::iface::{Interface, SocketHandle, SocketSet};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer};
 

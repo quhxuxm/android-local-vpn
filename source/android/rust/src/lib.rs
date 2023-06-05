@@ -16,13 +16,13 @@ use once_cell::sync::OnceCell;
 
 use anyhow::{anyhow, Result};
 
-use crate::vpn::Vpn;
+use crate::vpn::VpnServer;
 
 mod vpn;
 
 pub(crate) static mut JAVA_VPN_SERVICE_OBJ: OnceCell<GlobalRef> = OnceCell::new();
 pub(crate) static mut JAVA_VPN_JVM: OnceCell<JavaVM> = OnceCell::new();
-pub(crate) static mut VPN_SERVER: OnceCell<Vpn> = OnceCell::new();
+pub(crate) static mut VPN_SERVER: OnceCell<VpnServer> = OnceCell::new();
 /// # Safety
 ///
 /// This function should not be called before the horsemen are ready.
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
         process::id(),
         vpn_tun_device_fd
     );
-    let vpn = Vpn::new(vpn_tun_device_fd);
+    let vpn = VpnServer::new(vpn_tun_device_fd);
     VPN_SERVER
         .set(vpn)
         .expect("Fail to generate ppaass vpn server.");

@@ -5,20 +5,20 @@ mod session;
 mod session_info;
 mod smoltcp_socket;
 mod utils;
-mod vpn_device;
+mod device;
 
 use mio::Waker;
 use processor::Processor;
 use std::thread;
 
 #[derive(Debug)]
-pub struct Vpn {
+pub struct VpnServer {
     file_descriptor: i32,
     stop_waker: Option<Waker>,
     thread_join_handle: Option<thread::JoinHandle<()>>,
 }
 
-impl Vpn {
+impl VpnServer {
     pub fn new(file_descriptor: i32) -> Self {
         Self {
             file_descriptor,
@@ -30,7 +30,6 @@ impl Vpn {
     pub fn start(&mut self) {
         let mut processor = Processor::new(self.file_descriptor);
         self.stop_waker = Some(processor.new_stop_waker());
-
         self.thread_join_handle = Some(thread::spawn(move || processor.run()));
     }
 
