@@ -3,26 +3,26 @@ use std::process;
 use android_logger::Config;
 
 use jni::{
-    objects::{GlobalRef, JPrimitiveArray, JValue},
-    sys::jbyteArray,
+    objects::{GlobalRef, JValue},
     JNIEnv, JavaVM,
 };
 use jni::{
     objects::{JClass, JObject},
     sys::jint,
 };
-use log::{debug, error, trace, LevelFilter};
+use log::{error, trace, LevelFilter};
 
 use once_cell::sync::OnceCell;
 
 use anyhow::{anyhow, Result};
 
-mod core;
-use crate::core::tun;
+use crate::vpn::Vpn;
+
+mod vpn;
 
 pub(crate) static mut JAVA_VPN_SERVICE_OBJ: OnceCell<GlobalRef> = OnceCell::new();
 pub(crate) static mut JAVA_VPN_JVM: OnceCell<JavaVM> = OnceCell::new();
-
+pub(crate) static mut VPN_SERVER: OnceCell<Vpn> = OnceCell::new();
 /// # Safety
 ///
 /// This function should not be called before the horsemen are ready.
@@ -30,7 +30,10 @@ pub(crate) static mut JAVA_VPN_JVM: OnceCell<JavaVM> = OnceCell::new();
 pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStopVpn(_jni_env: JNIEnv, _class: JClass) {
     JAVA_VPN_JVM.take();
     JAVA_VPN_SERVICE_OBJ.take();
-    tun::stop();
+    VPN_SERVER
+        .get_mut()
+        .expect("Fail to get ppaass vpn server.")
+        .stop();
 }
 
 /// # Safety
@@ -69,7 +72,14 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
         process::id(),
         vpn_tun_device_fd
     );
-    tun::start(vpn_tun_device_fd);
+    let vpn = Vpn::new(vpn_tun_device_fd);
+    VPN_SERVER
+        .set(vpn)
+        .expect("Fail to generate ppaass vpn server.");
+    VPN_SERVER
+        .get_mut()
+        .expect("Fail to get ppaass vpn server.")
+        .start();
 }
 
 pub(crate) fn protect_socket(socket_fd: i32) -> Result<(), anyhow::Error> {
