@@ -1,40 +1,30 @@
 plugins {
     id 'com.android.application'
     id 'kotlin-android'
+    id 'kotlin-parcelize'
 }
 
 android {
     namespace 'com.github.jonforshort.androidlocalvpn'
-
     compileSdk 33
-
+    ndkVersion '25.2.9519653'
     defaultConfig {
         applicationId "com.github.jonforshort.androidlocalvpn"
         minSdk 26
         targetSdk 33
         versionCode 1
         versionName "1.0"
-
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        vectorDrawables {
-            useSupportLibrary true
-        }
     }
 
-    signingConfigs {
-        release {
-            storeFile file("${project.rootDir.absolutePath}/app/release.keystore")
-            storePassword "localvpn"
-            keyAlias "localvpn"
-            keyPassword "localvpn"
-        }
+    lint {
+        disable 'PackagedPrivateKey'
     }
 
     buildTypes {
         release {
-            minifyEnabled true
+            minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.release
         }
     }
 
@@ -62,10 +52,27 @@ android {
     }
 }
 
-dependencies {
-    implementation project(':android-local-vpn')
+apply plugin: 'org.mozilla.rust-android-gradle.rust-android'
 
-    implementation 'androidx.core:core-ktx:1.10.0'
+cargo {
+    module = "../rust"       // Or whatever directory contains your Cargo.toml
+    libname = "vpn"          // Or whatever matches Cargo.toml's [package] name.
+    targets = ['arm64', 'x86_64']      // See bellow for a longer list of options
+    verbose = true
+    profile = 'debug'
+    features {
+        all()
+    }
+}
+
+tasks.configureEach { task ->
+    if ((task.name == 'javaPreCompileDebug' || task.name == 'javaPreCompileRelease')) {
+        task.dependsOn 'cargoBuild'
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.10.1'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.9.0'
     implementation "androidx.compose.ui:ui:1.4.3"
@@ -78,8 +85,7 @@ dependencies {
     implementation 'com.jakewharton.timber:timber:4.7.1'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.1'
     implementation "androidx.lifecycle:lifecycle-viewmodel-compose:2.6.1"
-    implementation 'androidx.activity:activity-compose:1.7.1'
+    implementation 'androidx.activity:activity-compose:1.7.2'
     implementation 'dnsjava:dnsjava:3.5.1'
-
     debugImplementation "androidx.compose.ui:ui-tooling:1.4.3"
 }
