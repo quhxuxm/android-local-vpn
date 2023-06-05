@@ -121,8 +121,8 @@ internal class LocalVpnService : VpnService() {
 
     private fun startVpn(configuration: LocalVpnConfiguration?) {
         setUpVpnInterface(configuration)
-        onCreateNative(this)
-        onStartVpn(vpnInterface.detachFd())
+
+        onStartVpn(vpnInterface.detachFd(), this)
     }
 
     private fun setUpVpnInterface(configuration: LocalVpnConfiguration?) {
@@ -147,14 +147,11 @@ internal class LocalVpnService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        onDestroyNative()
+
     }
 
-    private external fun onCreateNative(vpnService: VpnService)
 
-    private external fun onDestroyNative()
-
-    private external fun onStartVpn(fileDescriptor: Int)
+    private external fun onStartVpn(fileDescriptor: Int, service: VpnService)
 
     private external fun onStopVpn()
 }

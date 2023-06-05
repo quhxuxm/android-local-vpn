@@ -29,6 +29,8 @@ use std::io::{ErrorKind, Result};
 use std::net::{Shutdown, SocketAddr};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 
+use crate::protect_socket;
+
 pub(crate) enum TransportProtocol {
     Tcp,
     Udp,
@@ -53,7 +55,7 @@ impl Socket {
     pub(crate) fn new(transport_protocol: TransportProtocol, internet_protocol: InternetProtocol, remote_address: SocketAddr) -> Option<Socket> {
         let socket = Self::create_socket(&transport_protocol, &internet_protocol);
 
-        crate::android::on_socket_created(socket.as_raw_fd());
+        protect_socket(socket.as_raw_fd());
 
         let socket_address = socket2::SockAddr::from(remote_address);
 
