@@ -1,32 +1,35 @@
 use super::buffers::{Buffers, TcpBuffers, UdpBuffers};
+use super::device::VpnDevice;
 use super::mio_socket::{InternetProtocol as MioInternetProtocol, Socket as MioSocket, TransportProtocol as MioTransportProtocol};
 use super::session_info::{InternetProtocol, SessionInfo, TransportProtocol};
 use super::smoltcp_socket::{Socket as SmoltcpSocket, TransportProtocol as SmoltcpProtocol};
-use super::device::VpnDevice;
 use mio::{Poll, Token};
 use smoltcp::iface::{Config, Interface, Routes, SocketSet};
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
-pub(crate) struct Session {
+pub(crate) struct Session<'sockets> {
     pub(crate) smoltcp_socket: SmoltcpSocket,
     pub(crate) mio_socket: MioSocket,
     pub(crate) token: Token,
     pub(crate) buffers: Buffers,
     pub(crate) interface: Interface,
     pub(crate) vpn_device: VpnDevice,
+    pub(crate) socketset: SocketSet<'sockets>,
 }
 
-impl Session {
-    pub(crate) fn new(session_info: &SessionInfo, poll: &mut Poll, token: Token, sockets: &mut SocketSet<'_>) -> Option<Session> {
+impl<'sockets> Session<'sockets> {
+    pub(crate) fn new<'a>(session_info: &SessionInfo, poll: &mut Poll, token: Token) -> Option<Session<'a>> {
         let (interface, vpn_device) = Self::init();
+        let mut socketset = SocketSet::new(vec![]);
 
         let session = Session {
-            smoltcp_socket: Self::create_smoltcp_socket(session_info, sockets)?,
+            smoltcp_socket: Self::create_smoltcp_socket(session_info, &mut socketset)?,
             mio_socket: Self::create_mio_socket(session_info, poll, token)?,
             token,
             buffers: Self::create_buffer(session_info),
             interface,
             vpn_device,
+            socketset,
         };
 
         Some(session)

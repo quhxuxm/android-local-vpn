@@ -1,10 +1,10 @@
+use crate::protect_socket;
+use log::error;
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Interest, Poll, Token};
 use std::io::{ErrorKind, Result};
 use std::net::{Shutdown, SocketAddr};
 use std::os::unix::io::{AsRawFd, FromRawFd};
-
-use crate::protect_socket;
 
 pub(crate) enum TransportProtocol {
     Tcp,
@@ -29,8 +29,6 @@ enum Connection {
 impl Socket {
     pub(crate) fn new(transport_protocol: TransportProtocol, internet_protocol: InternetProtocol, remote_address: SocketAddr) -> Option<Socket> {
         let socket = Self::create_socket(&transport_protocol, &internet_protocol);
-
-        protect_socket(socket.as_raw_fd());
 
         let socket_address = socket2::SockAddr::from(remote_address);
 
@@ -128,7 +126,9 @@ impl Socket {
         let socket = socket2::Socket::new(domain, socket_type, Some(protocol)).unwrap();
 
         socket.set_nonblocking(true).unwrap();
-
+        if let Err(e) = protect_socket(socket.as_raw_fd()) {
+            error!(">>>> Fail to protect outbound socket because of error: {e:?}")
+        };
         socket
     }
 
