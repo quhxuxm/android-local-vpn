@@ -2,11 +2,10 @@ use super::buffers::{IncomingDataEvent, IncomingDirection, OutgoingDirection, Wr
 use super::session::Session;
 use super::session_info::SessionInfo;
 use super::utils::log_packet;
-use log::debug;
 use mio::event::Event;
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token, Waker};
-use smoltcp::{iface::SocketSet, time::Instant};
+use smoltcp::time::Instant;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs::File;
