@@ -1,7 +1,6 @@
 use super::buffers::{IncomingDataEvent, IncomingDirection, OutgoingDirection, WriteError};
 use super::session::Session;
 use super::session_info::SessionInfo;
-use super::utils::log_packet;
 use mio::event::Event;
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token, Waker};
@@ -136,7 +135,7 @@ impl<'sockets> Processor<'sockets> {
                             break;
                         }
                         let read_buffer = buffer[..count].to_vec();
-                        log_packet("out", &read_buffer);
+
 
                         if let Some(session_info) = self.create_session(&read_buffer) {
                             let session = self.sessions.get_mut(&session_info).unwrap();
@@ -172,7 +171,6 @@ impl<'sockets> Processor<'sockets> {
             );
 
             while let Some(bytes) = session.vpn_device.transmit() {
-                log_packet("in", &bytes);
                 self.file.write_all(&bytes[..]).unwrap();
             }
 

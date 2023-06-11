@@ -1,5 +1,3 @@
-extern crate smoltcp;
-
 use log::debug;
 use smoltcp::time::Instant;
 use smoltcp::{
