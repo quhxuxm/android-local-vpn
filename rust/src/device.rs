@@ -8,29 +8,29 @@ use smoltcp::{
 use std::collections::VecDeque;
 
 #[derive(Debug)]
-pub(crate) struct VpnDevice {
+pub(crate) struct PpaassVpnDevice {
     rx_queue: VecDeque<Vec<u8>>,
     tx_queue: VecDeque<Vec<u8>>,
 }
 
-impl VpnDevice {
-    pub(crate) fn new() -> VpnDevice {
-        VpnDevice {
+impl PpaassVpnDevice {
+    pub(crate) fn new() -> PpaassVpnDevice {
+        PpaassVpnDevice {
             rx_queue: VecDeque::new(),
             tx_queue: VecDeque::new(),
         }
     }
 
-    pub(crate) fn receive(&mut self, bytes: Vec<u8>) {
+    pub(crate) fn push_rx(&mut self, bytes: Vec<u8>) {
         self.rx_queue.push_back(bytes);
     }
 
-    pub(crate) fn transmit(&mut self) -> Option<Vec<u8>> {
+    pub(crate) fn pop_tx(&mut self) -> Option<Vec<u8>> {
         self.tx_queue.pop_front()
     }
 }
 
-impl Device for VpnDevice {
+impl Device for PpaassVpnDevice {
     type RxToken<'a> = RxToken where Self: 'a;
     type TxToken<'a> = TxToken<'a> where Self: 'a;
 

@@ -1,7 +1,16 @@
-use std::process;
+mod buffers;
+mod device;
+mod error;
+mod mio_socket;
+mod processor;
+mod server;
+mod session;
+mod session_info;
+mod smoltcp_socket;
 
+use crate::server::PpaassVpnServer;
 use android_logger::Config;
-
+use anyhow::{anyhow, Result};
 use jni::{
     objects::{GlobalRef, JValue},
     JNIEnv, JavaVM,
@@ -12,17 +21,12 @@ use jni::{
 };
 use log::{error, trace, LevelFilter};
 
-use once_cell::sync::OnceCell;
-
-use anyhow::{anyhow, Result};
-
-use crate::vpn::VpnServer;
-
-mod vpn;
+use std::{cell::OnceCell, process};
 
 pub(crate) static mut JAVA_VPN_SERVICE_OBJ: OnceCell<GlobalRef> = OnceCell::new();
 pub(crate) static mut JAVA_VPN_JVM: OnceCell<JavaVM> = OnceCell::new();
-pub(crate) static mut VPN_SERVER: OnceCell<VpnServer> = OnceCell::new();
+pub(crate) static mut VPN_SERVER: OnceCell<PpaassVpnServer> = OnceCell::new();
+
 /// # Safety
 ///
 /// This function should not be called before the horsemen are ready.
@@ -72,9 +76,9 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
         process::id(),
         vpn_tun_device_fd
     );
-    let vpn = VpnServer::new(vpn_tun_device_fd);
+    let vpn_server = PpaassVpnServer::new(vpn_tun_device_fd);
     VPN_SERVER
-        .set(vpn)
+        .set(vpn_server)
         .expect("Fail to generate ppaass vpn server.");
     VPN_SERVER
         .get_mut()

@@ -1,28 +1,28 @@
 use super::buffers::{Buffers, TcpBuffers, UdpBuffers};
-use super::device::VpnDevice;
+use super::device::PpaassVpnDevice;
 use super::mio_socket::{InternetProtocol as MioInternetProtocol, Socket as MioSocket, TransportProtocol as MioTransportProtocol};
-use super::session_info::{InternetProtocol, SessionInfo, TransportProtocol};
+use super::session_info::{InternetProtocol, TransportProtocol, TransportationInfo};
 use super::smoltcp_socket::{Socket as SmoltcpSocket, TransportProtocol as SmoltcpProtocol};
 use mio::{Poll, Token};
 use smoltcp::iface::{Config, Interface, Routes, SocketSet};
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
-pub(crate) struct Session<'sockets> {
+pub(crate) struct Transportation<'sockets> {
     pub(crate) smoltcp_socket: SmoltcpSocket,
     pub(crate) mio_socket: MioSocket,
     pub(crate) token: Token,
     pub(crate) buffers: Buffers,
     pub(crate) interface: Interface,
-    pub(crate) vpn_device: VpnDevice,
+    pub(crate) vpn_device: PpaassVpnDevice,
     pub(crate) socketset: SocketSet<'sockets>,
 }
 
-impl<'sockets> Session<'sockets> {
-    pub(crate) fn new<'a>(session_info: &SessionInfo, poll: &mut Poll, token: Token) -> Option<Session<'a>> {
+impl<'sockets> Transportation<'sockets> {
+    pub(crate) fn new<'a>(session_info: &TransportationInfo, poll: &mut Poll, token: Token) -> Option<Transportation<'a>> {
         let (interface, vpn_device) = Self::init();
         let mut socketset = SocketSet::new(vec![]);
 
-        let session = Session {
+        let session = Transportation {
             smoltcp_socket: Self::create_smoltcp_socket(session_info, &mut socketset)?,
             mio_socket: Self::create_mio_socket(session_info, poll, token)?,
             token,
@@ -35,7 +35,7 @@ impl<'sockets> Session<'sockets> {
         Some(session)
     }
 
-    fn create_smoltcp_socket(session_info: &SessionInfo, sockets: &mut SocketSet) -> Option<SmoltcpSocket> {
+    fn create_smoltcp_socket(session_info: &TransportationInfo, sockets: &mut SocketSet) -> Option<SmoltcpSocket> {
         let transport_protocol = match session_info.transport_protocol {
             TransportProtocol::Tcp => SmoltcpProtocol::Tcp,
             TransportProtocol::Udp => SmoltcpProtocol::Udp,
@@ -49,7 +49,7 @@ impl<'sockets> Session<'sockets> {
         )
     }
 
-    fn create_mio_socket(session_info: &SessionInfo, poll: &mut Poll, token: Token) -> Option<MioSocket> {
+    fn create_mio_socket(session_info: &TransportationInfo, poll: &mut Poll, token: Token) -> Option<MioSocket> {
         let transport_protocol = match session_info.transport_protocol {
             TransportProtocol::Tcp => MioTransportProtocol::Tcp,
             TransportProtocol::Udp => MioTransportProtocol::Udp,
@@ -74,13 +74,13 @@ impl<'sockets> Session<'sockets> {
         Some(mio_socket)
     }
 
-    fn init() -> (Interface, VpnDevice) {
+    fn init() -> (Interface, PpaassVpnDevice) {
         let mut routes = Routes::new();
         let default_gateway_ipv4 = Ipv4Address::new(0, 0, 0, 1);
         routes.add_default_ipv4_route(default_gateway_ipv4).unwrap();
         let mut interface_config = Config::default();
         interface_config.random_seed = rand::random::<u64>();
-        let mut vpn_device = VpnDevice::new();
+        let mut vpn_device = PpaassVpnDevice::new();
         let mut interface = Interface::new(interface_config, &mut vpn_device);
         interface.set_any_ip(true);
         interface.update_ip_addrs(|ip_addrs| {
@@ -96,7 +96,7 @@ impl<'sockets> Session<'sockets> {
         (interface, vpn_device)
     }
 
-    fn create_buffer(session_info: &SessionInfo) -> Buffers {
+    fn create_buffer(session_info: &TransportationInfo) -> Buffers {
         match session_info.transport_protocol {
             TransportProtocol::Tcp => Buffers::Tcp(TcpBuffers::new()),
             TransportProtocol::Udp => Buffers::Udp(UdpBuffers::new()),
