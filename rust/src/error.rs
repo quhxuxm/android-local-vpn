@@ -1,7 +1,7 @@
 use std::io::Error as StdIoError;
 use thiserror::Error;
 
-use crate::session_info::TransportationInfo;
+use crate::transportation::TransportationId;
 #[derive(Error, Debug)]
 pub enum AgentError {
     #[error("Network error happen: {0:?}")]
@@ -33,5 +33,7 @@ pub enum ServerError {
     #[error("Fail to stop processor.")]
     FailToStopProcessor,
     #[error("Transportation not exist: {0:?}")]
-    TransportationNotExist(TransportationInfo),
+    TransportationNotExist(TransportationId),
 }
+
+pub enum Parse {}

@@ -11,14 +11,19 @@ pub(crate) enum TransportProtocol {
     Udp,
 }
 
-pub(crate) struct Socket {
+pub(crate) struct LocalEndPoint {
     socket_handle: SocketHandle,
     transport_protocol: TransportProtocol,
     local_endpoint: IpEndpoint,
 }
 
-impl Socket {
-    pub(crate) fn new(transport_protocol: TransportProtocol, local_address: SocketAddr, remote_address: SocketAddr, sockets: &mut SocketSet) -> Option<Socket> {
+impl LocalEndPoint {
+    pub(crate) fn new(
+        transport_protocol: TransportProtocol,
+        local_address: SocketAddr,
+        remote_address: SocketAddr,
+        sockets: &mut SocketSet,
+    ) -> Option<LocalEndPoint> {
         let local_endpoint = IpEndpoint::from(local_address);
 
         let remote_endpoint = IpEndpoint::from(remote_address);
@@ -34,7 +39,7 @@ impl Socket {
             }
         };
 
-        let socket = Socket {
+        let socket = LocalEndPoint {
             socket_handle,
             transport_protocol,
             local_endpoint,

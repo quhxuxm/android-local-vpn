@@ -1,12 +1,11 @@
 mod buffers;
 mod device;
 mod error;
-mod mio_socket;
+mod remote;
 mod processor;
 mod server;
-mod session;
-mod session_info;
-mod smoltcp_socket;
+mod local;
+mod transportation;
 
 use crate::server::PpaassVpnServer;
 use android_logger::Config;
@@ -37,7 +36,8 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStopVpn(_jn
     VPN_SERVER
         .get_mut()
         .expect("Fail to get ppaass vpn server.")
-        .stop();
+        .stop()
+        .unwrap();
 }
 
 /// # Safety
@@ -83,7 +83,8 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
     VPN_SERVER
         .get_mut()
         .expect("Fail to get ppaass vpn server.")
-        .start();
+        .start()
+        .unwrap();
 }
 
 pub(crate) fn protect_socket(socket_fd: i32) -> Result<(), anyhow::Error> {
