@@ -3,7 +3,7 @@ use crate::{
     transportation,
 };
 
-use super::buffers::{IncomingDataEvent, IncomingDirection, OutgoingDirection, WriteError};
+use super::buffers::{IncomingDataEvent, IncomingDirection, OutgoingDirection};
 use super::transportation::Transportation;
 use super::transportation::TransportationId;
 use log::{debug, error};
@@ -24,18 +24,18 @@ const TOKEN_DEVICE: Token = Token(0);
 const TOKEN_WAKER: Token = Token(1);
 const TOKEN_START_ID: usize = 2;
 
-pub(crate) struct TransportationProcessor<'sockets> {
+pub(crate) struct TransportationProcessor<'sockets, 'buf> {
     device_file_descriptor: i32,
     device_file: File,
     poll: Poll,
-    transportations: HashMap<TransportationId, Transportation<'sockets>>,
+    transportations: HashMap<TransportationId, Transportation<'sockets, 'buf>>,
     tokens_to_transportations: HashMap<Token, TransportationId>,
     next_token_id: usize,
 }
 
-impl<'sockets> TransportationProcessor<'sockets> {
+impl<'sockets, 'buf> TransportationProcessor<'sockets, 'buf> {
     pub(crate) fn new(device_file_descriptor: i32) -> Result<Self, AgentError> {
-        let poll = Poll::new().map_err(NetworkError::FailToInitializePoll)?;
+        let poll = Poll::new().map_err(NetworkError::InitializePoll)?;
         Ok(TransportationProcessor {
             device_file_descriptor,
             device_file: unsafe { File::from_raw_fd(device_file_descriptor) },
@@ -47,7 +47,7 @@ impl<'sockets> TransportationProcessor<'sockets> {
     }
 
     pub(crate) fn new_stop_waker(&self) -> Result<Waker, AgentError> {
-        let waker = Waker::new(self.poll.registry(), TOKEN_WAKER).map_err(NetworkError::FailToInitializeWaker)?;
+        let waker = Waker::new(self.poll.registry(), TOKEN_WAKER).map_err(NetworkError::InitializeWaker)?;
         Ok(waker)
     }
 
@@ -59,14 +59,14 @@ impl<'sockets> TransportationProcessor<'sockets> {
                 TOKEN_DEVICE,
                 Interest::READABLE,
             )
-            .map_err(NetworkError::FailToRegisterSource)?;
+            .map_err(NetworkError::RegisterSource)?;
 
         let mut events = Events::with_capacity(EVENTS_CAPACITY);
 
         'device_file_poll_loop: loop {
             self.poll
                 .poll(&mut events, None)
-                .map_err(NetworkError::FailToPollSource)?;
+                .map_err(NetworkError::PollSource)?;
             for event in events.iter() {
                 if event.token() == TOKEN_DEVICE {
                     if let Err(e) = self.handle_device_file_io_event(event) {
@@ -103,10 +103,7 @@ impl<'sockets> TransportationProcessor<'sockets> {
         self.write_to_device_file(trans_id);
 
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
-            let mut smoltcp_socket = transportation
-                .smoltcp_socket
-                .get(&mut transportation.socketset);
-            smoltcp_socket.close();
+            transportation.device_endpoint.close();
             let mio_socket = &mut transportation.remote_endpoint;
             mio_socket.close();
             mio_socket.deregister_poll(&mut self.poll).unwrap();
@@ -230,13 +227,10 @@ impl<'sockets> TransportationProcessor<'sockets> {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             let mut data: [u8; 65535] = [0; 65535];
             loop {
-                let mut socket = transportation
-                    .smoltcp_socket
-                    .get(&mut transportation.socketset);
-                if !socket.can_receive() {
+                if !transportation.device_endpoint.can_receive() {
                     break;
                 }
-                match socket.receive(&mut data) {
+                match transportation.device_endpoint.receive(&mut data) {
                     Ok(data_len) => {
                         let event = IncomingDataEvent {
                             direction: IncomingDirection::FromClient,
@@ -256,13 +250,12 @@ impl<'sockets> TransportationProcessor<'sockets> {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             log::trace!("write to smoltcp, session={:?}", trans_id);
 
-            let mut socket = transportation
-                .smoltcp_socket
-                .get(&mut transportation.socketset);
-            if socket.can_send() {
+            if transportation.device_endpoint.can_send() {
                 transportation
                     .buffers
-                    .write_data(OutgoingDirection::ToClient, |b| socket.send(b));
+                    .write_data(OutgoingDirection::ToClient, |b| {
+                        transportation.device_endpoint.send(b)
+                    });
             }
         }
     }

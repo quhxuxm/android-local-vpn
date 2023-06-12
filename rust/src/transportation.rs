@@ -2,7 +2,7 @@ use super::buffers::{Buffers, TcpBuffers, UdpBuffers};
 use super::device::PpaassVpnDevice;
 use super::remote::{InternetProtocol as MioInternetProtocol, RemoteEndpoint, TransportProtocol as MioTransportProtocol};
 
-use super::local::{LocalEndPoint as SmoltcpSocket, TransportProtocol as SmoltcpProtocol};
+use super::local::{DeviceEndpoint, TransportProtocol as SmoltcpProtocol};
 use log::{error, warn};
 use mio::{Poll, Token};
 use smoltcp::iface::{Config, Interface, Routes, SocketSet};
@@ -141,8 +141,8 @@ impl fmt::Display for TransportationId {
     }
 }
 
-pub(crate) struct Transportation<'sockets> {
-    pub(crate) smoltcp_socket: SmoltcpSocket,
+pub(crate) struct Transportation<'sockets, 'buf> {
+    pub(crate) device_endpoint: DeviceEndpoint<'sockets, 'buf>,
     pub(crate) remote_endpoint: RemoteEndpoint,
     pub(crate) token: Token,
     pub(crate) buffers: Buffers,
@@ -151,13 +151,13 @@ pub(crate) struct Transportation<'sockets> {
     pub(crate) socketset: SocketSet<'sockets>,
 }
 
-impl<'sockets> Transportation<'sockets> {
+impl<'sockets, 'buf> Transportation<'sockets, 'buf> {
     pub(crate) fn new(trans_id: TransportationId, poll: &mut Poll, token: Token) -> Option<Self> {
         let (interface, device) = Self::prepare_iface_and_device();
         let mut socketset = SocketSet::new(vec![]);
 
         let session = Transportation {
-            smoltcp_socket: Self::create_smoltcp_socket(trans_id, &mut socketset)?,
+            device_endpoint: Self::create_device_endpoint(trans_id, &mut socketset)?,
             remote_endpoint: Self::create_remote_endpoint(trans_id, poll, token)?,
             token,
             buffers: Self::create_buffer(trans_id),
@@ -169,13 +169,13 @@ impl<'sockets> Transportation<'sockets> {
         Some(session)
     }
 
-    fn create_smoltcp_socket(trans_id: TransportationId, sockets: &mut SocketSet) -> Option<SmoltcpSocket> {
+    fn create_device_endpoint<'a, 'b>(trans_id: TransportationId, sockets: &mut SocketSet) -> Option<DeviceEndpoint<'a, 'b>> {
         let transport_protocol = match trans_id.transport_protocol {
             TransportProtocol::Tcp => SmoltcpProtocol::Tcp,
             TransportProtocol::Udp => SmoltcpProtocol::Udp,
         };
 
-        SmoltcpSocket::new(
+        DeviceEndpoint::new(
             transport_protocol,
             trans_id.source,
             trans_id.destination,

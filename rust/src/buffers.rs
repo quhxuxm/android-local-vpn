@@ -1,17 +1,11 @@
 use std::collections::VecDeque;
 use std::io::ErrorKind;
 
+use crate::error::NetworkError;
+
 pub(crate) enum Buffers {
     Tcp(TcpBuffers),
     Udp(UdpBuffers),
-}
-
-pub(crate) enum WriteError {
-    Stderr(std::io::Error),
-    SmoltcpUdpRecvErr(smoltcp::socket::udp::RecvError),
-    SmoltcpUdpSendErr(smoltcp::socket::udp::SendError),
-    SmoltcpTcpRecvErr(smoltcp::socket::tcp::RecvError),
-    SmoltcpTcpSendErr(smoltcp::socket::tcp::SendError),
 }
 
 impl Buffers {
@@ -24,7 +18,7 @@ impl Buffers {
 
     pub(crate) fn write_data<F>(&mut self, direction: OutgoingDirection, mut write_fn: F)
     where
-        F: FnMut(&[u8]) -> Result<usize, WriteError>,
+        F: FnMut(&[u8]) -> Result<usize, NetworkError>,
     {
         match self {
             Buffers::Tcp(tcp_buf) => {

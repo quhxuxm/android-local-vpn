@@ -1,10 +1,10 @@
 mod buffers;
 mod device;
 mod error;
-mod remote;
-mod processor;
-mod server;
 mod local;
+mod processor;
+mod remote;
+mod server;
 mod transportation;
 
 use crate::server::PpaassVpnServer;
@@ -71,7 +71,7 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
                 .expect("Fail to generate java vpn service object globale reference"),
         )
         .expect("Fail to save java vpn service object to global reference");
-    log::trace!(
+    trace!(
         "onStartVpn, pid={}, fd={}",
         process::id(),
         vpn_tun_device_fd

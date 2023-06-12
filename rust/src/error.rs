@@ -1,3 +1,5 @@
+use smoltcp::socket::tcp::{RecvError as TcpRecvError, SendError as TcpSendError};
+use smoltcp::socket::udp::{RecvError as UdpRecvError, SendError as UdpSendError};
 use std::io::Error as StdIoError;
 use thiserror::Error;
 
@@ -13,13 +15,21 @@ pub enum AgentError {
 #[derive(Error, Debug)]
 pub enum NetworkError {
     #[error("Fail to initialize poll because of error: {0:?}")]
-    FailToInitializePoll(#[source] StdIoError),
+    InitializePoll(#[source] StdIoError),
     #[error("Fail to initialize waker because of error: {0:?}")]
-    FailToInitializeWaker(#[source] StdIoError),
+    InitializeWaker(#[source] StdIoError),
     #[error("Fail to register source because of error: {0:?}")]
-    FailToRegisterSource(#[source] StdIoError),
+    RegisterSource(#[source] StdIoError),
     #[error("Fail to poll source because of error: {0:?}")]
-    FailToPollSource(#[source] StdIoError),
+    PollSource(#[source] StdIoError),
+    #[error("Fail to send tcp data to device because of error: {0:?}")]
+    SendTcpDataToDevice(TcpSendError),
+    #[error("Fail to send udp data to device because of error: {0:?}")]
+    SendUdpDataToDevice(UdpSendError),
+    #[error("Fail to receive tcp data from device because of error: {0:?}")]
+    ReceiveTcpDataFromDevice(TcpRecvError),
+    #[error("Fail to receive udp data from device because of error: {0:?}")]
+    ReceiveUdpDataFromDevice(UdpRecvError),
 }
 
 #[derive(Error, Debug)]
@@ -35,5 +45,3 @@ pub enum ServerError {
     #[error("Transportation not exist: {0:?}")]
     TransportationNotExist(TransportationId),
 }
-
-pub enum Parse {}
