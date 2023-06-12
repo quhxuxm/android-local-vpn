@@ -1,9 +1,8 @@
 mod buffers;
 mod device;
 mod error;
-mod local;
 mod processor;
-mod remote;
+
 mod server;
 mod transportation;
 

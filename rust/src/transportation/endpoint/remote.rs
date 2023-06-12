@@ -1,20 +1,13 @@
-use crate::protect_socket;
+use crate::{
+    protect_socket,
+    transportation::{InternetProtocol, TransportProtocol},
+};
 use log::error;
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Interest, Poll, Token};
 use std::io::{ErrorKind, Result};
 use std::net::{Shutdown, SocketAddr};
 use std::os::unix::io::{AsRawFd, FromRawFd};
-
-pub(crate) enum TransportProtocol {
-    Tcp,
-    Udp,
-}
-
-pub(crate) enum InternetProtocol {
-    Ipv4,
-    Ipv6,
-}
 
 pub(crate) struct RemoteEndpoint {
     _socket: socket2::Socket, // Need to retain so socket does not get closed.

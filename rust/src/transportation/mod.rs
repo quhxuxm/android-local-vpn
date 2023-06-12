@@ -1,15 +1,21 @@
-use super::buffers::{Buffers, TcpBuffers, UdpBuffers};
-use super::device::PpaassVpnDevice;
-use super::remote::{InternetProtocol as MioInternetProtocol, RemoteEndpoint, TransportProtocol as MioTransportProtocol};
+mod endpoint;
 
-use super::local::{DeviceEndpoint, TransportProtocol as SmoltcpProtocol};
+use crate::{
+    buffers::{IncomingDataEvent, IncomingDirection},
+    error::NetworkError,
+};
+
+use super::buffers::{Buffers, TcpBuffers, UdpBuffers};
+use endpoint::DeviceEndpoint;
+use endpoint::RemoteEndpoint;
 use log::{error, warn};
 use mio::{Poll, Token};
-use smoltcp::iface::{Config, Interface, Routes, SocketSet};
-use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
+
 use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv6Packet, TcpPacket, UdpPacket};
+
 use std::fmt;
 use std::hash::Hash;
+use std::io::Error as StdIoError;
 use std::net::SocketAddr;
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -26,10 +32,10 @@ pub(crate) enum InternetProtocol {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub struct TransportationId {
-    pub(crate) source: SocketAddr,
-    pub(crate) destination: SocketAddr,
-    pub(crate) transport_protocol: TransportProtocol,
-    pub(crate) internet_protocol: InternetProtocol,
+    source: SocketAddr,
+    destination: SocketAddr,
+    transport_protocol: TransportProtocol,
+    internet_protocol: InternetProtocol,
 }
 
 impl TransportationId {
@@ -141,60 +147,40 @@ impl fmt::Display for TransportationId {
     }
 }
 
-pub(crate) struct Transportation<'sockets, 'buf> {
-    pub(crate) device_endpoint: DeviceEndpoint<'sockets, 'buf>,
-    pub(crate) remote_endpoint: RemoteEndpoint,
-    pub(crate) token: Token,
-    pub(crate) buffers: Buffers,
-    pub(crate) interface: Interface,
-    pub(crate) device: PpaassVpnDevice,
-    pub(crate) socketset: SocketSet<'sockets>,
+pub(crate) struct Transportation<'buf> {
+    token: Token,
+    device_endpoint: DeviceEndpoint<'buf>,
+    remote_endpoint: RemoteEndpoint,
+    buffers: Buffers,
 }
 
-impl<'sockets, 'buf> Transportation<'sockets, 'buf> {
+impl<'buf> Transportation<'buf> {
     pub(crate) fn new(trans_id: TransportationId, poll: &mut Poll, token: Token) -> Option<Self> {
-        let (interface, device) = Self::prepare_iface_and_device();
-        let mut socketset = SocketSet::new(vec![]);
-
+        let device_endpoint = Self::create_device_endpoint(trans_id)?;
         let session = Transportation {
-            device_endpoint: Self::create_device_endpoint(trans_id, &mut socketset)?,
+            device_endpoint,
             remote_endpoint: Self::create_remote_endpoint(trans_id, poll, token)?,
             token,
             buffers: Self::create_buffer(trans_id),
-            interface,
-            device,
-            socketset,
         };
 
         Some(session)
     }
 
-    fn create_device_endpoint<'a, 'b>(trans_id: TransportationId, sockets: &mut SocketSet) -> Option<DeviceEndpoint<'a, 'b>> {
-        let transport_protocol = match trans_id.transport_protocol {
-            TransportProtocol::Tcp => SmoltcpProtocol::Tcp,
-            TransportProtocol::Udp => SmoltcpProtocol::Udp,
-        };
-
+    fn create_device_endpoint(trans_id: TransportationId) -> Option<DeviceEndpoint<'buf>> {
         DeviceEndpoint::new(
-            transport_protocol,
+            trans_id.transport_protocol,
             trans_id.source,
             trans_id.destination,
-            sockets,
         )
     }
 
     fn create_remote_endpoint(trans_id: TransportationId, poll: &mut Poll, token: Token) -> Option<RemoteEndpoint> {
-        let transport_protocol = match trans_id.transport_protocol {
-            TransportProtocol::Tcp => MioTransportProtocol::Tcp,
-            TransportProtocol::Udp => MioTransportProtocol::Udp,
-        };
-
-        let internet_protocol = match trans_id.internet_protocol {
-            InternetProtocol::Ipv4 => MioInternetProtocol::Ipv4,
-            InternetProtocol::Ipv6 => MioInternetProtocol::Ipv6,
-        };
-
-        let mut mio_socket = RemoteEndpoint::new(transport_protocol, internet_protocol, trans_id.destination)?;
+        let mut mio_socket = RemoteEndpoint::new(
+            trans_id.transport_protocol,
+            trans_id.internet_protocol,
+            trans_id.destination,
+        )?;
 
         if let Err(error) = mio_socket.register_poll(poll, token) {
             log::error!("failed to register poll, error={:?}", error);
@@ -204,32 +190,75 @@ impl<'sockets, 'buf> Transportation<'sockets, 'buf> {
         Some(mio_socket)
     }
 
-    fn prepare_iface_and_device() -> (Interface, PpaassVpnDevice) {
-        let mut routes = Routes::new();
-        let default_gateway_ipv4 = Ipv4Address::new(0, 0, 0, 1);
-        routes.add_default_ipv4_route(default_gateway_ipv4).unwrap();
-        let mut interface_config = Config::default();
-        interface_config.random_seed = rand::random::<u64>();
-        let mut vpn_device = PpaassVpnDevice::new();
-        let mut interface = Interface::new(interface_config, &mut vpn_device);
-        interface.set_any_ip(true);
-        interface.update_ip_addrs(|ip_addrs| {
-            ip_addrs
-                .push(IpCidr::new(IpAddress::v4(0, 0, 0, 1), 0))
-                .unwrap();
-        });
-        interface
-            .routes_mut()
-            .add_default_ipv4_route(Ipv4Address::new(0, 0, 0, 1))
-            .unwrap();
-
-        (interface, vpn_device)
-    }
-
     fn create_buffer(trans_id: TransportationId) -> Buffers {
         match trans_id.transport_protocol {
             TransportProtocol::Tcp => Buffers::Tcp(TcpBuffers::new()),
             TransportProtocol::Udp => Buffers::Udp(UdpBuffers::new()),
         }
+    }
+
+    pub(crate) fn get_token(&self) -> Token {
+        self.token
+    }
+
+    pub(crate) fn poll_device_endpoint(&mut self) {
+        self.device_endpoint.poll()
+    }
+
+    pub(crate) fn close_device_endpoint(&mut self) {
+        self.device_endpoint.close();
+    }
+
+    pub(crate) fn device_endpoint_can_receive(&self) -> bool {
+        self.device_endpoint.can_receive()
+    }
+
+    pub(crate) fn device_endpoint_can_send(&self) -> bool {
+        self.device_endpoint.can_send()
+    }
+
+    pub(crate) fn close_remote_endpoint(&mut self, poll: &mut Poll) {
+        self.remote_endpoint.close();
+        self.remote_endpoint.deregister_poll(poll).unwrap();
+    }
+
+    pub(crate) fn push_rx_to_device(&mut self, rx_data: Vec<u8>) {
+        self.device_endpoint.push_rx_to_device(rx_data)
+    }
+
+    pub(crate) fn pop_tx_from_device(&mut self) -> Option<Vec<u8>> {
+        self.device_endpoint.pop_tx_from_device()
+    }
+
+    pub(crate) fn read_from_remote_endpoint(&mut self) -> Result<(Vec<Vec<u8>>, bool), StdIoError> {
+        self.remote_endpoint.read()
+    }
+
+    pub(crate) fn write_to_remote_endpoint(&mut self, data: &[u8]) -> Result<usize, StdIoError> {
+        self.remote_endpoint.write(data)
+    }
+
+    pub(crate) fn read_from_device_endpoint(&mut self, data: &mut [u8]) -> Result<usize, NetworkError> {
+        self.device_endpoint.receive(data)
+    }
+
+    pub(crate) fn write_to_device_endpoint(&mut self, data: &[u8]) -> Result<usize, NetworkError> {
+        self.device_endpoint.send(data)
+    }
+
+    pub(crate) fn push_client_data_to_buffer(&mut self, data: &[u8]) {
+        let event = IncomingDataEvent {
+            direction: IncomingDirection::FromClient,
+            buffer: data,
+        };
+        self.buffers.push_data(event)
+    }
+
+    pub(crate) fn push_remote_data_to_buffer(&mut self, data: &[u8]) {
+        let event = IncomingDataEvent {
+            direction: IncomingDirection::FromServer,
+            buffer: data,
+        };
+        self.buffers.push_data(event)
     }
 }

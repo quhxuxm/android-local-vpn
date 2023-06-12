@@ -1,7 +1,4 @@
-use crate::{
-    error::{AgentError, NetworkError, ServerError},
-    transportation,
-};
+use crate::error::{AgentError, NetworkError, ServerError};
 
 use super::buffers::{IncomingDataEvent, IncomingDirection, OutgoingDirection};
 use super::transportation::Transportation;
@@ -10,7 +7,7 @@ use log::{debug, error};
 use mio::event::Event;
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token, Waker};
-use smoltcp::time::Instant;
+
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs::File;
@@ -24,16 +21,16 @@ const TOKEN_DEVICE: Token = Token(0);
 const TOKEN_WAKER: Token = Token(1);
 const TOKEN_START_ID: usize = 2;
 
-pub(crate) struct TransportationProcessor<'sockets, 'buf> {
+pub(crate) struct TransportationProcessor<'buf> {
     device_file_descriptor: i32,
     device_file: File,
     poll: Poll,
-    transportations: HashMap<TransportationId, Transportation<'sockets, 'buf>>,
+    transportations: HashMap<TransportationId, Transportation<'buf>>,
     tokens_to_transportations: HashMap<Token, TransportationId>,
     next_token_id: usize,
 }
 
-impl<'sockets, 'buf> TransportationProcessor<'sockets, 'buf> {
+impl<'buf> TransportationProcessor<'buf> {
     pub(crate) fn new(device_file_descriptor: i32) -> Result<Self, AgentError> {
         let poll = Poll::new().map_err(NetworkError::InitializePoll)?;
         Ok(TransportationProcessor {
@@ -103,11 +100,10 @@ impl<'sockets, 'buf> TransportationProcessor<'sockets, 'buf> {
         self.write_to_device_file(trans_id);
 
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
-            transportation.device_endpoint.close();
-            let mio_socket = &mut transportation.remote_endpoint;
-            mio_socket.close();
-            mio_socket.deregister_poll(&mut self.poll).unwrap();
-            self.tokens_to_transportations.remove(&transportation.token);
+            transportation.close_device_endpoint();
+            transportation.close_remote_endpoint(&mut self.poll);
+            self.tokens_to_transportations
+                .remove(&transportation.get_token());
             self.transportations.remove(&trans_id);
         }
     }
@@ -129,7 +125,7 @@ impl<'sockets, 'buf> TransportationProcessor<'sockets, 'buf> {
                             .transportations
                             .get_mut(&trans_id)
                             .ok_or(ServerError::TransportationNotExist(trans_id))?;
-                        transportation.device.push_rx(buffer.to_vec());
+                        transportation.push_rx_to_device(buffer.to_vec());
                         self.write_to_device_file(trans_id);
                         self.read_from_smoltcp(trans_id);
                         self.write_to_remote(trans_id);
@@ -144,13 +140,8 @@ impl<'sockets, 'buf> TransportationProcessor<'sockets, 'buf> {
 
     fn write_to_device_file(&mut self, trans_id: TransportationId) {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
-            transportation.interface.poll(
-                Instant::now(),
-                &mut transportation.device,
-                &mut transportation.socketset,
-            );
-
-            while let Some(data_to_device) = transportation.device.pop_tx() {
+            transportation.poll_device_endpoint();
+            while let Some(data_to_device) = transportation.pop_tx_from_device() {
                 self.device_file.write_all(&data_to_device[..]).unwrap();
             }
         }
@@ -181,15 +172,11 @@ impl<'sockets, 'buf> TransportationProcessor<'sockets, 'buf> {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             debug!("<<<< Transportation {trans_id} read from remote.");
 
-            let is_session_closed = match transportation.remote_endpoint.read() {
+            let is_session_closed = match transportation.read_from_remote_endpoint() {
                 Ok((read_seqs, is_closed)) => {
                     for bytes in read_seqs {
                         if !bytes.is_empty() {
-                            let event = IncomingDataEvent {
-                                direction: IncomingDirection::FromServer,
-                                buffer: &bytes[..],
-                            };
-                            transportation.buffers.push_data(event);
+                            transportation.push_remote_data_to_buffer(&bytes[..])
                         }
                     }
                     is_closed
@@ -214,11 +201,13 @@ impl<'sockets, 'buf> TransportationProcessor<'sockets, 'buf> {
     }
 
     fn write_to_remote(&mut self, trans_id: TransportationId) {
-        if let Some(session) = self.transportations.get_mut(&trans_id) {
-            session
+        if let Some(transportation) = self.transportations.get_mut(&trans_id) {
+            transportation
                 .buffers
                 .write_data(OutgoingDirection::ToServer, |b| {
-                    session.remote_endpoint.write(b).map_err(WriteError::Stderr)
+                    transportation
+                        .write_to_remote_endpoint(b)
+                        .map_err(NetworkError::WriteToRemote)
                 });
         }
     }
@@ -227,17 +216,11 @@ impl<'sockets, 'buf> TransportationProcessor<'sockets, 'buf> {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             let mut data: [u8; 65535] = [0; 65535];
             loop {
-                if !transportation.device_endpoint.can_receive() {
+                if !transportation.device_endpoint_can_receive() {
                     break;
                 }
-                match transportation.device_endpoint.receive(&mut data) {
-                    Ok(data_len) => {
-                        let event = IncomingDataEvent {
-                            direction: IncomingDirection::FromClient,
-                            buffer: &data[..data_len],
-                        };
-                        transportation.buffers.push_data(event);
-                    }
+                match transportation.read_from_device_endpoint(&mut data) {
+                    Ok(data_len) => transportation.push_client_data_to_buffer(&data[..data_len]),
                     Err(error) => {
                         break;
                     }
@@ -250,11 +233,11 @@ impl<'sockets, 'buf> TransportationProcessor<'sockets, 'buf> {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             log::trace!("write to smoltcp, session={:?}", trans_id);
 
-            if transportation.device_endpoint.can_send() {
+            if transportation.device_endpoint_can_send() {
                 transportation
                     .buffers
                     .write_data(OutgoingDirection::ToClient, |b| {
-                        transportation.device_endpoint.send(b)
+                        transportation.write_to_device_endpoint(b)
                     });
             }
         }

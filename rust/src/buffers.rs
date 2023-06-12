@@ -1,5 +1,6 @@
-use std::collections::VecDeque;
-use std::io::ErrorKind;
+use log::error;
+use std::io::{Error as StdIoError, ErrorKind};
+use std::{collections::VecDeque, error::Error};
 
 use crate::error::NetworkError;
 
@@ -27,38 +28,15 @@ impl Buffers {
                     Ok(consumed) => {
                         tcp_buf.consume_data(&direction, consumed);
                     }
-                    Err(error) => match error {
-                        WriteError::Stderr(err) => {
-                            if err.kind() == ErrorKind::WouldBlock {
-                            } else {
-                                log::error!(
-                                    "failed to write tcp, direction: {:?}, error={:?}",
-                                    direction,
-                                    err
-                                );
+                    Err(error) => {
+                        if let Some(source_error) = error.source() {
+                            if let Some(io_error) = source_error.downcast_ref::<StdIoError>() {
+                                if io_error.kind() != ErrorKind::WouldBlock {
+                                    error!(">>>> Fail to write buffer data to remote tcp because of error: {io_error:?}")
+                                }
                             }
-                        }
-                        WriteError::SmoltcpTcpRecvErr(err) => {
-                            log::error!(
-                                "failed to write tcp, direction: {:?}, error={:?}",
-                                direction,
-                                err
-                            );
-                        }
-                        WriteError::SmoltcpTcpSendErr(err) => {
-                            log::error!(
-                                "failed to write tcp, direction: {:?}, error={:?}",
-                                direction,
-                                err
-                            );
-                        }
-                        _ => {
-                            log::error!(
-                                "failed to write tcp, direction: {:?}, because of unknown error",
-                                direction,
-                            );
-                        }
-                    },
+                        };
+                    }
                 }
             }
             Buffers::Udp(udp_buf) => {
@@ -67,42 +45,8 @@ impl Buffers {
                 // write udp packets one by one
                 for datagram in all_datagrams {
                     if let Err(error) = write_fn(&datagram[..]) {
-                        match error {
-                            WriteError::Stderr(err) => {
-                                if err.kind() == ErrorKind::WouldBlock {
-                                    break;
-                                } else {
-                                    log::error!(
-                                        "failed to write udp, direction: {:?}, error={:?}",
-                                        direction,
-                                        err
-                                    );
-                                }
-                            }
-                            WriteError::SmoltcpUdpRecvErr(err) => {
-                                if err == smoltcp::socket::udp::RecvError::Exhausted {
-                                    break;
-                                } else {
-                                    log::error!(
-                                        "failed to write udp, direciton: {:?}, error={:?}",
-                                        direction,
-                                        err
-                                    );
-                                }
-                            }
-                            WriteError::SmoltcpUdpSendErr(err) => {
-                                if err == smoltcp::socket::udp::SendError::Unaddressable {
-                                    break;
-                                } else {
-                                    log::error!(
-                                        "failed to write udp, direciton: {:?}, error={:?}",
-                                        direction,
-                                        err
-                                    );
-                                }
-                            }
-                            _ => break,
-                        }
+                        error!(">>>> Fail to write buffer data to remote udp because of error: {error:?}");
+                        break;
                     }
                     consumed += 1;
                 }
