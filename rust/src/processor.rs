@@ -171,7 +171,7 @@ impl<'buf> TransportationProcessor<'buf> {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             debug!("<<<< Transportation {trans_id} read from remote.");
 
-            let is_session_closed = match transportation.read_from_remote_endpoint() {
+            let is_transportation_closed = match transportation.read_from_remote_endpoint() {
                 Ok((read_seqs, is_closed)) => {
                     for bytes in read_seqs {
                         if !bytes.is_empty() {
@@ -191,7 +191,7 @@ impl<'buf> TransportationProcessor<'buf> {
                     }
                 }
             };
-            if is_session_closed {
+            if is_transportation_closed {
                 self.destroy_transportation(trans_id);
             }
 
