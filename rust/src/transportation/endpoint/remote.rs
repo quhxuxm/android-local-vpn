@@ -9,14 +9,17 @@ use std::io::{ErrorKind, Read, Result, Write};
 use std::net::{Shutdown, SocketAddr};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 
-enum RemoteConnection {
-    Tcp(TcpStream),
-    Udp(UdpSocket),
-}
-pub(crate) struct RemoteEndpoint {
-    _socket: socket2::Socket, // Need to retain so socket does not get closed.
-    connection: RemoteConnection,
-    trans_id: TransportationId,
+pub(crate) enum RemoteEndpoint {
+    Tcp {
+        _socket: socket2::Socket, // Need to retain so socket does not get closed.
+        tcp_stream: TcpStream,
+        trans_id: TransportationId,
+    },
+    Udp {
+        _socket: socket2::Socket, // Need to retain so socket does not get closed.
+        udp_socket: UdpSocket,
+        trans_id: TransportationId,
+    },
 }
 
 impl RemoteEndpoint {
@@ -25,7 +28,7 @@ impl RemoteEndpoint {
         transport_protocol: TransportProtocol,
         internet_protocol: InternetProtocol,
         remote_address: SocketAddr,
-    ) -> Option<RemoteEndpoint> {
+    ) -> Option<Self> {
         let socket = Self::create_socket(trans_id, &transport_protocol, &internet_protocol).ok()?;
 
         let socket_address = socket2::SockAddr::from(remote_address);
@@ -55,39 +58,50 @@ impl RemoteEndpoint {
             }
         }
 
-        let connection = Self::create_connection(&transport_protocol, &socket);
-
-        Some(RemoteEndpoint {
-            _socket: socket,
-            connection,
-            trans_id,
-        })
+        match transport_protocol {
+            TransportProtocol::Tcp => {
+                let tcp_stream = unsafe { TcpStream::from_raw_fd(socket.as_raw_fd()) };
+                Some(Self::Tcp {
+                    trans_id,
+                    _socket: socket,
+                    tcp_stream,
+                })
+            }
+            TransportProtocol::Udp => {
+                let udp_socket = unsafe { UdpSocket::from_raw_fd(socket.as_raw_fd()) };
+                Some(Self::Udp {
+                    trans_id,
+                    _socket: socket,
+                    udp_socket,
+                })
+            }
+        }
     }
 
     pub(crate) fn register_poll(&mut self, poll: &mut Poll, token: Token) -> Result<()> {
-        match &mut self.connection {
-            RemoteConnection::Tcp(connection) => {
+        match self {
+            Self::Tcp { tcp_stream, .. } => {
                 let interests = Interest::READABLE | Interest::WRITABLE;
-                poll.registry().register(connection, token, interests)
+                poll.registry().register(tcp_stream, token, interests)
             }
-            RemoteConnection::Udp(connection) => {
+            Self::Udp { udp_socket, .. } => {
                 let interests = Interest::READABLE;
-                poll.registry().register(connection, token, interests)
+                poll.registry().register(udp_socket, token, interests)
             }
         }
     }
 
     pub(crate) fn deregister_poll(&mut self, poll: &mut Poll) -> Result<()> {
-        match &mut self.connection {
-            RemoteConnection::Tcp(connection) => poll.registry().deregister(connection),
-            RemoteConnection::Udp(connection) => poll.registry().deregister(connection),
+        match self {
+            Self::Tcp { tcp_stream, .. } => poll.registry().deregister(tcp_stream),
+            Self::Udp { udp_socket, .. } => poll.registry().deregister(udp_socket),
         }
     }
 
     pub(crate) fn write(&mut self, bytes: &[u8]) -> Result<usize> {
-        match &mut self.connection {
-            RemoteConnection::Tcp(connection) => connection.write(bytes),
-            RemoteConnection::Udp(connection) => connection.send(bytes),
+        match self {
+            Self::Tcp { tcp_stream, .. } => tcp_stream.write(bytes),
+            Self::Udp { udp_socket, .. } => udp_socket.send(bytes),
         }
     }
 
@@ -96,9 +110,9 @@ impl RemoteEndpoint {
         let mut buffer = [0; 1 << 16]; // maximum UDP packet size
         let mut is_closed = false;
         loop {
-            let read_result = match &mut self.connection {
-                RemoteConnection::Tcp(tcp_stream) => tcp_stream.read(&mut buffer),
-                RemoteConnection::Udp(udp_socket) => udp_socket.recv(&mut buffer),
+            let read_result = match self {
+                Self::Tcp { tcp_stream, .. } => tcp_stream.read(&mut buffer),
+                Self::Udp { udp_socket, .. } => udp_socket.recv(&mut buffer),
             };
             match read_result {
                 Ok(count) => {
@@ -123,18 +137,17 @@ impl RemoteEndpoint {
     }
 
     pub(crate) fn close(&self) {
-        match &self.connection {
-            RemoteConnection::Tcp(connection) => {
-                if let Err(error) = connection.shutdown(Shutdown::Both) {
-                    error!(
-                        ">>>> Transportation {} failed to shutdown remote tcp stream because of error={error:?}",
-                        self.trans_id
-                    );
+        match &self {
+            Self::Tcp {
+                tcp_stream,
+                trans_id,
+                ..
+            } => {
+                if let Err(e) = tcp_stream.shutdown(Shutdown::Both) {
+                    error!(">>>> Transportation {trans_id} failed to shutdown remote tcp stream because of error: {e:?}",);
                 }
             }
-            RemoteConnection::Udp(_) => {
-                // UDP connections do not require to be closed.
-            }
+            Self::Udp { .. } => {}
         }
     }
 
@@ -161,18 +174,5 @@ impl RemoteEndpoint {
             error!(">>>> Transportation {trans_id} fail to protect outbound socket because of error: {e:?}")
         };
         Ok(socket)
-    }
-
-    fn create_connection(transport_protocol: &TransportProtocol, socket: &socket2::Socket) -> RemoteConnection {
-        match transport_protocol {
-            TransportProtocol::Tcp => {
-                let tcp_stream = unsafe { TcpStream::from_raw_fd(socket.as_raw_fd()) };
-                RemoteConnection::Tcp(tcp_stream)
-            }
-            TransportProtocol::Udp => {
-                let udp_socket = unsafe { UdpSocket::from_raw_fd(socket.as_raw_fd()) };
-                RemoteConnection::Udp(udp_socket)
-            }
-        }
     }
 }

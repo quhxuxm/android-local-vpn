@@ -57,30 +57,30 @@ impl Buffers {
 }
 
 pub(crate) struct TcpBuffers {
-    client: VecDeque<u8>,
-    server: VecDeque<u8>,
+    device: VecDeque<u8>,
+    remote: VecDeque<u8>,
 }
 
 impl TcpBuffers {
     pub(crate) fn new() -> TcpBuffers {
         TcpBuffers {
-            client: Default::default(),
-            server: Default::default(),
+            device: Default::default(),
+            remote: Default::default(),
         }
     }
 
     pub(crate) fn peek_data(&mut self, direction: &OutgoingDirection) -> &[u8] {
         let buffer = match direction {
-            OutgoingDirection::ToRemote => &mut self.server,
-            OutgoingDirection::ToDevice => &mut self.client,
+            OutgoingDirection::ToRemote => &mut self.remote,
+            OutgoingDirection::ToDevice => &mut self.device,
         };
         buffer.make_contiguous()
     }
 
     pub(crate) fn consume_data(&mut self, direction: &OutgoingDirection, size: usize) {
         let buffer = match direction {
-            OutgoingDirection::ToRemote => &mut self.server,
-            OutgoingDirection::ToDevice => &mut self.client,
+            OutgoingDirection::ToRemote => &mut self.remote,
+            OutgoingDirection::ToDevice => &mut self.device,
         };
         buffer.drain(0..size);
     }
@@ -89,41 +89,41 @@ impl TcpBuffers {
         let direction = event.direction;
         let buffer = event.buffer;
         match direction {
-            IncomingDirection::FromServer => {
-                self.client.extend(buffer.iter());
+            IncomingDirection::FromRemote => {
+                self.device.extend(buffer.iter());
             }
-            IncomingDirection::FromClient => {
-                self.server.extend(buffer.iter());
+            IncomingDirection::FromDevice => {
+                self.remote.extend(buffer.iter());
             }
         }
     }
 }
 
 pub(crate) struct UdpBuffers {
-    client: VecDeque<Vec<u8>>,
-    server: VecDeque<Vec<u8>>,
+    device: VecDeque<Vec<u8>>,
+    remote: VecDeque<Vec<u8>>,
 }
 
 impl UdpBuffers {
     pub(crate) fn new() -> UdpBuffers {
         UdpBuffers {
-            client: Default::default(),
-            server: Default::default(),
+            device: Default::default(),
+            remote: Default::default(),
         }
     }
 
     pub(crate) fn peek_data(&mut self, direction: &OutgoingDirection) -> &[Vec<u8>] {
         let buffer = match direction {
-            OutgoingDirection::ToRemote => &mut self.server,
-            OutgoingDirection::ToDevice => &mut self.client,
+            OutgoingDirection::ToRemote => &mut self.remote,
+            OutgoingDirection::ToDevice => &mut self.device,
         };
         buffer.make_contiguous()
     }
 
     pub(crate) fn consume_data(&mut self, direction: &OutgoingDirection, size: usize) {
         let buffer = match direction {
-            OutgoingDirection::ToRemote => &mut self.server,
-            OutgoingDirection::ToDevice => &mut self.client,
+            OutgoingDirection::ToRemote => &mut self.remote,
+            OutgoingDirection::ToDevice => &mut self.device,
         };
         buffer.drain(0..size);
     }
@@ -132,16 +132,16 @@ impl UdpBuffers {
         let direction = event.direction;
         let buffer = event.buffer;
         match direction {
-            IncomingDirection::FromServer => self.client.push_back(buffer.to_vec()),
-            IncomingDirection::FromClient => self.server.push_back(buffer.to_vec()),
+            IncomingDirection::FromRemote => self.device.push_back(buffer.to_vec()),
+            IncomingDirection::FromDevice => self.remote.push_back(buffer.to_vec()),
         }
     }
 }
 
 #[derive(Eq, PartialEq, Debug)]
 pub(crate) enum IncomingDirection {
-    FromServer,
-    FromClient,
+    FromRemote,
+    FromDevice,
 }
 
 #[derive(Eq, PartialEq, Debug)]

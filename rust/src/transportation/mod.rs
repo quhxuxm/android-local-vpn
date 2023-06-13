@@ -241,7 +241,7 @@ impl<'buf> Transportation<'buf> {
 
     pub(crate) fn push_client_data_to_buffer(&mut self, data: &[u8]) {
         let event = IncomingDataEvent {
-            direction: IncomingDirection::FromClient,
+            direction: IncomingDirection::FromDevice,
             buffer: data,
         };
         self.buffers.push_data(event)
@@ -249,7 +249,7 @@ impl<'buf> Transportation<'buf> {
 
     pub(crate) fn push_remote_data_to_buffer(&mut self, data: &[u8]) {
         let event = IncomingDataEvent {
-            direction: IncomingDirection::FromServer,
+            direction: IncomingDirection::FromRemote,
             buffer: data,
         };
         self.buffers.push_data(event)
