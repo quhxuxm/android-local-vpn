@@ -245,14 +245,13 @@ impl<'buf> Transportation<'buf> {
         self.buffers.push_remote_data_to_device(data)
     }
 
-    pub(crate) fn consume_device_buffer(&mut self) {
-        self.buffers.write_data(OutgoingDirection::ToDevice, |b| {
-            self.device_endpoint.send(b)
-        });
+    pub(crate) fn transfer_device_buffer_to_device(&mut self) {
+        self.buffers
+            .dump_device_buffer(|b| self.device_endpoint.send(b));
     }
 
     pub(crate) fn consume_remote_buffer(&mut self) {
-        self.buffers.write_data(OutgoingDirection::ToRemote, |b| {
+        self.buffers.dump_remote_buffer(|b| {
             self.remote_endpoint
                 .write(b)
                 .map_err(NetworkError::WriteToRemote)

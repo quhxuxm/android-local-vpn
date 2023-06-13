@@ -24,7 +24,7 @@ impl Buffers {
     }
 
     pub(crate) fn new_udp_buffer() -> Self {
-        Buffers::Tcp {
+        Buffers::Udp {
             device: VecDeque::with_capacity(65536),
             remote: VecDeque::with_capacity(65536),
         }
@@ -44,16 +44,63 @@ impl Buffers {
         }
     }
 
-    pub(crate) fn write_data<F>(&mut self, direction: OutgoingDirection, mut write_fn: F)
+    pub(crate) fn dump_device_buffer<F>(&mut self, mut write_fn: F)
     where
         F: FnMut(&[u8]) -> Result<usize, NetworkError>,
     {
         match self {
-            Buffers::Tcp(tcp_buf) => {
-                let buffer = tcp_buf.peek_data(&direction).to_vec();
-                match write_fn(&buffer[..]) {
+            Buffers::Tcp {
+                device: device_buffer,
+                ..
+            } => {
+                let device_buffer_slice = device_buffer.make_contiguous();
+                match write_fn(device_buffer_slice) {
                     Ok(consumed) => {
-                        tcp_buf.consume_data(&direction, consumed);
+                        device_buffer.drain(..consumed);
+                    }
+                    Err(error) => {
+                        if let Some(source_error) = error.source() {
+                            if let Some(io_error) = source_error.downcast_ref::<StdIoError>() {
+                                if io_error.kind() != ErrorKind::WouldBlock {
+                                    error!(">>>> Fail to write buffer data to device tcp because of error: {io_error:?}")
+                                }
+                            }
+                        };
+                    }
+                }
+            }
+            Buffers::Udp {
+                device: all_datagrams,
+                ..
+            } => {
+                let all_datagrams_slice = all_datagrams.make_contiguous();
+                let mut consumed: usize = 0;
+                // write udp packets one by one
+                for datagram in all_datagrams_slice {
+                    if let Err(error) = write_fn(&datagram[..]) {
+                        error!(">>>> Fail to write buffer data to device udp because of error: {error:?}");
+                        break;
+                    }
+                    consumed += 1;
+                }
+                all_datagrams.drain(..consumed);
+            }
+        }
+    }
+
+    pub(crate) fn dump_remote_buffer<F>(&mut self, mut write_fn: F)
+    where
+        F: FnMut(&[u8]) -> Result<usize, NetworkError>,
+    {
+        match self {
+            Buffers::Tcp {
+                remote: remote_buffer,
+                ..
+            } => {
+                let remote_buffer_slice = remote_buffer.make_contiguous();
+                match write_fn(remote_buffer_slice) {
+                    Ok(consumed) => {
+                        remote_buffer.drain(..consumed);
                     }
                     Err(error) => {
                         if let Some(source_error) = error.source() {
@@ -66,96 +113,22 @@ impl Buffers {
                     }
                 }
             }
-            Buffers::Udp(udp_buf) => {
-                let all_datagrams = udp_buf.peek_data(&direction);
+            Buffers::Udp {
+                remote: all_datagrams,
+                ..
+            } => {
+                let all_datagrams_slice = all_datagrams.make_contiguous();
                 let mut consumed: usize = 0;
                 // write udp packets one by one
-                for datagram in all_datagrams {
+                for datagram in all_datagrams_slice {
                     if let Err(error) = write_fn(&datagram[..]) {
                         error!(">>>> Fail to write buffer data to remote udp because of error: {error:?}");
                         break;
                     }
                     consumed += 1;
                 }
-                udp_buf.consume_data(&direction, consumed);
+                all_datagrams.drain(..consumed);
             }
-        }
-    }
-}
-
-struct TcpBuffers {
-    device: VecDeque<u8>,
-    remote: VecDeque<u8>,
-}
-
-impl TcpBuffers {
-    pub(crate) fn new() -> TcpBuffers {
-        TcpBuffers {
-            device: Default::default(),
-            remote: Default::default(),
-        }
-    }
-
-    pub(crate) fn peek_data(&mut self, direction: &OutgoingDirection) -> &[u8] {
-        let buffer = match direction {
-            OutgoingDirection::ToRemote => &mut self.remote,
-            OutgoingDirection::ToDevice => &mut self.device,
-        };
-        buffer.make_contiguous()
-    }
-
-    pub(crate) fn consume_device_data(&mut self, size: usize) {
-        self.device.drain(0..size);
-    }
-
-    pub(crate) fn consume_remote_data(&mut self, size: usize) {
-        self.remote.drain(0..size);
-    }
-
-    pub(crate) fn push_data_to_device(&mut self, data: &[u8]) {
-        self.device.extend(data);
-    }
-
-    pub(crate) fn push_data_to_remote(&mut self, data: &[u8]) {
-        self.remote.extend(data);
-    }
-}
-
-struct UdpBuffers {
-    device: VecDeque<Vec<u8>>,
-    remote: VecDeque<Vec<u8>>,
-}
-
-impl UdpBuffers {
-    pub(crate) fn new() -> UdpBuffers {
-        UdpBuffers {
-            device: Default::default(),
-            remote: Default::default(),
-        }
-    }
-
-    pub(crate) fn peek_data(&mut self, direction: &OutgoingDirection) -> &[Vec<u8>] {
-        let buffer = match direction {
-            OutgoingDirection::ToRemote => &mut self.remote,
-            OutgoingDirection::ToDevice => &mut self.device,
-        };
-        buffer.make_contiguous()
-    }
-
-    pub(crate) fn consume_data(&mut self, direction: &OutgoingDirection, size: usize) {
-        let buffer = match direction {
-            OutgoingDirection::ToRemote => &mut self.remote,
-            OutgoingDirection::ToDevice => &mut self.device,
-        };
-        buffer.drain(0..size);
-    }
-
-    pub(crate) fn push_data(&mut self, event: IncomingDataEvent<'_>) {
-        let direction = event.direction;
-        let buffer = event.buffer;
-        match direction {
-            IncomingDirection::FromRemote => self.device.push_back(buffer.to_vec()),
-            IncomingDirection::FromDevice => self.remote.push_back(buffer.to_vec()),
         }
     }
 }

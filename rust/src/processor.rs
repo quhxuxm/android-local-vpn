@@ -227,7 +227,7 @@ impl<'buf> TransportationProcessor<'buf> {
             log::trace!("write to smoltcp, session={:?}", trans_id);
 
             if transportation.device_endpoint_can_send() {
-                transportation.consume_device_buffer();
+                transportation.transfer_device_buffer_to_device();
             }
         }
     }
