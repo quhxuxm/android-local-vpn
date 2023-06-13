@@ -146,8 +146,11 @@ impl RemoteEndpoint {
                 if let Err(e) = tcp_stream.shutdown(Shutdown::Both) {
                     error!(">>>> Transportation {trans_id} failed to shutdown remote tcp stream because of error: {e:?}",);
                 }
+                debug!(">>>> Transportation {trans_id} close tcp stream.");
             }
-            Self::Udp { .. } => {}
+            Self::Udp { trans_id, .. } => {
+                debug!(">>>> Transportation {trans_id} close udp socket.");
+            }
         }
     }
 

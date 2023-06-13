@@ -4,7 +4,7 @@ use std::{collections::VecDeque, error::Error};
 
 use crate::error::NetworkError;
 
-pub(crate) enum Buffers {
+pub(crate) enum Buffer {
     Tcp {
         device: VecDeque<u8>,
         remote: VecDeque<u8>,
@@ -15,16 +15,16 @@ pub(crate) enum Buffers {
     },
 }
 
-impl Buffers {
+impl Buffer {
     pub(crate) fn new_tcp_buffer() -> Self {
-        Buffers::Tcp {
+        Buffer::Tcp {
             device: VecDeque::with_capacity(65536),
             remote: VecDeque::with_capacity(65536),
         }
     }
 
     pub(crate) fn new_udp_buffer() -> Self {
-        Buffers::Udp {
+        Buffer::Udp {
             device: VecDeque::with_capacity(65536),
             remote: VecDeque::with_capacity(65536),
         }
@@ -32,24 +32,24 @@ impl Buffers {
 
     pub(crate) fn push_device_data_to_remote(&mut self, data: &[u8]) {
         match self {
-            Buffers::Tcp { remote, .. } => remote.extend(data),
-            Buffers::Udp { remote, .. } => remote.push_back(data.to_vec()),
+            Buffer::Tcp { remote, .. } => remote.extend(data),
+            Buffer::Udp { remote, .. } => remote.push_back(data.to_vec()),
         }
     }
 
     pub(crate) fn push_remote_data_to_device(&mut self, data: &[u8]) {
         match self {
-            Buffers::Tcp { device, .. } => device.extend(data),
-            Buffers::Udp { device, .. } => device.push_back(data.to_vec()),
+            Buffer::Tcp { device, .. } => device.extend(data),
+            Buffer::Udp { device, .. } => device.push_back(data.to_vec()),
         }
     }
 
-    pub(crate) fn dump_device_buffer<F>(&mut self, mut write_fn: F)
+    pub(crate) fn consume_device_buffer<F>(&mut self, mut write_fn: F)
     where
         F: FnMut(&[u8]) -> Result<usize, NetworkError>,
     {
         match self {
-            Buffers::Tcp {
+            Buffer::Tcp {
                 device: device_buffer,
                 ..
             } => {
@@ -69,7 +69,7 @@ impl Buffers {
                     }
                 }
             }
-            Buffers::Udp {
+            Buffer::Udp {
                 device: all_datagrams,
                 ..
             } => {
@@ -88,12 +88,12 @@ impl Buffers {
         }
     }
 
-    pub(crate) fn dump_remote_buffer<F>(&mut self, mut write_fn: F)
+    pub(crate) fn consume_remote_buffer<F>(&mut self, mut write_fn: F)
     where
         F: FnMut(&[u8]) -> Result<usize, NetworkError>,
     {
         match self {
-            Buffers::Tcp {
+            Buffer::Tcp {
                 remote: remote_buffer,
                 ..
             } => {
@@ -113,7 +113,7 @@ impl Buffers {
                     }
                 }
             }
-            Buffers::Udp {
+            Buffer::Udp {
                 remote: all_datagrams,
                 ..
             } => {

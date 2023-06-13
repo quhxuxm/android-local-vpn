@@ -213,8 +213,9 @@ impl<'buf> TransportationProcessor<'buf> {
                     break;
                 }
                 match transportation.read_from_device_endpoint(&mut data) {
-                    Ok(data_len) => transportation.push_client_data_to_buffer(&data[..data_len]),
+                    Ok(data_len) => transportation.push_device_data_to_buffer(&data[..data_len]),
                     Err(error) => {
+                        error!(">>>> Transportation {trans_id} fail to push device data to buffer because of error: {error:?}");
                         break;
                     }
                 }

@@ -168,7 +168,7 @@ impl<'buf> DeviceEndpoint<'buf> {
                 let socket = self.socketset.get_mut::<UdpSocket>(self.socket_handle);
                 socket
                     .recv_slice(data)
-                    .and_then(|r| Ok(r.0))
+                    .map(|r| r.0)
                     .map_err(NetworkError::ReceiveUdpDataFromDevice)
             }
         }

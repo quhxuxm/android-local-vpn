@@ -4,12 +4,12 @@ use crate::error::NetworkError;
 
 use endpoint::DeviceEndpoint;
 use endpoint::RemoteEndpoint;
-use log::{error, warn};
+use log::{debug, error, warn};
 use mio::{Poll, Token};
 
 use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv6Packet, TcpPacket, UdpPacket};
 
-use buffers::Buffers;
+use buffers::Buffer;
 use std::fmt::{self, Display};
 use std::hash::Hash;
 use std::io::Error as StdIoError;
@@ -149,20 +149,20 @@ pub(crate) struct Transportation<'buf> {
     token: Token,
     device_endpoint: DeviceEndpoint<'buf>,
     remote_endpoint: RemoteEndpoint,
-    buffers: Buffers,
+    buffer: Buffer,
 }
 
 impl<'buf> Transportation<'buf> {
     pub(crate) fn new(trans_id: TransportationId, poll: &mut Poll, token: Token) -> Option<Self> {
-        let session = Transportation {
+        let transportation = Transportation {
             trans_id,
             token,
             device_endpoint: Self::create_device_endpoint(trans_id)?,
             remote_endpoint: Self::create_remote_endpoint(trans_id, poll, token)?,
-            buffers: Self::create_buffer(trans_id),
+            buffer: Self::create_buffer(trans_id),
         };
-
-        Some(session)
+        debug!(">>>> Transportation {trans_id} created.");
+        Some(transportation)
     }
 
     fn create_device_endpoint(trans_id: TransportationId) -> Option<DeviceEndpoint<'buf>> {
@@ -189,10 +189,10 @@ impl<'buf> Transportation<'buf> {
         Some(remote_endpoint)
     }
 
-    fn create_buffer(trans_id: TransportationId) -> Buffers {
+    fn create_buffer(trans_id: TransportationId) -> Buffer {
         match trans_id.transport_protocol {
-            TransportProtocol::Tcp => Buffers::new_tcp_buffer(),
-            TransportProtocol::Udp => Buffers::new_udp_buffer(),
+            TransportProtocol::Tcp => Buffer::new_tcp_buffer(),
+            TransportProtocol::Udp => Buffer::new_udp_buffer(),
         }
     }
 
@@ -206,6 +206,10 @@ impl<'buf> Transportation<'buf> {
 
     pub(crate) fn close_device_endpoint(&mut self) {
         self.device_endpoint.close();
+        debug!(
+            ">>>> Transportation {} close device endpoint.",
+            self.trans_id
+        )
     }
 
     pub(crate) fn device_endpoint_can_receive(&self) -> bool {
@@ -219,6 +223,10 @@ impl<'buf> Transportation<'buf> {
     pub(crate) fn close_remote_endpoint(&mut self, poll: &mut Poll) {
         self.remote_endpoint.close();
         self.remote_endpoint.deregister_poll(poll).unwrap();
+        debug!(
+            ">>>> Transportation {} close remote endpoint.",
+            self.trans_id
+        )
     }
 
     pub(crate) fn push_rx_to_device(&mut self, rx_data: Vec<u8>) {
@@ -237,21 +245,21 @@ impl<'buf> Transportation<'buf> {
         self.device_endpoint.receive(data)
     }
 
-    pub(crate) fn push_client_data_to_buffer(&mut self, data: &[u8]) {
-        self.buffers.push_device_data_to_remote(data)
+    pub(crate) fn push_device_data_to_buffer(&mut self, data: &[u8]) {
+        self.buffer.push_device_data_to_remote(data)
     }
 
     pub(crate) fn push_remote_data_to_buffer(&mut self, data: &[u8]) {
-        self.buffers.push_remote_data_to_device(data)
+        self.buffer.push_remote_data_to_device(data)
     }
 
     pub(crate) fn transfer_device_buffer_to_device(&mut self) {
-        self.buffers
-            .dump_device_buffer(|b| self.device_endpoint.send(b));
+        self.buffer
+            .consume_device_buffer(|b| self.device_endpoint.send(b));
     }
 
     pub(crate) fn consume_remote_buffer(&mut self) {
-        self.buffers.dump_remote_buffer(|b| {
+        self.buffer.consume_remote_buffer(|b| {
             self.remote_endpoint
                 .write(b)
                 .map_err(NetworkError::WriteToRemote)
