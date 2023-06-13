@@ -28,7 +28,9 @@ impl PpaassVpnServer {
         self.stop_waker = Some(processor.new_stop_waker()?);
         self.processor_handle = Some(thread::spawn(move || {
             debug!("Ppaass vpn server processor thread started.");
-            processor.run();
+            if let Err(e) = processor.run() {
+                error!("Error happen when process transportation: {e:?}")
+            };
             debug!("Ppaass vpn server processor thread complete.");
         }));
         debug!("Ppaass vpn server started");

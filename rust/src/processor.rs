@@ -1,6 +1,5 @@
 use crate::error::{AgentError, NetworkError, ServerError};
 
-use super::buffers::{IncomingDataEvent, IncomingDirection, OutgoingDirection};
 use super::transportation::Transportation;
 use super::transportation::TransportationId;
 use log::{debug, error};
@@ -202,13 +201,7 @@ impl<'buf> TransportationProcessor<'buf> {
 
     fn write_to_remote(&mut self, trans_id: TransportationId) {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
-            transportation
-                .buffers
-                .write_data(OutgoingDirection::ToServer, |b| {
-                    transportation
-                        .write_to_remote_endpoint(b)
-                        .map_err(NetworkError::WriteToRemote)
-                });
+            transportation.consume_remote_buffer();
         }
     }
 
@@ -234,11 +227,7 @@ impl<'buf> TransportationProcessor<'buf> {
             log::trace!("write to smoltcp, session={:?}", trans_id);
 
             if transportation.device_endpoint_can_send() {
-                transportation
-                    .buffers
-                    .write_data(OutgoingDirection::ToClient, |b| {
-                        transportation.write_to_device_endpoint(b)
-                    });
+                transportation.consume_device_buffer();
             }
         }
     }

@@ -1,11 +1,9 @@
+mod buffers;
 mod endpoint;
 
-use crate::{
-    buffers::{IncomingDataEvent, IncomingDirection},
-    error::NetworkError,
-};
+use crate::error::NetworkError;
+use buffers::{IncomingDataEvent, IncomingDirection, OutgoingDirection};
 
-use super::buffers::{Buffers, TcpBuffers, UdpBuffers};
 use endpoint::DeviceEndpoint;
 use endpoint::RemoteEndpoint;
 use log::{error, warn};
@@ -13,7 +11,8 @@ use mio::{Poll, Token};
 
 use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv6Packet, TcpPacket, UdpPacket};
 
-use std::fmt;
+use crate::transportation::buffers::{Buffers, TcpBuffers, UdpBuffers};
+use std::fmt::{self, Display};
 use std::hash::Hash;
 use std::io::Error as StdIoError;
 use std::net::SocketAddr;
@@ -132,7 +131,7 @@ impl TransportationId {
     }
 }
 
-impl fmt::Display for TransportationId {
+impl Display for TransportationId {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         write!(
             formatter,
@@ -148,6 +147,7 @@ impl fmt::Display for TransportationId {
 }
 
 pub(crate) struct Transportation<'buf> {
+    trans_id: TransportationId,
     token: Token,
     device_endpoint: DeviceEndpoint<'buf>,
     remote_endpoint: RemoteEndpoint,
@@ -156,11 +156,11 @@ pub(crate) struct Transportation<'buf> {
 
 impl<'buf> Transportation<'buf> {
     pub(crate) fn new(trans_id: TransportationId, poll: &mut Poll, token: Token) -> Option<Self> {
-        let device_endpoint = Self::create_device_endpoint(trans_id)?;
         let session = Transportation {
-            device_endpoint,
-            remote_endpoint: Self::create_remote_endpoint(trans_id, poll, token)?,
+            trans_id,
             token,
+            device_endpoint: Self::create_device_endpoint(trans_id)?,
+            remote_endpoint: Self::create_remote_endpoint(trans_id, poll, token)?,
             buffers: Self::create_buffer(trans_id),
         };
 
@@ -176,18 +176,19 @@ impl<'buf> Transportation<'buf> {
     }
 
     fn create_remote_endpoint(trans_id: TransportationId, poll: &mut Poll, token: Token) -> Option<RemoteEndpoint> {
-        let mut mio_socket = RemoteEndpoint::new(
+        let mut remote_endpoint = RemoteEndpoint::new(
+            trans_id,
             trans_id.transport_protocol,
             trans_id.internet_protocol,
             trans_id.destination,
         )?;
 
-        if let Err(error) = mio_socket.register_poll(poll, token) {
-            log::error!("failed to register poll, error={:?}", error);
+        if let Err(error) = remote_endpoint.register_poll(poll, token) {
+            error!(">>>> Transportation {trans_id} failed to register poll for remote endpoint because of error: {error:?}");
             return None;
         }
 
-        Some(mio_socket)
+        Some(remote_endpoint)
     }
 
     fn create_buffer(trans_id: TransportationId) -> Buffers {
@@ -234,16 +235,8 @@ impl<'buf> Transportation<'buf> {
         self.remote_endpoint.read()
     }
 
-    pub(crate) fn write_to_remote_endpoint(&mut self, data: &[u8]) -> Result<usize, StdIoError> {
-        self.remote_endpoint.write(data)
-    }
-
     pub(crate) fn read_from_device_endpoint(&mut self, data: &mut [u8]) -> Result<usize, NetworkError> {
         self.device_endpoint.receive(data)
-    }
-
-    pub(crate) fn write_to_device_endpoint(&mut self, data: &[u8]) -> Result<usize, NetworkError> {
-        self.device_endpoint.send(data)
     }
 
     pub(crate) fn push_client_data_to_buffer(&mut self, data: &[u8]) {
@@ -260,5 +253,19 @@ impl<'buf> Transportation<'buf> {
             buffer: data,
         };
         self.buffers.push_data(event)
+    }
+
+    pub(crate) fn consume_device_buffer(&mut self) {
+        self.buffers.write_data(OutgoingDirection::ToDevice, |b| {
+            self.device_endpoint.send(b)
+        });
+    }
+
+    pub(crate) fn consume_remote_buffer(&mut self) {
+        self.buffers.write_data(OutgoingDirection::ToRemote, |b| {
+            self.remote_endpoint
+                .write(b)
+                .map_err(NetworkError::WriteToRemote)
+        });
     }
 }

@@ -24,7 +24,7 @@ pub struct DeviceEndpoint<'buf> {
 }
 
 impl<'buf> DeviceEndpoint<'buf> {
-    pub fn new(transport_protocol: TransportProtocol, local_address: SocketAddr, remote_address: SocketAddr) -> Option<Self> {
+    pub(crate) fn new(transport_protocol: TransportProtocol, local_address: SocketAddr, remote_address: SocketAddr) -> Option<Self> {
         let (interface, device) = Self::prepare_iface_and_device();
         let mut socketset = SocketSet::new(vec![]);
         let local_endpoint = IpEndpoint::from(local_address);
