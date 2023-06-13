@@ -5,15 +5,42 @@ use std::{collections::VecDeque, error::Error};
 use crate::error::NetworkError;
 
 pub(crate) enum Buffers {
-    Tcp(TcpBuffers),
-    Udp(UdpBuffers),
+    Tcp {
+        device: VecDeque<u8>,
+        remote: VecDeque<u8>,
+    },
+    Udp {
+        device: VecDeque<Vec<u8>>,
+        remote: VecDeque<Vec<u8>>,
+    },
 }
 
 impl Buffers {
-    pub(crate) fn push_data(&mut self, event: IncomingDataEvent<'_>) {
+    pub(crate) fn new_tcp_buffer() -> Self {
+        Buffers::Tcp {
+            device: VecDeque::with_capacity(65536),
+            remote: VecDeque::with_capacity(65536),
+        }
+    }
+
+    pub(crate) fn new_udp_buffer() -> Self {
+        Buffers::Tcp {
+            device: VecDeque::with_capacity(65536),
+            remote: VecDeque::with_capacity(65536),
+        }
+    }
+
+    pub(crate) fn push_device_data_to_remote(&mut self, data: &[u8]) {
         match self {
-            Buffers::Tcp(tcp_buf) => tcp_buf.push_data(event),
-            Buffers::Udp(udp_buf) => udp_buf.push_data(event),
+            Buffers::Tcp { remote, .. } => remote.extend(data),
+            Buffers::Udp { remote, .. } => remote.push_back(data.to_vec()),
+        }
+    }
+
+    pub(crate) fn push_remote_data_to_device(&mut self, data: &[u8]) {
+        match self {
+            Buffers::Tcp { device, .. } => device.extend(data),
+            Buffers::Udp { device, .. } => device.push_back(data.to_vec()),
         }
     }
 
@@ -56,7 +83,7 @@ impl Buffers {
     }
 }
 
-pub(crate) struct TcpBuffers {
+struct TcpBuffers {
     device: VecDeque<u8>,
     remote: VecDeque<u8>,
 }
@@ -77,29 +104,24 @@ impl TcpBuffers {
         buffer.make_contiguous()
     }
 
-    pub(crate) fn consume_data(&mut self, direction: &OutgoingDirection, size: usize) {
-        let buffer = match direction {
-            OutgoingDirection::ToRemote => &mut self.remote,
-            OutgoingDirection::ToDevice => &mut self.device,
-        };
-        buffer.drain(0..size);
+    pub(crate) fn consume_device_data(&mut self, size: usize) {
+        self.device.drain(0..size);
     }
 
-    pub(crate) fn push_data(&mut self, event: IncomingDataEvent<'_>) {
-        let direction = event.direction;
-        let buffer = event.buffer;
-        match direction {
-            IncomingDirection::FromRemote => {
-                self.device.extend(buffer.iter());
-            }
-            IncomingDirection::FromDevice => {
-                self.remote.extend(buffer.iter());
-            }
-        }
+    pub(crate) fn consume_remote_data(&mut self, size: usize) {
+        self.remote.drain(0..size);
+    }
+
+    pub(crate) fn push_data_to_device(&mut self, data: &[u8]) {
+        self.device.extend(data);
+    }
+
+    pub(crate) fn push_data_to_remote(&mut self, data: &[u8]) {
+        self.remote.extend(data);
     }
 }
 
-pub(crate) struct UdpBuffers {
+struct UdpBuffers {
     device: VecDeque<Vec<u8>>,
     remote: VecDeque<Vec<u8>>,
 }
@@ -137,22 +159,3 @@ impl UdpBuffers {
         }
     }
 }
-
-#[derive(Eq, PartialEq, Debug)]
-pub(crate) enum IncomingDirection {
-    FromRemote,
-    FromDevice,
-}
-
-#[derive(Eq, PartialEq, Debug)]
-pub(crate) enum OutgoingDirection {
-    ToRemote,
-    ToDevice,
-}
-
-pub(crate) struct DataEvent<'a, T> {
-    pub direction: T,
-    pub buffer: &'a [u8],
-}
-
-pub(crate) type IncomingDataEvent<'a> = DataEvent<'a, IncomingDirection>;

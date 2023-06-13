@@ -1,8 +1,6 @@
 mod buffers;
 mod endpoint;
-
 use crate::error::NetworkError;
-use buffers::{IncomingDataEvent, IncomingDirection, OutgoingDirection};
 
 use endpoint::DeviceEndpoint;
 use endpoint::RemoteEndpoint;
@@ -11,7 +9,7 @@ use mio::{Poll, Token};
 
 use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv6Packet, TcpPacket, UdpPacket};
 
-use crate::transportation::buffers::{Buffers, TcpBuffers, UdpBuffers};
+use buffers::Buffers;
 use std::fmt::{self, Display};
 use std::hash::Hash;
 use std::io::Error as StdIoError;
@@ -193,8 +191,8 @@ impl<'buf> Transportation<'buf> {
 
     fn create_buffer(trans_id: TransportationId) -> Buffers {
         match trans_id.transport_protocol {
-            TransportProtocol::Tcp => Buffers::Tcp(TcpBuffers::new()),
-            TransportProtocol::Udp => Buffers::Udp(UdpBuffers::new()),
+            TransportProtocol::Tcp => Buffers::new_tcp_buffer(),
+            TransportProtocol::Udp => Buffers::new_udp_buffer(),
         }
     }
 
@@ -240,19 +238,11 @@ impl<'buf> Transportation<'buf> {
     }
 
     pub(crate) fn push_client_data_to_buffer(&mut self, data: &[u8]) {
-        let event = IncomingDataEvent {
-            direction: IncomingDirection::FromDevice,
-            buffer: data,
-        };
-        self.buffers.push_data(event)
+        self.buffers.push_device_data_to_remote(data)
     }
 
     pub(crate) fn push_remote_data_to_buffer(&mut self, data: &[u8]) {
-        let event = IncomingDataEvent {
-            direction: IncomingDirection::FromRemote,
-            buffer: data,
-        };
-        self.buffers.push_data(event)
+        self.buffers.push_remote_data_to_device(data)
     }
 
     pub(crate) fn consume_device_buffer(&mut self) {
