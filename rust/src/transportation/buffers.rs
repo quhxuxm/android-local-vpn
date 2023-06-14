@@ -44,7 +44,7 @@ impl Buffer {
         }
     }
 
-    pub(crate) fn consume_device_buffer<F>(&mut self, mut write_fn: F)
+    pub(crate) fn consume_device_buffer_with<F>(&mut self, mut write_fn: F)
     where
         F: FnMut(&[u8]) -> Result<usize, NetworkError>,
     {
@@ -88,7 +88,7 @@ impl Buffer {
         }
     }
 
-    pub(crate) fn consume_remote_buffer<F>(&mut self, mut write_fn: F)
+    pub(crate) fn consume_remote_buffer_with<F>(&mut self, mut write_fn: F)
     where
         F: FnMut(&[u8]) -> Result<usize, NetworkError>,
     {

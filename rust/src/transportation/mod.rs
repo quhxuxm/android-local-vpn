@@ -253,7 +253,7 @@ impl<'buf> Transportation<'buf> {
             self.trans_id
         );
         self.buffer
-            .consume_device_buffer(|b| self.device_endpoint.send(b));
+            .consume_device_buffer_with(|b| self.device_endpoint.send(b));
     }
 
     /// Transfer the data inside remote buffer to remote endpoint
@@ -262,7 +262,7 @@ impl<'buf> Transportation<'buf> {
             ">>>> Transportation {} going to transfer the data in remote buffer to remote endpoint.",
             self.trans_id
         );
-        self.buffer.consume_remote_buffer(|b| {
+        self.buffer.consume_remote_buffer_with(|b| {
             self.remote_endpoint
                 .write(b)
                 .map_err(NetworkError::WriteToRemote)
