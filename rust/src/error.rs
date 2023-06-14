@@ -20,6 +20,8 @@ pub enum NetworkError {
     InitializeWaker(#[source] StdIoError),
     #[error("Fail to register source because of error: {0:?}")]
     RegisterSource(#[source] StdIoError),
+    #[error("Fail to deregister source because of error: {0:?}")]
+    DeregisterSource(#[source] StdIoError),
     #[error("Fail to poll source because of error: {0:?}")]
     PollSource(#[source] StdIoError),
     #[error("Fail to send tcp data to device because of error: {0:?}")]

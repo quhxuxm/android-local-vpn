@@ -31,14 +31,11 @@ impl RemoteEndpoint {
         remote_address: SocketAddr,
     ) -> Option<Self> {
         let socket = Self::create_socket(trans_id, &transport_protocol, &internet_protocol).ok()?;
-
         let socket_address = Socket2SockAddr::from(remote_address);
-
         debug!(
             ">>>> Transportation {trans_id} connecting to remote, address={:?}",
             remote_address
         );
-
         match socket.connect(&socket_address) {
             Ok(_) => {
                 debug!(

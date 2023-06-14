@@ -66,12 +66,14 @@ impl<'buf> TransportationProcessor<'buf> {
             for event in events.iter() {
                 if event.token() == TOKEN_DEVICE {
                     if let Err(e) = self.handle_device_file_io_event(event) {
-                        error!("Fail to handle device envent because of error: {e:?}");
+                        error!("Fail to handle device io event because of error: {e:?}");
                     };
                 } else if event.token() == TOKEN_WAKER {
                     break 'device_file_poll_loop;
                 } else {
-                    self.handle_remote_io_event(event);
+                    if let Err(e) = self.handle_remote_io_event(event) {
+                        error!("Fail to handle remote io event because of error: {e:?}");
+                    };
                 }
             }
         }
@@ -94,17 +96,18 @@ impl<'buf> TransportationProcessor<'buf> {
         }
     }
 
-    fn destroy_transportation(&mut self, trans_id: TransportationId) {
+    fn destroy_transportation(&mut self, trans_id: TransportationId) -> Result<(), NetworkError> {
         // Push any pending data back to device before destroying transportation.
         self.write_to_device_endpoint(trans_id);
         self.write_to_device_file(trans_id);
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             transportation.close_device_endpoint();
-            transportation.close_remote_endpoint(&mut self.poll);
+            transportation.close_remote_endpoint(&mut self.poll)?;
             self.tokens_to_transportations
                 .remove(&transportation.get_token());
             self.transportations.remove(&trans_id);
         }
+        Ok(())
     }
 
     fn handle_device_file_io_event(&mut self, event: &Event) -> Result<(), AgentError> {
@@ -146,12 +149,12 @@ impl<'buf> TransportationProcessor<'buf> {
         }
     }
 
-    fn handle_remote_io_event(&mut self, event: &Event) {
+    fn handle_remote_io_event(&mut self, event: &Event) -> Result<(), NetworkError> {
         if let Some(trans_id) = self.tokens_to_transportations.get(&event.token()) {
             let trans_id = *trans_id;
             if event.is_readable() {
                 debug!("<<<< Transportation {trans_id} is readable.");
-                self.read_from_remote_endpoint(trans_id);
+                self.read_from_remote_endpoint(trans_id)?;
                 self.write_to_device_endpoint(trans_id);
                 self.write_to_device_file(trans_id);
             }
@@ -162,20 +165,21 @@ impl<'buf> TransportationProcessor<'buf> {
             }
             if event.is_read_closed() || event.is_write_closed() {
                 debug!("<<<< Transportation {trans_id} is read/write closed.");
-                self.destroy_transportation(trans_id);
+                self.destroy_transportation(trans_id)?;
             }
         }
+        Ok(())
     }
 
-    fn read_from_remote_endpoint(&mut self, trans_id: TransportationId) {
+    fn read_from_remote_endpoint(&mut self, trans_id: TransportationId) -> Result<(), NetworkError> {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             debug!("<<<< Transportation {trans_id} read from remote.");
 
             let is_transportation_closed = match transportation.read_from_remote_endpoint() {
-                Ok((read_seqs, is_closed)) => {
-                    for bytes in read_seqs {
-                        if !bytes.is_empty() {
-                            transportation.push_remote_data_to_buffer(&bytes[..])
+                Ok((remote_data, is_closed)) => {
+                    for data in remote_data {
+                        if !data.is_empty() {
+                            transportation.push_data_to_remote_buffer(&data)
                         }
                     }
                     is_closed
@@ -195,11 +199,11 @@ impl<'buf> TransportationProcessor<'buf> {
                 }
             };
             if is_transportation_closed {
-                self.destroy_transportation(trans_id);
+                self.destroy_transportation(trans_id)?;
             }
-
             debug!("<<<< Transportation {trans_id} finished read from remote endpoint.",);
         }
+        Ok(())
     }
 
     fn write_to_remote_endpoint(&mut self, trans_id: TransportationId) {
@@ -216,7 +220,7 @@ impl<'buf> TransportationProcessor<'buf> {
                     break;
                 }
                 match transportation.read_from_device_endpoint(&mut data) {
-                    Ok(data_len) => transportation.push_device_data_to_buffer(&data[..data_len]),
+                    Ok(data_len) => transportation.push_data_to_device_buffer(&data[..data_len]),
                     Err(error) => {
                         error!(">>>> Transportation {trans_id} fail to push device data to buffer because of error: {error:?}");
                         break;

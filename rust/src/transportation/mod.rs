@@ -213,13 +213,15 @@ impl<'buf> Transportation<'buf> {
         self.device_endpoint.can_send()
     }
 
-    pub(crate) fn close_remote_endpoint(&mut self, poll: &mut Poll) {
-        self.remote_endpoint.close();
-        self.remote_endpoint.deregister_poll(poll).unwrap();
+    pub(crate) fn close_remote_endpoint(&mut self, poll: &mut Poll) -> Result<(), NetworkError> {
         debug!(
             ">>>> Transportation {} close remote endpoint.",
             self.trans_id
-        )
+        );
+        self.remote_endpoint.close();
+        self.remote_endpoint
+            .deregister_poll(poll)
+            .map_err(NetworkError::DeregisterSource)
     }
 
     pub(crate) fn push_rx_to_device(&mut self, rx_data: Vec<u8>) {
@@ -238,11 +240,11 @@ impl<'buf> Transportation<'buf> {
         self.device_endpoint.receive(data)
     }
 
-    pub(crate) fn push_device_data_to_buffer(&mut self, data: &[u8]) {
+    pub(crate) fn push_data_to_device_buffer(&mut self, data: &[u8]) {
         self.buffer.push_device_data_to_remote(data)
     }
 
-    pub(crate) fn push_remote_data_to_buffer(&mut self, data: &[u8]) {
+    pub(crate) fn push_data_to_remote_buffer(&mut self, data: &[u8]) {
         self.buffer.push_remote_data_to_device(data)
     }
 
