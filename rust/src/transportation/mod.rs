@@ -157,20 +157,20 @@ impl<'buf> Transportation<'buf> {
         let transportation = Transportation {
             trans_id,
             token,
-            device_endpoint: Self::create_device_endpoint(trans_id)?,
+            device_endpoint: DeviceEndpoint::new(
+                trans_id,
+                trans_id.transport_protocol,
+                trans_id.source,
+                trans_id.destination,
+            )?,
             remote_endpoint: Self::create_remote_endpoint(trans_id, poll, token)?,
-            buffer: Self::create_buffer(trans_id),
+            buffer: match trans_id.transport_protocol {
+                TransportProtocol::Tcp => Buffer::new_tcp_buffer(),
+                TransportProtocol::Udp => Buffer::new_udp_buffer(),
+            },
         };
         debug!(">>>> Transportation {trans_id} created.");
         Some(transportation)
-    }
-
-    fn create_device_endpoint(trans_id: TransportationId) -> Option<DeviceEndpoint<'buf>> {
-        DeviceEndpoint::new(
-            trans_id.transport_protocol,
-            trans_id.source,
-            trans_id.destination,
-        )
     }
 
     fn create_remote_endpoint(trans_id: TransportationId, poll: &mut Poll, token: Token) -> Option<RemoteEndpoint> {
@@ -187,13 +187,6 @@ impl<'buf> Transportation<'buf> {
         }
 
         Some(remote_endpoint)
-    }
-
-    fn create_buffer(trans_id: TransportationId) -> Buffer {
-        match trans_id.transport_protocol {
-            TransportProtocol::Tcp => Buffer::new_tcp_buffer(),
-            TransportProtocol::Udp => Buffer::new_udp_buffer(),
-        }
     }
 
     pub(crate) fn get_token(&self) -> Token {

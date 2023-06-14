@@ -32,6 +32,8 @@ pub enum NetworkError {
     ReceiveUdpDataFromDevice(UdpRecvError),
     #[error("Fail to write data to remote because of error: {0:?}")]
     WriteToRemote(#[source] StdIoError),
+    #[error("Fail to create device endpoint")]
+    DeviceEndpointCreation,
 }
 
 #[derive(Error, Debug)]

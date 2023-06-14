@@ -95,7 +95,7 @@ impl<'buf> TransportationProcessor<'buf> {
 
     fn destroy_transportation(&mut self, trans_id: TransportationId) {
         // push any pending data back to tun device before destroying session.
-        self.write_to_smoltcp(trans_id);
+        self.write_to_device_endpoint(trans_id);
         self.write_to_device_file(trans_id);
 
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
@@ -126,8 +126,8 @@ impl<'buf> TransportationProcessor<'buf> {
                             .ok_or(ServerError::TransportationNotExist(trans_id))?;
                         transportation.push_rx_to_device(buffer.to_vec());
                         self.write_to_device_file(trans_id);
-                        self.read_from_smoltcp(trans_id);
-                        self.write_to_remote(trans_id);
+                        self.read_from_device_endpoint(trans_id);
+                        self.write_to_remote_endpoint(trans_id);
                     }
                 }
                 Err(_) => {
@@ -151,14 +151,14 @@ impl<'buf> TransportationProcessor<'buf> {
             let trans_id = *trans_id;
             if event.is_readable() {
                 debug!("<<<< Transportation {trans_id} is readable.");
-                self.read_from_remote(trans_id);
-                self.write_to_smoltcp(trans_id);
+                self.read_from_remote_endpoint(trans_id);
+                self.write_to_device_endpoint(trans_id);
                 self.write_to_device_file(trans_id);
             }
             if event.is_writable() {
                 debug!("<<<< Transportation {trans_id} is writable.");
-                self.read_from_smoltcp(trans_id);
-                self.write_to_remote(trans_id);
+                self.read_from_device_endpoint(trans_id);
+                self.write_to_remote_endpoint(trans_id);
             }
             if event.is_read_closed() || event.is_write_closed() {
                 debug!("<<<< Transportation {trans_id} is read/write closed.");
@@ -167,7 +167,7 @@ impl<'buf> TransportationProcessor<'buf> {
         }
     }
 
-    fn read_from_remote(&mut self, trans_id: TransportationId) {
+    fn read_from_remote_endpoint(&mut self, trans_id: TransportationId) {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             debug!("<<<< Transportation {trans_id} read from remote.");
 
@@ -186,7 +186,10 @@ impl<'buf> TransportationProcessor<'buf> {
                     } else if error.kind() == ErrorKind::ConnectionReset {
                         true
                     } else {
-                        log::error!("failed to read from tcp stream, errro={:?}", error);
+                        error!(
+                            "<<<< Transportation {trans_id} failed to read from remote endpoint, errro={:?}",
+                            error
+                        );
                         true
                     }
                 }
@@ -195,17 +198,17 @@ impl<'buf> TransportationProcessor<'buf> {
                 self.destroy_transportation(trans_id);
             }
 
-            log::trace!("finished read from server, session={:?}", trans_id);
+            debug!("<<<< Transportation {trans_id} finished read from remote endpoint.",);
         }
     }
 
-    fn write_to_remote(&mut self, trans_id: TransportationId) {
+    fn write_to_remote_endpoint(&mut self, trans_id: TransportationId) {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             transportation.consume_remote_buffer();
         }
     }
 
-    fn read_from_smoltcp(&mut self, trans_id: TransportationId) {
+    fn read_from_device_endpoint(&mut self, trans_id: TransportationId) {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             let mut data: [u8; 65535] = [0; 65535];
             loop {
@@ -223,10 +226,9 @@ impl<'buf> TransportationProcessor<'buf> {
         }
     }
 
-    fn write_to_smoltcp(&mut self, trans_id: TransportationId) {
+    fn write_to_device_endpoint(&mut self, trans_id: TransportationId) {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
-            log::trace!("write to smoltcp, session={:?}", trans_id);
-
+            debug!("Transportation {trans_id} write to device endpoint.");
             if transportation.device_endpoint_can_send() {
                 transportation.transfer_device_buffer_to_device();
             }

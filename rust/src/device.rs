@@ -7,15 +7,19 @@ use smoltcp::{
 
 use std::collections::VecDeque;
 
+use crate::transportation::TransportationId;
+
 #[derive(Debug)]
 pub(crate) struct PpaassVpnDevice {
+    trans_id: TransportationId,
     rx_queue: VecDeque<Vec<u8>>,
     tx_queue: VecDeque<Vec<u8>>,
 }
 
 impl PpaassVpnDevice {
-    pub(crate) fn new() -> PpaassVpnDevice {
+    pub(crate) fn new(trans_id: TransportationId) -> PpaassVpnDevice {
         PpaassVpnDevice {
+            trans_id,
             rx_queue: VecDeque::new(),
             tx_queue: VecDeque::new(),
         }
@@ -43,8 +47,12 @@ impl Device for PpaassVpnDevice {
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         self.rx_queue.pop_front().map(move |buffer| {
-            let rx = RxToken { buffer };
+            let rx = RxToken {
+                trans_id: self.trans_id,
+                buffer,
+            };
             let tx = TxToken {
+                trans_id: self.trans_id,
                 queue: &mut self.tx_queue,
             };
             (rx, tx)
@@ -53,12 +61,14 @@ impl Device for PpaassVpnDevice {
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
         Some(TxToken {
+            trans_id: self.trans_id,
             queue: &mut self.tx_queue,
         })
     }
 }
 
 pub(crate) struct RxToken {
+    trans_id: TransportationId,
     buffer: Vec<u8>,
 }
 
@@ -69,7 +79,8 @@ impl phy::RxToken for RxToken {
     {
         let result = f(&mut self.buffer);
         debug!(
-            ">>>> Ppaass vpn receive token rx from device:{}",
+            ">>>> Transportation {} vpn receive rx token from device:{}",
+            self.trans_id,
             PrettyPrinter::<Ipv4Packet<&'static [u8]>>::new("", &self.buffer)
         );
         result
@@ -77,6 +88,7 @@ impl phy::RxToken for RxToken {
 }
 
 pub(crate) struct TxToken<'a> {
+    trans_id: TransportationId,
     queue: &'a mut VecDeque<Vec<u8>>,
 }
 
@@ -88,7 +100,8 @@ impl<'a> phy::TxToken for TxToken<'a> {
         let mut buffer = vec![0; len];
         let result = f(&mut buffer);
         debug!(
-            "<<<< Ppaass vpn send tx token to device:{}",
+            "<<<< Transportation {} vpn send tx token to device:{}",
+            self.trans_id,
             PrettyPrinter::<Ipv4Packet<&'static [u8]>>::new("", &buffer)
         );
         self.queue.push_back(buffer);

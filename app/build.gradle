@@ -59,7 +59,7 @@ cargo {
     libname = "vpn"          // Or whatever matches Cargo.toml's [package] name.
     targets = ['arm64', 'x86_64']      // See bellow for a longer list of options
     verbose = true
-    profile = 'debug'
+    profile = 'release'
     features {
         all()
     }
