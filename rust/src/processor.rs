@@ -229,6 +229,7 @@ impl<'buf> TransportationProcessor<'buf> {
                 if !transportation.device_endpoint_can_receive() {
                     break;
                 }
+                debug!(">>>> Transportation {trans_id} can receive data from device, begin receive device data to device buffer.");
                 match transportation.read_from_device_endpoint(&mut data) {
                     Ok(data_len) => transportation.push_data_to_device_buffer(&data[..data_len]),
                     Err(error) => {
@@ -242,8 +243,9 @@ impl<'buf> TransportationProcessor<'buf> {
 
     fn write_to_device_endpoint(&mut self, trans_id: TransportationId) {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
-            debug!("Transportation {trans_id} write to device endpoint.");
+            debug!(">>>> Transportation {trans_id} write to device endpoint.");
             if transportation.device_endpoint_can_send() {
+                debug!(">>>> Transportation {trans_id} can send data to device, begin send device buffer data to device.");
                 transportation.transfer_device_buffer();
             }
         }
