@@ -193,7 +193,8 @@ impl<'buf> Transportation<'buf> {
         self.token
     }
 
-    pub(crate) fn poll_device_endpoint(&mut self) {
+    /// Poll the device endpoint smoltcp to trigger the iface
+    pub(crate) fn poll_device_endpoint(&mut self) -> bool {
         self.device_endpoint.poll()
     }
 

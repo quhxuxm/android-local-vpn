@@ -232,9 +232,9 @@ impl<'buf> DeviceEndpoint<'buf> {
         }
     }
 
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self) -> bool {
         self.interface
-            .poll(Instant::now(), &mut self.device, &mut self.socketset);
+            .poll(Instant::now(), &mut self.device, &mut self.socketset)
     }
 
     pub fn push_rx_to_device(&mut self, rx_data: Vec<u8>) {

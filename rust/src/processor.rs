@@ -99,7 +99,10 @@ impl<'buf> TransportationProcessor<'buf> {
     fn destroy_transportation(&mut self, trans_id: TransportationId) -> Result<(), NetworkError> {
         // Push any pending data back to device before destroying transportation.
         self.write_to_device_endpoint(trans_id);
-        self.write_to_device_file(trans_id);
+        if let Err(e) = self.write_to_device_file(trans_id) {
+            error!("<<<< Transportation {trans_id} fail to write pending data in smoltcp to device when destory because of error: {e:?}");
+            return Err(e);
+        };
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             transportation.close_device_endpoint();
             transportation.close_remote_endpoint(&mut self.poll)?;
@@ -118,6 +121,7 @@ impl<'buf> TransportationProcessor<'buf> {
         loop {
             match self.device_file.read(&mut buffer) {
                 Ok(0) => {
+                    debug!("No more data from device file in current poll loop, break and do next poll loop");
                     break Ok(());
                 }
                 Ok(count) => {
@@ -128,25 +132,31 @@ impl<'buf> TransportationProcessor<'buf> {
                             .get_mut(&trans_id)
                             .ok_or(ServerError::TransportationNotExist(trans_id))?;
                         transportation.push_rx_to_device(buffer.to_vec());
-                        self.write_to_device_file(trans_id);
+                        self.write_to_device_file(trans_id)?;
                         self.read_from_device_endpoint(trans_id);
                         self.write_to_remote_endpoint(trans_id);
                     }
                 }
-                Err(_) => {
+                Err(e) => {
+                    error!("Fail to read data from device file because of error: {e:?}");
                     break Ok(());
                 }
             }
         }
     }
 
-    fn write_to_device_file(&mut self, trans_id: TransportationId) {
+    fn write_to_device_file(&mut self, trans_id: TransportationId) -> Result<(), NetworkError> {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
-            transportation.poll_device_endpoint();
-            while let Some(data_to_device) = transportation.pop_tx_from_device() {
-                self.device_file.write_all(&data_to_device[..]).unwrap();
-            }
+            if transportation.poll_device_endpoint() {
+                debug!("<<<< Transportation {trans_id} change happen on smoltcp write the tx to device.");
+                while let Some(data_to_device) = transportation.pop_tx_from_device() {
+                    self.device_file
+                        .write_all(&data_to_device[..])
+                        .map_err(NetworkError::WriteToDevice)?;
+                }
+            };
         }
+        Ok(())
     }
 
     fn handle_remote_io_event(&mut self, event: &Event) -> Result<(), NetworkError> {
@@ -156,7 +166,7 @@ impl<'buf> TransportationProcessor<'buf> {
                 debug!("<<<< Transportation {trans_id} is readable.");
                 self.read_from_remote_endpoint(trans_id)?;
                 self.write_to_device_endpoint(trans_id);
-                self.write_to_device_file(trans_id);
+                self.write_to_device_file(trans_id)?;
             }
             if event.is_writable() {
                 debug!("<<<< Transportation {trans_id} is writable.");
