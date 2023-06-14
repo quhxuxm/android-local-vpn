@@ -252,8 +252,14 @@ impl<'buf> Transportation<'buf> {
             ">>>> Transportation {} going to transfer the data in device buffer to device endpoint.",
             self.trans_id
         );
-        self.buffer
-            .consume_device_buffer_with(|b| self.device_endpoint.send(b));
+        self.buffer.consume_device_buffer_with(|buffer_data| {
+            debug!(
+                "<<<< Transportation {} going to write data in device buffer to device endpoint: {}",
+                self.trans_id,
+                pretty_hex::pretty_hex(&buffer_data)
+            );
+            self.device_endpoint.send(buffer_data)
+        });
     }
 
     /// Transfer the data inside remote buffer to remote endpoint
@@ -262,9 +268,14 @@ impl<'buf> Transportation<'buf> {
             ">>>> Transportation {} going to transfer the data in remote buffer to remote endpoint.",
             self.trans_id
         );
-        self.buffer.consume_remote_buffer_with(|b| {
+        self.buffer.consume_remote_buffer_with(|buffer_data| {
+            debug!(
+                ">>>> Transportation {} going to write data in remote buffer to remote point: {}",
+                self.trans_id,
+                pretty_hex::pretty_hex(&buffer_data)
+            );
             self.remote_endpoint
-                .write(b)
+                .write(buffer_data)
                 .map_err(NetworkError::WriteToRemote)
         });
     }
