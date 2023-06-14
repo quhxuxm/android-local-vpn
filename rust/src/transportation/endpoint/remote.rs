@@ -111,25 +111,34 @@ impl RemoteEndpoint {
         let mut buffer = [0; 65536]; // maximum UDP packet size
         let mut is_closed = false;
         loop {
-            let read_result = match self {
-                Self::Tcp { tcp_stream, .. } => tcp_stream.read(&mut buffer),
-                Self::Udp { udp_socket, .. } => udp_socket.recv(&mut buffer),
+            let (read_result, trans_id) = match self {
+                Self::Tcp {
+                    tcp_stream,
+                    trans_id,
+                    ..
+                } => (tcp_stream.read(&mut buffer), trans_id),
+                Self::Udp {
+                    udp_socket,
+                    trans_id,
+                    ..
+                } => (udp_socket.recv(&mut buffer), trans_id),
             };
             match read_result {
+                Ok(0) => {
+                    is_closed = true;
+                    break;
+                }
                 Ok(count) => {
-                    if count == 0 {
-                        is_closed = true;
-                        break;
-                    }
                     // bytes.extend_from_slice(&buffer[..count]);
                     let data = buffer[..count].to_vec();
                     bytes.push(data)
                 }
-                Err(error_code) => {
-                    if error_code.kind() == ErrorKind::WouldBlock {
+                Err(e) => {
+                    if e.kind() == ErrorKind::WouldBlock {
                         break;
                     } else {
-                        return Err(error_code);
+                        error!(">>>> Transportation {trans_id} fail to read data from remote because of error: {e:?}");
+                        return Err(e);
                     }
                 }
             }
