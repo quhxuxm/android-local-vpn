@@ -246,12 +246,22 @@ impl<'buf> Transportation<'buf> {
         self.buffer.push_remote_data_to_device(data)
     }
 
-    pub(crate) fn transfer_device_buffer_to_device(&mut self) {
+    /// Transfer the data inside device buffer to device endpoint.
+    pub(crate) fn transfer_device_buffer(&mut self) {
+        debug!(
+            ">>>> Transportation {} going to transfer the data in device buffer to device endpoint.",
+            self.trans_id
+        );
         self.buffer
             .consume_device_buffer(|b| self.device_endpoint.send(b));
     }
 
-    pub(crate) fn consume_remote_buffer(&mut self) {
+    /// Transfer the data inside remote buffer to remote endpoint
+    pub(crate) fn transfer_remote_buffer(&mut self) {
+        debug!(
+            ">>>> Transportation {} going to transfer the data in remote buffer to remote endpoint.",
+            self.trans_id
+        );
         self.buffer.consume_remote_buffer(|b| {
             self.remote_endpoint
                 .write(b)

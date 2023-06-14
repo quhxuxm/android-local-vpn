@@ -5,18 +5,19 @@ use crate::{
 use log::{debug, error};
 use mio::net::{TcpStream, UdpSocket};
 use mio::{Interest, Poll, Token};
+use socket2::{SockAddr as Socket2SockAddr, Socket as Socket2};
 use std::io::{ErrorKind, Read, Result, Write};
 use std::net::{Shutdown, SocketAddr};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 
 pub(crate) enum RemoteEndpoint {
     Tcp {
-        _socket: socket2::Socket, // Need to retain so socket does not get closed.
+        _socket: Socket2, // Need to retain so socket does not get closed.
         tcp_stream: TcpStream,
         trans_id: TransportationId,
     },
     Udp {
-        _socket: socket2::Socket, // Need to retain so socket does not get closed.
+        _socket: Socket2, // Need to retain so socket does not get closed.
         udp_socket: UdpSocket,
         trans_id: TransportationId,
     },
@@ -31,7 +32,7 @@ impl RemoteEndpoint {
     ) -> Option<Self> {
         let socket = Self::create_socket(trans_id, &transport_protocol, &internet_protocol).ok()?;
 
-        let socket_address = socket2::SockAddr::from(remote_address);
+        let socket_address = Socket2SockAddr::from(remote_address);
 
         debug!(
             ">>>> Transportation {trans_id} connecting to remote, address={:?}",
@@ -107,7 +108,7 @@ impl RemoteEndpoint {
 
     pub(crate) fn read(&mut self) -> Result<(Vec<Vec<u8>>, bool)> {
         let mut bytes: Vec<Vec<u8>> = Vec::new();
-        let mut buffer = [0; 1 << 16]; // maximum UDP packet size
+        let mut buffer = [0; 65536]; // maximum UDP packet size
         let mut is_closed = false;
         loop {
             let read_result = match self {
@@ -143,10 +144,10 @@ impl RemoteEndpoint {
                 trans_id,
                 ..
             } => {
+                debug!(">>>> Transportation {trans_id} close tcp stream.");
                 if let Err(e) = tcp_stream.shutdown(Shutdown::Both) {
                     error!(">>>> Transportation {trans_id} failed to shutdown remote tcp stream because of error: {e:?}",);
                 }
-                debug!(">>>> Transportation {trans_id} close tcp stream.");
             }
             Self::Udp { trans_id, .. } => {
                 debug!(">>>> Transportation {trans_id} close udp socket.");
@@ -154,7 +155,7 @@ impl RemoteEndpoint {
         }
     }
 
-    fn create_socket(trans_id: TransportationId, transport_protocol: &TransportProtocol, internet_protocol: &InternetProtocol) -> Result<socket2::Socket> {
+    fn create_socket(trans_id: TransportationId, transport_protocol: &TransportProtocol, internet_protocol: &InternetProtocol) -> Result<Socket2> {
         let domain = match internet_protocol {
             InternetProtocol::Ipv4 => socket2::Domain::IPV4,
             InternetProtocol::Ipv6 => socket2::Domain::IPV6,
@@ -170,7 +171,7 @@ impl RemoteEndpoint {
             TransportProtocol::Udp => socket2::Type::DGRAM,
         };
 
-        let socket = socket2::Socket::new(domain, socket_type, Some(protocol))?;
+        let socket = Socket2::new(domain, socket_type, Some(protocol))?;
 
         socket.set_nonblocking(true)?;
         if let Err(e) = protect_socket(socket.as_raw_fd()) {

@@ -83,6 +83,7 @@ impl<'buf> TransportationProcessor<'buf> {
         match self.transportations.entry(trans_id) {
             Entry::Occupied(_) => Some(trans_id),
             Entry::Vacant(entry) => {
+                debug!(">>>> Transportation {trans_id} not exist in repository create a new one.");
                 let token = Token(self.next_token_id);
                 let transportation = Transportation::new(trans_id, &mut self.poll, token)?;
                 self.tokens_to_transportations.insert(token, trans_id);
@@ -94,10 +95,9 @@ impl<'buf> TransportationProcessor<'buf> {
     }
 
     fn destroy_transportation(&mut self, trans_id: TransportationId) {
-        // push any pending data back to tun device before destroying session.
+        // Push any pending data back to device before destroying transportation.
         self.write_to_device_endpoint(trans_id);
         self.write_to_device_file(trans_id);
-
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             transportation.close_device_endpoint();
             transportation.close_remote_endpoint(&mut self.poll);
@@ -111,7 +111,7 @@ impl<'buf> TransportationProcessor<'buf> {
         if !event.is_readable() {
             return Ok(());
         }
-        let mut buffer: [u8; 65535] = [0; 65535];
+        let mut buffer: [u8; 65536] = [0; 65536];
         loop {
             match self.device_file.read(&mut buffer) {
                 Ok(0) => {
@@ -204,7 +204,7 @@ impl<'buf> TransportationProcessor<'buf> {
 
     fn write_to_remote_endpoint(&mut self, trans_id: TransportationId) {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
-            transportation.consume_remote_buffer();
+            transportation.transfer_remote_buffer();
         }
     }
 
@@ -230,7 +230,7 @@ impl<'buf> TransportationProcessor<'buf> {
         if let Some(transportation) = self.transportations.get_mut(&trans_id) {
             debug!("Transportation {trans_id} write to device endpoint.");
             if transportation.device_endpoint_can_send() {
-                transportation.transfer_device_buffer_to_device();
+                transportation.transfer_device_buffer();
             }
         }
     }
