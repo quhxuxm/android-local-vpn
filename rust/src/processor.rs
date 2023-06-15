@@ -59,7 +59,7 @@ impl<'buf> TransportationProcessor<'buf> {
 
         let mut events = Events::with_capacity(EVENTS_CAPACITY);
 
-        'device_file_poll_loop: loop {
+        'device_file_io_loop: loop {
             self.poll
                 .poll(&mut events, None)
                 .map_err(NetworkError::PollSource)?;
@@ -69,11 +69,9 @@ impl<'buf> TransportationProcessor<'buf> {
                         error!("Fail to handle device io event because of error: {e:?}");
                     };
                 } else if event.token() == TOKEN_WAKER {
-                    break 'device_file_poll_loop;
-                } else {
-                    if let Err(e) = self.handle_remote_io_event(event) {
-                        error!("Fail to handle remote io event because of error: {e:?}");
-                    };
+                    break 'device_file_io_loop;
+                } else if let Err(e) = self.handle_remote_io_event(event) {
+                    error!("Fail to handle remote io event because of error: {e:?}");
                 }
             }
         }
