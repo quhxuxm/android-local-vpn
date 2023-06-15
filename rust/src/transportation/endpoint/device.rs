@@ -102,9 +102,7 @@ impl<'buf> DeviceEndpoint<'buf> {
             );
             return None;
         }
-
         socket.set_ack_delay(None);
-
         Some(socket)
     }
 
