@@ -2,7 +2,6 @@ mod buffers;
 mod endpoint;
 use crate::error::NetworkError;
 
-use derive_more::Display;
 use endpoint::DeviceEndpoint;
 use endpoint::RemoteEndpoint;
 use log::{debug, error, warn};

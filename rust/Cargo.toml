@@ -20,3 +20,4 @@ anyhow="1.0.71"
 pretty-hex="0.3.0"
 thiserror="1.0.40"
 derive_more="0.99.17"
+ppaass-common = {path = "../../ppaass/common"}

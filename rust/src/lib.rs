@@ -9,7 +9,7 @@ use crate::server::PpaassVpnServer;
 use android_logger::Config;
 use anyhow::{anyhow, Result};
 use jni::{
-    objects::{GlobalRef, JValue},
+    objects::{GlobalRef, JByteArray, JValue},
     JNIEnv, JavaVM,
 };
 use jni::{
@@ -47,6 +47,9 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
     _class: JClass<'static>,
     vpn_tun_device_fd: jint,
     vpn_service: JObject<'static>,
+    private_key_bytes: JByteArray,
+
+    public_key_bytes: JByteArray,
 ) {
     android_logger::init_once(
         Config::default()
@@ -56,6 +59,7 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
     std::panic::set_hook(Box::new(|panic_info| {
         log::error!("*** PANIC [{:?}]", panic_info);
     }));
+
     let java_vm = jni_env
         .get_java_vm()
         .expect("Fail to get jvm from jni enviorment.");
@@ -74,6 +78,14 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
         process::id(),
         vpn_tun_device_fd
     );
+
+    let private_key_bytes = jni_env
+        .convert_byte_array(private_key_bytes)
+        .expect("Fail to read private key.");
+    let public_key_bytes = jni_env
+        .convert_byte_array(public_key_bytes)
+        .expect("Fail to read public key.");
+
     let vpn_server = PpaassVpnServer::new(vpn_tun_device_fd);
     VPN_SERVER
         .set(vpn_server)

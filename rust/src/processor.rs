@@ -6,6 +6,7 @@ use log::{debug, error};
 use mio::event::Event;
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token, Waker};
+use ppaass_common::{generate_uuid, PpaassMessage};
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -89,6 +90,8 @@ impl<'buf> TransportationProcessor<'buf> {
                 self.tokens_to_transportations.insert(token, trans_id);
                 self.next_token_id += 1;
                 entry.insert(transportation);
+                // let ppaass_message = PpaassMessage::new(generate_uuid(), "user1".to_string(), payload_encryption, payload);
+                // transportation.push_data_to_remote_buffer(data);
                 Some(trans_id)
             }
         }
