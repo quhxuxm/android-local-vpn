@@ -119,7 +119,7 @@ impl<'buf> TransportationProcessor<'buf> {
         loop {
             match self.device_file.read(&mut buffer) {
                 Ok(0) => {
-                    debug!("No more data from device file in current poll loop, break and do next poll loop");
+                    debug!(">>>> No more data from device file in current poll loop, break and do next poll loop");
                     break Ok(());
                 }
                 Ok(count) => {
@@ -136,8 +136,11 @@ impl<'buf> TransportationProcessor<'buf> {
                     }
                 }
                 Err(e) => {
-                    error!("Fail to read data from device file because of error: {e:?}");
-                    break Ok(());
+                    if e.kind() == ErrorKind::WouldBlock {
+                        break Ok(());
+                    }
+                    error!(">>>> Fail to read data from device file because of error: {e:?}");
+                    break Err(AgentError::Network(NetworkError::ReadFromDevice(e)));
                 }
             }
         }
@@ -149,7 +152,7 @@ impl<'buf> TransportationProcessor<'buf> {
                 debug!("<<<< Transportation {trans_id} change happen on smoltcp write the tx to device.");
                 while let Some(data_to_device) = transportation.pop_tx_from_device() {
                     self.device_file
-                        .write_all(&data_to_device[..])
+                        .write_all(&data_to_device)
                         .map_err(NetworkError::WriteToDevice)?;
                 }
             };

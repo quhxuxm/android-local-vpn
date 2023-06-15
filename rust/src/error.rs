@@ -32,6 +32,8 @@ pub enum NetworkError {
     ReceiveTcpDataFromDevice(TcpRecvError),
     #[error("Fail to receive udp data from device because of error: {0:?}")]
     ReceiveUdpDataFromDevice(UdpRecvError),
+    #[error("Fail to read from device because of error: {0:?}")]
+    ReadFromDevice(#[source] StdIoError),
     #[error("Fail to write data to remote because of error: {0:?}")]
     WriteToRemote(#[source] StdIoError),
     #[error("Fail to write data to device because of error: {0:?}")]
