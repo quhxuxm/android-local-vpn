@@ -2,6 +2,7 @@ mod buffers;
 mod endpoint;
 use crate::error::NetworkError;
 
+use derive_more::Display;
 use endpoint::DeviceEndpoint;
 use endpoint::RemoteEndpoint;
 use log::{debug, error, warn};
@@ -33,6 +34,21 @@ pub struct TransportationId {
     destination: SocketAddr,
     transport_protocol: TransportProtocol,
     internet_protocol: InternetProtocol,
+}
+
+impl Display for TransportationId {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            formatter,
+            "[{:?}][{:?}]{}:{}->{}:{}",
+            self.internet_protocol,
+            self.transport_protocol,
+            self.source.ip(),
+            self.source.port(),
+            self.destination.ip(),
+            self.destination.port()
+        )
+    }
 }
 
 impl TransportationId {
@@ -126,21 +142,6 @@ impl TransportationId {
         }
 
         None
-    }
-}
-
-impl Display for TransportationId {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            formatter,
-            "[{:?}][{:?}]{}:{}->{}:{}",
-            self.internet_protocol,
-            self.transport_protocol,
-            self.source.ip(),
-            self.source.port(),
-            self.destination.ip(),
-            self.destination.port()
-        )
     }
 }
 
