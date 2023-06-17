@@ -242,8 +242,8 @@ impl<'buf> DeviceEndpoint<'buf> {
 
     pub async fn poll(&self) -> bool {
         let mut interface = self.interface.lock().await;
-        let mut socketset = self.socketset.write().await;
         let mut device = self.device.lock().await;
+        let mut socketset = self.socketset.write().await;
         interface.poll(Instant::now(), &mut *device, &mut socketset)
     }
 
