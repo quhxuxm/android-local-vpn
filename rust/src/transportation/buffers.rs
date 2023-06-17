@@ -15,8 +15,8 @@ use super::{
 
 /// The buffer for 2 side in the transport.
 /// The buffer is internal mutable.
-/// The device buffer contains the buffered data that read from device and going transfer to remote.
-/// The remote buffer contains the buffered data that read from remote and going transfer to device.
+/// The remote buffer contains the buffered data that read from device and going transfer to remote.
+/// The device buffer contains the buffered data that read from remote and going transfer to device.
 pub(crate) enum Buffer {
     Tcp {
         device: Arc<Mutex<VecDeque<u8>>>,
