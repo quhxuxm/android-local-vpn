@@ -1,9 +1,10 @@
 use smoltcp::socket::tcp::{RecvError as TcpRecvError, SendError as TcpSendError};
 use smoltcp::socket::udp::{RecvError as UdpRecvError, SendError as UdpSendError};
-use std::io::Error as StdIoError;
+use std::{error::Error, io::Error as StdIoError};
 use thiserror::Error;
 
 use crate::transportation::TransportationId;
+
 #[derive(Error, Debug)]
 pub enum AgentError {
     #[error("Network error happen: {0:?}")]
@@ -36,14 +37,24 @@ pub enum NetworkError {
     ReadFromDevice(#[source] StdIoError),
     #[error("Fail to write data to remote because of error: {0:?}")]
     WriteToRemote(#[source] StdIoError),
+    #[error("Fail to read data from remote because of error: {0:?}")]
+    ReadFromRemote(#[source] StdIoError),
     #[error("Fail to write data to device because of error: {0:?}")]
     WriteToDevice(#[source] StdIoError),
     #[error("Fail to create device endpoint")]
     DeviceEndpointCreation,
+    #[error("Concrete remote edge not exist")]
+    ConcreteRemoteEdgeNotExist,
+    #[error("Would block")]
+    WouldBlock,
+    #[error("Closed")]
+    Closed,
 }
 
 #[derive(Error, Debug)]
 pub enum ServerError {
+    #[error("Fail to initialize server because of error: {0:?}")]
+    Initialize(Box<dyn Error + Send>),
     #[error("Stop waker not exist.")]
     StopWakerNotExist,
     #[error("Processor handle not exist.")]

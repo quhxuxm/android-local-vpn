@@ -1,285 +1,178 @@
 mod buffers;
 mod endpoint;
+mod value;
+
 use crate::error::NetworkError;
 
 use endpoint::DeviceEndpoint;
 use endpoint::RemoteEndpoint;
-use log::{debug, error, warn};
-use mio::{Poll, Token};
-
-use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv6Packet, TcpPacket, UdpPacket};
+use log::{debug, error};
 
 use buffers::Buffer;
-use std::fmt::{self, Display};
-use std::hash::Hash;
-use std::io::Error as StdIoError;
-use std::net::SocketAddr;
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
-pub(crate) enum TransportProtocol {
-    Tcp,
-    Udp,
-}
+use std::sync::Arc;
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
-pub(crate) enum InternetProtocol {
-    Ipv4,
-    Ipv6,
-}
+use tokio::io::Ready;
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
-pub struct TransportationId {
-    source: SocketAddr,
-    destination: SocketAddr,
-    transport_protocol: TransportProtocol,
-    internet_protocol: InternetProtocol,
-}
-
-impl Display for TransportationId {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            formatter,
-            "[{:?}][{:?}]{}:{}->{}:{}",
-            self.internet_protocol,
-            self.transport_protocol,
-            self.source.ip(),
-            self.source.port(),
-            self.destination.ip(),
-            self.destination.port()
-        )
-    }
-}
-
-impl TransportationId {
-    pub(crate) fn new(data: &[u8]) -> Option<TransportationId> {
-        Self::parse_ipv4(data)
-            .or_else(|| Self::parse_ipv6(data))
-            .or_else(|| {
-                error!(
-                    ">>>> Failed to create transportation id, len={:?}",
-                    data.len(),
-                );
-                None
-            })
-    }
-
-    fn parse_ipv4(data: &[u8]) -> Option<TransportationId> {
-        if let Ok(ip_packet) = Ipv4Packet::new_checked(&data) {
-            match ip_packet.next_header() {
-                IpProtocol::Tcp => {
-                    let payload = ip_packet.payload();
-                    let packet = TcpPacket::new_checked(payload).ok()?;
-                    let source_ip: [u8; 4] = ip_packet.src_addr().as_bytes().try_into().ok()?;
-                    let destination_ip: [u8; 4] = ip_packet.dst_addr().as_bytes().try_into().ok()?;
-                    return Some(TransportationId {
-                        source: SocketAddr::from((source_ip, packet.src_port())),
-                        destination: SocketAddr::from((destination_ip, packet.dst_port())),
-                        transport_protocol: TransportProtocol::Tcp,
-                        internet_protocol: InternetProtocol::Ipv4,
-                    });
-                }
-                IpProtocol::Udp => {
-                    let payload = ip_packet.payload();
-                    let packet = UdpPacket::new_checked(payload).ok()?;
-                    let source_ip: [u8; 4] = ip_packet.src_addr().as_bytes().try_into().ok()?;
-                    let destination_ip: [u8; 4] = ip_packet.dst_addr().as_bytes().try_into().ok()?;
-                    return Some(TransportationId {
-                        source: SocketAddr::from((source_ip, packet.src_port())),
-                        destination: SocketAddr::from((destination_ip, packet.dst_port())),
-                        transport_protocol: TransportProtocol::Udp,
-                        internet_protocol: InternetProtocol::Ipv4,
-                    });
-                }
-                _ => {
-                    warn!(
-                        ">>>> Unsupported transport protocol in ipv4 packet, protocol=${:?}",
-                        ip_packet.next_header()
-                    );
-                    return None;
-                }
-            }
-        }
-        None
-    }
-
-    fn parse_ipv6(data: &[u8]) -> Option<TransportationId> {
-        if let Ok(ip_packet) = Ipv6Packet::new_checked(&data) {
-            let protocol = ip_packet.next_header();
-            match protocol {
-                IpProtocol::Tcp => {
-                    let payload = ip_packet.payload();
-                    let packet = TcpPacket::new_checked(payload).ok()?;
-                    let source_ip: [u8; 16] = ip_packet.src_addr().as_bytes().try_into().ok()?;
-                    let destination_ip: [u8; 16] = ip_packet.dst_addr().as_bytes().try_into().ok()?;
-                    return Some(TransportationId {
-                        source: SocketAddr::from((source_ip, packet.src_port())),
-                        destination: SocketAddr::from((destination_ip, packet.dst_port())),
-                        transport_protocol: TransportProtocol::Tcp,
-                        internet_protocol: InternetProtocol::Ipv6,
-                    });
-                }
-                IpProtocol::Udp => {
-                    let payload = ip_packet.payload();
-                    let packet = UdpPacket::new_checked(payload).ok()?;
-                    let source_ip: [u8; 16] = ip_packet.src_addr().as_bytes().try_into().ok()?;
-                    let destination_ip: [u8; 16] = ip_packet.dst_addr().as_bytes().try_into().ok()?;
-                    return Some(TransportationId {
-                        source: SocketAddr::from((source_ip, packet.src_port())),
-                        destination: SocketAddr::from((destination_ip, packet.dst_port())),
-                        transport_protocol: TransportProtocol::Udp,
-                        internet_protocol: InternetProtocol::Ipv6,
-                    });
-                }
-                _ => {
-                    warn!(
-                        ">>>> Unsupported transport protocol in ipv6 packet, protocol=${:?}",
-                        ip_packet.next_header()
-                    );
-                    return None;
-                }
-            }
-        }
-
-        None
-    }
-}
+pub(crate) use self::value::InternetProtocol;
+pub(crate) use self::value::TransportProtocol;
+pub(crate) use self::value::TransportationId;
 
 pub(crate) struct Transportation<'buf> {
     trans_id: TransportationId,
-    token: Token,
-    device_endpoint: DeviceEndpoint<'buf>,
-    remote_endpoint: RemoteEndpoint,
-    buffer: Buffer,
+    device_endpoint: Arc<DeviceEndpoint<'buf>>,
+    remote_endpoint: Arc<RemoteEndpoint>,
+    buffer: Arc<Buffer>,
 }
 
 impl<'buf> Transportation<'buf> {
-    pub(crate) fn new(trans_id: TransportationId, poll: &mut Poll, token: Token) -> Option<Self> {
+    pub(crate) async fn new(trans_id: TransportationId) -> Option<Transportation<'buf>> {
+        let remote_endpoint = Self::create_remote_endpoint(trans_id).await?;
+        let remote_endpoint = Arc::new(remote_endpoint);
+        let buffer = match trans_id.transport_protocol {
+            TransportProtocol::Tcp => Arc::new(Buffer::new_tcp_buffer()),
+            TransportProtocol::Udp => Arc::new(Buffer::new_udp_buffer()),
+        };
         let transportation = Transportation {
             trans_id,
-            token,
-            device_endpoint: DeviceEndpoint::new(
+            device_endpoint: Arc::new(DeviceEndpoint::new(
                 trans_id,
                 trans_id.transport_protocol,
                 trans_id.source,
                 trans_id.destination,
-            )?,
-            remote_endpoint: Self::create_remote_endpoint(trans_id, poll, token)?,
-            buffer: match trans_id.transport_protocol {
-                TransportProtocol::Tcp => Buffer::new_tcp_buffer(),
-                TransportProtocol::Udp => Buffer::new_udp_buffer(),
-            },
+            )?),
+            remote_endpoint,
+            buffer,
         };
+
         debug!(">>>> Transportation {trans_id} created.");
         Some(transportation)
     }
 
-    fn create_remote_endpoint(trans_id: TransportationId, poll: &mut Poll, token: Token) -> Option<RemoteEndpoint> {
-        let mut remote_endpoint = RemoteEndpoint::new(
+    pub(crate) async fn poll_remote_endpoint(&self) -> Result<Ready, NetworkError> {
+        self.remote_endpoint.poll().await
+    }
+    async fn create_remote_endpoint(trans_id: TransportationId) -> Option<RemoteEndpoint> {
+        let remote_endpoint = RemoteEndpoint::new(
             trans_id,
             trans_id.transport_protocol,
             trans_id.internet_protocol,
             trans_id.destination,
-        )?;
-
-        if let Err(error) = remote_endpoint.register_poll(poll, token) {
-            error!(">>>> Transportation {trans_id} failed to register poll for remote endpoint because of error: {error:?}");
-            return None;
-        }
-
+        )
+        .await?;
         Some(remote_endpoint)
     }
 
-    pub(crate) fn get_token(&self) -> Token {
-        self.token
-    }
-
     /// Poll the device endpoint smoltcp to trigger the iface
-    pub(crate) fn poll_device_endpoint(&mut self) -> bool {
-        self.device_endpoint.poll()
+    pub(crate) async fn poll_device_endpoint(&self) -> bool {
+        self.device_endpoint.poll().await
     }
 
-    pub(crate) fn close_device_endpoint(&mut self) {
-        self.device_endpoint.close();
+    pub(crate) async fn close_device_endpoint(&self) {
+        self.device_endpoint.close().await;
         debug!(
             ">>>> Transportation {} close device endpoint.",
             self.trans_id
         )
     }
 
-    pub(crate) fn device_endpoint_can_receive(&self) -> bool {
-        self.device_endpoint.can_receive()
+    pub(crate) async fn device_endpoint_can_receive(&self) -> bool {
+        self.device_endpoint.can_receive().await
     }
 
-    pub(crate) fn device_endpoint_can_send(&self) -> bool {
-        self.device_endpoint.can_send()
+    pub(crate) async fn device_endpoint_can_send(&self) -> bool {
+        self.device_endpoint.can_send().await
     }
 
-    pub(crate) fn close_remote_endpoint(&mut self, poll: &mut Poll) -> Result<(), NetworkError> {
+    pub(crate) async fn close_remote_endpoint(&self) -> Result<(), NetworkError> {
         debug!(
             ">>>> Transportation {} close remote endpoint.",
             self.trans_id
         );
-        self.remote_endpoint.close();
-        self.remote_endpoint
-            .deregister_poll(poll)
-            .map_err(NetworkError::DeregisterSource)
+        if let Err(e) = self.remote_endpoint.close().await {
+            error!(
+                "<<<< Transportation {} fail to close remote endpoint because of error: {e:?}",
+                self.trans_id
+            );
+        };
+        Ok(())
     }
 
-    pub(crate) fn push_rx_to_device(&mut self, rx_data: Vec<u8>) {
-        self.device_endpoint.push_rx_to_device(rx_data)
+    pub(crate) async fn push_rx_to_device(&self, rx_data: Vec<u8>) {
+        self.device_endpoint.push_rx_to_device(rx_data).await
     }
 
-    pub(crate) fn pop_tx_from_device(&mut self) -> Option<Vec<u8>> {
-        self.device_endpoint.pop_tx_from_device()
+    pub(crate) async fn pop_tx_from_device(&self) -> Option<Vec<u8>> {
+        self.device_endpoint.pop_tx_from_device().await
     }
 
-    pub(crate) fn read_from_remote_endpoint(&mut self) -> Result<(Vec<Vec<u8>>, bool), StdIoError> {
-        self.remote_endpoint.read()
+    pub(crate) async fn read_from_remote_endpoint(&self) -> Result<(Vec<Vec<u8>>, bool), NetworkError> {
+        self.remote_endpoint.read().await
     }
 
-    pub(crate) fn read_from_device_endpoint(&mut self, data: &mut [u8]) -> Result<usize, NetworkError> {
-        self.device_endpoint.receive(data)
+    pub(crate) async fn read_from_device_endpoint(&self, data: &mut [u8]) -> Result<usize, NetworkError> {
+        self.device_endpoint.receive(data).await
     }
 
-    pub(crate) fn push_data_to_device_buffer(&mut self, data: &[u8]) {
-        self.buffer.push_device_data_to_remote(data)
+    pub(crate) async fn push_data_to_device_buffer(&self, data: &[u8]) {
+        self.buffer.push_device_data_to_remote(data).await
     }
 
-    pub(crate) fn push_data_to_remote_buffer(&mut self, data: &[u8]) {
-        self.buffer.push_remote_data_to_device(data)
+    pub(crate) async fn push_data_to_remote_buffer(&self, data: &[u8]) {
+        self.buffer.push_remote_data_to_device(data).await
+    }
+
+    async fn concrete_write_to_device_endpoint(
+        trans_id: TransportationId,
+        device_endpoint: Arc<DeviceEndpoint<'_>>,
+        data: Vec<u8>,
+    ) -> Result<usize, NetworkError> {
+        debug!(
+            "<<<< Transportation {} going to write data in device buffer to device endpoint: {}",
+            trans_id,
+            pretty_hex::pretty_hex(&data)
+        );
+        device_endpoint.send(&data).await
     }
 
     /// Transfer the data inside device buffer to device endpoint.
-    pub(crate) fn transfer_device_buffer(&mut self) {
+    pub(crate) async fn transfer_device_buffer(&self) {
         debug!(
             ">>>> Transportation {} going to transfer the data in device buffer to device endpoint.",
             self.trans_id
         );
-        self.buffer.consume_device_buffer_with(|buffer_data| {
-            debug!(
-                "<<<< Transportation {} going to write data in device buffer to device endpoint: {}",
+        self.buffer
+            .consume_device_buffer_with(
                 self.trans_id,
-                pretty_hex::pretty_hex(&buffer_data)
-            );
-            self.device_endpoint.send(buffer_data)
-        });
+                self.device_endpoint.clone(),
+                Self::concrete_write_to_device_endpoint,
+            )
+            .await;
+    }
+
+    async fn concrete_write_to_remote_endpoint(trans_id: TransportationId, remote_endpoint: Arc<RemoteEndpoint>, data: Vec<u8>) -> Result<usize, NetworkError> {
+        debug!(
+            ">>>> Transportation {} going to write data in remote buffer to remote point: {}",
+            trans_id,
+            pretty_hex::pretty_hex(&data)
+        );
+        remote_endpoint.write(&data).await
     }
 
     /// Transfer the data inside remote buffer to remote endpoint
-    pub(crate) fn transfer_remote_buffer(&mut self) {
+    pub(crate) async fn transfer_remote_buffer(&self) {
         debug!(
             ">>>> Transportation {} going to transfer the data in remote buffer to remote endpoint.",
             self.trans_id
         );
-        self.buffer.consume_remote_buffer_with(|buffer_data| {
-            debug!(
-                ">>>> Transportation {} going to write data in remote buffer to remote point: {}",
-                self.trans_id,
-                pretty_hex::pretty_hex(&buffer_data)
-            );
-            self.remote_endpoint
-                .write(buffer_data)
-                .map_err(NetworkError::WriteToRemote)
-        });
+        let trans_id = self.trans_id;
+
+        self.buffer
+            .consume_remote_buffer_with(
+                trans_id,
+                self.remote_endpoint.clone(),
+                Self::concrete_write_to_remote_endpoint,
+            )
+            .await;
     }
 }

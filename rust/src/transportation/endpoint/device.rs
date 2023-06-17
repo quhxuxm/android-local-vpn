@@ -17,15 +17,16 @@ use smoltcp::{
 
 use smoltcp::socket::udp::{PacketBuffer as UdpSocketBuffer, PacketMetadata, Socket as UdpSocket};
 use smoltcp::wire::IpEndpoint;
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
+use tokio::sync::{Mutex, RwLock};
 
 pub struct DeviceEndpoint<'buf> {
     socket_handle: SocketHandle,
     transport_protocol: TransportProtocol,
     local_endpoint: IpEndpoint,
-    socketset: SocketSet<'buf>,
-    interface: Interface,
-    device: PpaassVpnDevice,
+    socketset: Arc<RwLock<SocketSet<'buf>>>,
+    interface: Mutex<Interface>,
+    device: Mutex<PpaassVpnDevice>,
     trans_id: TransportationId,
 }
 
@@ -56,9 +57,9 @@ impl<'buf> DeviceEndpoint<'buf> {
             socket_handle,
             transport_protocol,
             local_endpoint,
-            socketset,
-            interface,
-            device,
+            socketset: Arc::new(RwLock::new(socketset)),
+            interface: Mutex::new(interface),
+            device: Mutex::new(device),
         };
 
         Some(socket)
@@ -131,23 +132,26 @@ impl<'buf> DeviceEndpoint<'buf> {
         Some(socket)
     }
 
-    pub fn can_send(&self) -> bool {
+    pub async fn can_send(&self) -> bool {
         match self.transport_protocol {
             TransportProtocol::Tcp => {
-                let socket = self.socketset.get::<TcpSocket>(self.socket_handle);
+                let socketset = self.socketset.read().await;
+                let socket = socketset.get::<TcpSocket>(self.socket_handle);
                 socket.may_send()
             }
             TransportProtocol::Udp => {
-                let socket = self.socketset.get::<UdpSocket>(self.socket_handle);
+                let socketset = self.socketset.read().await;
+                let socket = socketset.get::<UdpSocket>(self.socket_handle);
                 socket.can_send()
             }
         }
     }
 
-    pub fn send(&mut self, data: &[u8]) -> Result<usize, NetworkError> {
+    pub async fn send(&self, data: &[u8]) -> Result<usize, NetworkError> {
         match self.transport_protocol {
             TransportProtocol::Tcp => {
-                let socket = self.socketset.get_mut::<TcpSocket>(self.socket_handle);
+                let mut socketset = self.socketset.write().await;
+                let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
                 debug!(
                     "<<<< Transportation {} send tcp data to smoltcp stack: {}",
                     self.trans_id,
@@ -158,7 +162,8 @@ impl<'buf> DeviceEndpoint<'buf> {
                     .map_err(NetworkError::SendTcpDataToDevice)
             }
             TransportProtocol::Udp => {
-                let socket = self.socketset.get_mut::<UdpSocket>(self.socket_handle);
+                let mut socketset = self.socketset.write().await;
+                let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
                 debug!(
                     "<<<< Transportation {} send udp data to smoltcp stack: {}",
                     self.trans_id,
@@ -172,24 +177,26 @@ impl<'buf> DeviceEndpoint<'buf> {
         }
     }
 
-    pub fn can_receive(&self) -> bool {
+    pub async fn can_receive(&self) -> bool {
         match self.transport_protocol {
             TransportProtocol::Tcp => {
-                let socket = self.socketset.get::<TcpSocket>(self.socket_handle);
+                let socketset = self.socketset.read().await;
+                let socket = socketset.get::<TcpSocket>(self.socket_handle);
                 socket.can_recv()
             }
             TransportProtocol::Udp => {
-                let socket = self.socketset.get::<UdpSocket>(self.socket_handle);
+                let socketset = self.socketset.read().await;
+                let socket = socketset.get::<UdpSocket>(self.socket_handle);
                 socket.can_recv()
             }
         }
     }
 
-    pub fn receive(&mut self, data: &mut [u8]) -> Result<usize, NetworkError> {
+    pub async fn receive(&self, data: &mut [u8]) -> Result<usize, NetworkError> {
         match self.transport_protocol {
             TransportProtocol::Tcp => {
-                let socket = self.socketset.get_mut::<TcpSocket>(self.socket_handle);
-
+                let mut socketset = self.socketset.write().await;
+                let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
                 let result = socket
                     .recv_slice(data)
                     .map_err(NetworkError::ReceiveTcpDataFromDevice);
@@ -202,7 +209,8 @@ impl<'buf> DeviceEndpoint<'buf> {
                 result
             }
             TransportProtocol::Udp => {
-                let socket = self.socketset.get_mut::<UdpSocket>(self.socket_handle);
+                let mut socketset = self.socketset.write().await;
+                let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
                 let result = socket
                     .recv_slice(data)
                     .map(|r| r.0)
@@ -217,29 +225,35 @@ impl<'buf> DeviceEndpoint<'buf> {
         }
     }
 
-    pub fn close(&mut self) {
+    pub async fn close(&self) {
         match self.transport_protocol {
             TransportProtocol::Tcp => {
-                let socket = self.socketset.get_mut::<TcpSocket>(self.socket_handle);
+                let mut socketset = self.socketset.write().await;
+                let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
                 socket.close();
             }
             TransportProtocol::Udp => {
-                let socket = self.socketset.get_mut::<UdpSocket>(self.socket_handle);
+                let mut socketset = self.socketset.write().await;
+                let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
                 socket.close();
             }
         }
     }
 
-    pub fn poll(&mut self) -> bool {
-        self.interface
-            .poll(Instant::now(), &mut self.device, &mut self.socketset)
+    pub async fn poll(&self) -> bool {
+        let mut interface = self.interface.lock().await;
+        let mut socketset = self.socketset.write().await;
+        let mut device = self.device.lock().await;
+        interface.poll(Instant::now(), &mut *device, &mut socketset)
     }
 
-    pub fn push_rx_to_device(&mut self, rx_data: Vec<u8>) {
-        self.device.push_rx(rx_data);
+    pub async fn push_rx_to_device(&self, rx_data: Vec<u8>) {
+        let mut device = self.device.lock().await;
+        device.push_rx(rx_data);
     }
 
-    pub fn pop_tx_from_device(&mut self) -> Option<Vec<u8>> {
-        self.device.pop_tx()
+    pub async fn pop_tx_from_device(&self) -> Option<Vec<u8>> {
+        let mut device = self.device.lock().await;
+        device.pop_tx()
     }
 }

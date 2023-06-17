@@ -1,109 +1,121 @@
 use crate::{
+    error::NetworkError,
     protect_socket,
     transportation::{InternetProtocol, TransportProtocol, TransportationId},
 };
 use log::{debug, error};
-use mio::net::{TcpStream, UdpSocket};
-use mio::{Interest, Poll, Token};
-use socket2::{SockAddr as Socket2SockAddr, Socket as Socket2};
-use std::io::{ErrorKind, Read, Result, Write};
-use std::net::{Shutdown, SocketAddr};
-use std::os::unix::io::{AsRawFd, FromRawFd};
+
+use std::io::ErrorKind;
+use std::net::SocketAddr;
+use std::os::unix::io::AsRawFd;
+use tokio::{
+    io::{AsyncWriteExt, Interest, Ready},
+    net::{TcpSocket, TcpStream, UdpSocket},
+    sync::RwLock,
+};
 
 pub(crate) enum RemoteEndpoint {
     Tcp {
-        _socket: Socket2, // Need to retain so socket does not get closed.
-        tcp_stream: TcpStream,
+        tcp_stream: RwLock<TcpStream>,
         trans_id: TransportationId,
     },
     Udp {
-        _socket: Socket2, // Need to retain so socket does not get closed.
         udp_socket: UdpSocket,
         trans_id: TransportationId,
     },
 }
 
 impl RemoteEndpoint {
-    pub(crate) fn new(
+    pub(crate) async fn new(
         trans_id: TransportationId,
         transport_protocol: TransportProtocol,
         internet_protocol: InternetProtocol,
         remote_address: SocketAddr,
     ) -> Option<Self> {
-        let socket = Self::create_socket(trans_id, &transport_protocol, &internet_protocol).ok()?;
-        let socket_address = Socket2SockAddr::from(remote_address);
-        debug!(
-            ">>>> Transportation {trans_id} connecting to remote, address={:?}",
-            remote_address
-        );
-        match socket.connect(&socket_address) {
-            Ok(_) => {
-                debug!(
-                    ">>>> Transportation {trans_id} success connected to remote, address={:?}",
-                    remote_address
-                );
-            }
-            Err(error) => {
-                if error.kind() == ErrorKind::WouldBlock || error.raw_os_error() == Some(libc::EINPROGRESS) {
-                    // do nothing.
-                } else {
-                    error!(
-                        ">>>> Transportation {trans_id} fail connect to remote [{:?}] because of error: {error:?}",
-                        remote_address
-                    );
-                    return None;
-                }
-            }
-        }
-
         match transport_protocol {
-            TransportProtocol::Tcp => {
-                let tcp_stream = unsafe { TcpStream::from_raw_fd(socket.as_raw_fd()) };
-                Some(Self::Tcp {
-                    trans_id,
-                    _socket: socket,
-                    tcp_stream,
-                })
-            }
+            TransportProtocol::Tcp => match internet_protocol {
+                InternetProtocol::Ipv4 => {
+                    let remote_tcp_socket = TcpSocket::new_v4().ok()?;
+                    let remote_tcp_socket_fd = remote_tcp_socket.as_raw_fd();
+                    protect_socket(remote_tcp_socket_fd).ok()?;
+                    Some(RemoteEndpoint::Tcp {
+                        tcp_stream: RwLock::new(remote_tcp_socket.connect(remote_address).await.ok()?),
+                        trans_id,
+                    })
+                }
+                InternetProtocol::Ipv6 => {
+                    let remote_tcp_socket = TcpSocket::new_v6().ok()?;
+                    let remote_tcp_socket_fd = remote_tcp_socket.as_raw_fd();
+                    protect_socket(remote_tcp_socket_fd).ok()?;
+                    Some(RemoteEndpoint::Tcp {
+                        tcp_stream: RwLock::new(remote_tcp_socket.connect(remote_address).await.ok()?),
+                        trans_id,
+                    })
+                }
+            },
             TransportProtocol::Udp => {
-                let udp_socket = unsafe { UdpSocket::from_raw_fd(socket.as_raw_fd()) };
-                Some(Self::Udp {
+                let remote_udp_socket = UdpSocket::bind("0.0.0.0:0").await.ok()?;
+                let remote_udp_socket_fd = remote_udp_socket.as_raw_fd();
+                protect_socket(remote_udp_socket_fd).ok()?;
+                remote_udp_socket.connect(remote_address).await.ok()?;
+                Some(RemoteEndpoint::Udp {
+                    udp_socket: remote_udp_socket,
                     trans_id,
-                    _socket: socket,
-                    udp_socket,
                 })
             }
         }
     }
 
-    pub(crate) fn register_poll(&mut self, poll: &mut Poll, token: Token) -> Result<()> {
+    pub(crate) async fn poll(&self) -> Result<Ready, NetworkError> {
         match self {
-            Self::Tcp { tcp_stream, .. } => {
-                let interests = Interest::READABLE | Interest::WRITABLE;
-                poll.registry().register(tcp_stream, token, interests)
+            Self::Tcp { tcp_stream, .. } => tcp_stream
+                .read()
+                .await
+                .ready(Interest::READABLE | Interest::WRITABLE)
+                .await
+                .map_err(NetworkError::PollSource),
+            Self::Udp { udp_socket, .. } => udp_socket
+                .ready(Interest::READABLE)
+                .await
+                .map_err(NetworkError::PollSource),
+        }
+    }
+
+    pub(crate) async fn close(&self) -> Result<(), NetworkError> {
+        match self {
+            RemoteEndpoint::Tcp {
+                tcp_stream,
+                trans_id,
+            } => {
+                debug!(">>>> Transportation {trans_id} going to shutdown remote tcp stream.");
+                tcp_stream
+                    .write()
+                    .await
+                    .shutdown()
+                    .await
+                    .map_err(NetworkError::DeregisterSource)?
             }
-            Self::Udp { udp_socket, .. } => {
-                let interests = Interest::READABLE;
-                poll.registry().register(udp_socket, token, interests)
+            RemoteEndpoint::Udp { trans_id, .. } => {
+                debug!(">>>> Transportation {trans_id} nothing to do for close udp socket.");
             }
         }
+        Ok(())
     }
 
-    pub(crate) fn deregister_poll(&mut self, poll: &mut Poll) -> Result<()> {
+    pub(crate) async fn write(&self, bytes: &[u8]) -> Result<usize, NetworkError> {
         match self {
-            Self::Tcp { tcp_stream, .. } => poll.registry().deregister(tcp_stream),
-            Self::Udp { udp_socket, .. } => poll.registry().deregister(udp_socket),
+            Self::Tcp { tcp_stream, .. } => tcp_stream
+                .read()
+                .await
+                .try_write(bytes)
+                .map_err(NetworkError::WriteToRemote),
+            Self::Udp { udp_socket, .. } => udp_socket
+                .try_send(bytes)
+                .map_err(NetworkError::WriteToRemote),
         }
     }
 
-    pub(crate) fn write(&mut self, bytes: &[u8]) -> Result<usize> {
-        match self {
-            Self::Tcp { tcp_stream, .. } => tcp_stream.write(bytes),
-            Self::Udp { udp_socket, .. } => udp_socket.send(bytes),
-        }
-    }
-
-    pub(crate) fn read(&mut self) -> Result<(Vec<Vec<u8>>, bool)> {
+    pub(crate) async fn read(&self) -> Result<(Vec<Vec<u8>>, bool), NetworkError> {
         let mut bytes: Vec<Vec<u8>> = Vec::new();
         let mut buffer = [0; 65536]; // maximum UDP packet size
         let mut is_closed = false;
@@ -113,12 +125,12 @@ impl RemoteEndpoint {
                     tcp_stream,
                     trans_id,
                     ..
-                } => (tcp_stream.read(&mut buffer), trans_id),
+                } => (tcp_stream.read().await.try_read(&mut buffer), trans_id),
                 Self::Udp {
                     udp_socket,
                     trans_id,
                     ..
-                } => (udp_socket.recv(&mut buffer), trans_id),
+                } => (udp_socket.try_recv(&mut buffer), trans_id),
             };
             match read_result {
                 Ok(0) => {
@@ -135,54 +147,11 @@ impl RemoteEndpoint {
                         break;
                     } else {
                         error!(">>>> Transportation {trans_id} fail to read data from remote because of error: {e:?}");
-                        return Err(e);
+                        return Err(NetworkError::ReadFromRemote(e));
                     }
                 }
             }
         }
         Ok((bytes, is_closed))
-    }
-
-    pub(crate) fn close(&self) {
-        match &self {
-            Self::Tcp {
-                tcp_stream,
-                trans_id,
-                ..
-            } => {
-                debug!(">>>> Transportation {trans_id} close tcp stream.");
-                if let Err(e) = tcp_stream.shutdown(Shutdown::Both) {
-                    error!(">>>> Transportation {trans_id} failed to shutdown remote tcp stream because of error: {e:?}",);
-                }
-            }
-            Self::Udp { trans_id, .. } => {
-                debug!(">>>> Transportation {trans_id} close udp socket.");
-            }
-        }
-    }
-
-    fn create_socket(trans_id: TransportationId, transport_protocol: &TransportProtocol, internet_protocol: &InternetProtocol) -> Result<Socket2> {
-        let domain = match internet_protocol {
-            InternetProtocol::Ipv4 => socket2::Domain::IPV4,
-            InternetProtocol::Ipv6 => socket2::Domain::IPV6,
-        };
-
-        let protocol = match transport_protocol {
-            TransportProtocol::Tcp => socket2::Protocol::TCP,
-            TransportProtocol::Udp => socket2::Protocol::UDP,
-        };
-
-        let socket_type = match transport_protocol {
-            TransportProtocol::Tcp => socket2::Type::STREAM,
-            TransportProtocol::Udp => socket2::Type::DGRAM,
-        };
-
-        let socket = Socket2::new(domain, socket_type, Some(protocol))?;
-
-        socket.set_nonblocking(true)?;
-        if let Err(e) = protect_socket(socket.as_raw_fd()) {
-            error!(">>>> Transportation {trans_id} fail to protect outbound socket because of error: {e:?}")
-        };
-        Ok(socket)
     }
 }

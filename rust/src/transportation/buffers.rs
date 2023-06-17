@@ -1,60 +1,85 @@
 use log::error;
-use std::io::{Error as StdIoError, ErrorKind};
-use std::{collections::VecDeque, error::Error};
+use std::{collections::VecDeque, error::Error, sync::Arc};
+use std::{
+    future::Future,
+    io::{Error as StdIoError, ErrorKind},
+};
+use tokio::sync::Mutex;
 
 use crate::error::NetworkError;
 
+use super::{
+    endpoint::{DeviceEndpoint, RemoteEndpoint},
+    TransportationId,
+};
+
+/// The buffer for 2 side in the transport.
+/// The buffer is internal mutable.
 pub(crate) enum Buffer {
     Tcp {
-        device: VecDeque<u8>,
-        remote: VecDeque<u8>,
+        device: Arc<Mutex<VecDeque<u8>>>,
+        remote: Arc<Mutex<VecDeque<u8>>>,
     },
     Udp {
-        device: VecDeque<Vec<u8>>,
-        remote: VecDeque<Vec<u8>>,
+        device: Arc<Mutex<VecDeque<Vec<u8>>>>,
+        remote: Arc<Mutex<VecDeque<Vec<u8>>>>,
     },
 }
 
 impl Buffer {
     pub(crate) fn new_tcp_buffer() -> Self {
         Buffer::Tcp {
-            device: VecDeque::with_capacity(65536),
-            remote: VecDeque::with_capacity(65536),
+            device: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
+            remote: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
         }
     }
 
     pub(crate) fn new_udp_buffer() -> Self {
         Buffer::Udp {
-            device: VecDeque::with_capacity(65536),
-            remote: VecDeque::with_capacity(65536),
+            device: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
+            remote: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
         }
     }
 
-    pub(crate) fn push_device_data_to_remote(&mut self, data: &[u8]) {
+    pub(crate) async fn push_device_data_to_remote(&self, data: &[u8]) {
         match self {
-            Buffer::Tcp { remote, .. } => remote.extend(data),
-            Buffer::Udp { remote, .. } => remote.push_back(data.to_vec()),
+            Buffer::Tcp { remote, .. } => {
+                let mut remote = remote.lock().await;
+                remote.extend(data);
+            }
+            Buffer::Udp { remote, .. } => {
+                let mut remote = remote.lock().await;
+                remote.push_back(data.to_vec())
+            }
         }
     }
 
-    pub(crate) fn push_remote_data_to_device(&mut self, data: &[u8]) {
+    pub(crate) async fn push_remote_data_to_device(&self, data: &[u8]) {
         match self {
-            Buffer::Tcp { device, .. } => device.extend(data),
-            Buffer::Udp { device, .. } => device.push_back(data.to_vec()),
+            Buffer::Tcp { device, .. } => {
+                let mut device = device.lock().await;
+                device.extend(data)
+            }
+            Buffer::Udp { device, .. } => {
+                let mut device = device.lock().await;
+                device.push_back(data.to_vec())
+            }
         }
     }
 
-    pub(crate) fn consume_device_buffer_with<F>(&mut self, mut write_fn: F)
+    pub(crate) async fn consume_device_buffer_with<'b, F, Fut>(&self, trans_id: TransportationId, device_endpoint: Arc<DeviceEndpoint<'b>>, mut write_fn: F)
     where
-        F: FnMut(&[u8]) -> Result<usize, NetworkError>,
+        F: FnMut(TransportationId, Arc<DeviceEndpoint<'b>>, Vec<u8>) -> Fut,
+        Fut: Future<Output = Result<usize, NetworkError>>,
     {
         match self {
             Buffer::Tcp {
                 device: device_buffer,
                 ..
             } => {
+                let mut device_buffer = device_buffer.lock().await;
                 let device_buffer_slice = device_buffer.make_contiguous();
-                match write_fn(device_buffer_slice) {
+                match write_fn(trans_id, device_endpoint, device_buffer_slice.to_vec()).await {
                     Ok(consumed) => {
                         device_buffer.drain(..consumed);
                     }
@@ -73,11 +98,12 @@ impl Buffer {
                 device: all_datagrams,
                 ..
             } => {
+                let mut all_datagrams = all_datagrams.lock().await;
                 let all_datagrams_slice = all_datagrams.make_contiguous();
                 let mut consumed: usize = 0;
                 // write udp packets one by one
                 for datagram in all_datagrams_slice {
-                    if let Err(error) = write_fn(&datagram[..]) {
+                    if let Err(error) = write_fn(trans_id, device_endpoint.clone(), datagram.to_vec()).await {
                         error!(">>>> Fail to write buffer data to device udp because of error: {error:?}");
                         break;
                     }
@@ -88,17 +114,19 @@ impl Buffer {
         }
     }
 
-    pub(crate) fn consume_remote_buffer_with<F>(&mut self, mut write_fn: F)
+    pub(crate) async fn consume_remote_buffer_with<F, Fut>(&self, trans_id: TransportationId, remote_endpoint: Arc<RemoteEndpoint>, mut write_fn: F)
     where
-        F: FnMut(&[u8]) -> Result<usize, NetworkError>,
+        F: FnMut(TransportationId, Arc<RemoteEndpoint>, Vec<u8>) -> Fut,
+        Fut: Future<Output = Result<usize, NetworkError>>,
     {
         match self {
             Buffer::Tcp {
                 remote: remote_buffer,
                 ..
             } => {
-                let remote_buffer_slice = remote_buffer.make_contiguous();
-                match write_fn(remote_buffer_slice) {
+                let mut remote_buffer = remote_buffer.lock().await;
+                let remote_buffer_owned = remote_buffer.make_contiguous().to_vec();
+                match write_fn(trans_id, remote_endpoint, remote_buffer_owned).await {
                     Ok(consumed) => {
                         remote_buffer.drain(..consumed);
                     }
@@ -117,11 +145,13 @@ impl Buffer {
                 remote: all_datagrams,
                 ..
             } => {
+                let mut all_datagrams = all_datagrams.lock().await;
                 let all_datagrams_slice = all_datagrams.make_contiguous();
                 let mut consumed: usize = 0;
                 // write udp packets one by one
                 for datagram in all_datagrams_slice {
-                    if let Err(error) = write_fn(&datagram[..]) {
+                    let datagram_owned = datagram.to_vec();
+                    if let Err(error) = write_fn(trans_id, remote_endpoint.clone(), datagram_owned).await {
                         error!(">>>> Fail to write buffer data to remote udp because of error: {error:?}");
                         break;
                     }
