@@ -258,7 +258,9 @@ where
 
     async fn write_to_remote_endpoint(trans_id: TransportationId, transportation: Arc<Transportation<'_>>) {
         debug!(">>>> Transportation {trans_id} begin to transfer remote buffer data to remote endpoint");
-        transportation.transfer_remote_buffer().await;
+        if let Err(e) = transportation.transfer_remote_buffer().await {
+            error!(">>>> Transportation {trans_id} fail to transfer remote buffer to remote endpoint because of error: {e:?}");
+        };
     }
 
     async fn read_from_device_endpoint(trans_id: TransportationId, transportation: Arc<Transportation<'_>>) {
