@@ -5,13 +5,16 @@ use super::transportation::TransportationId;
 use log::{debug, error};
 
 use tokio::{
-    fs::File,
-    io::{AsyncReadExt, AsyncWriteExt, ReadHalf, Ready, WriteHalf},
+    io::Ready,
     sync::{oneshot::Receiver, Mutex},
 };
 
-use std::collections::HashMap;
-use std::{collections::hash_map::Entry, sync::Arc};
+use std::{
+    collections::hash_map::Entry,
+    io::{Read, Write},
+    sync::Arc,
+};
+use std::{collections::HashMap, fs::File};
 
 use std::io::ErrorKind;
 
@@ -21,9 +24,9 @@ pub(crate) struct TransportationProcessor<'buf>
 where
     'buf: 'static,
 {
-    device_file_read: ReadHalf<File>,
-    device_file_write: Arc<Mutex<WriteHalf<File>>>,
-    transportations: HashMap<TransportationId, Arc<Transportation<'buf>>>,
+    device_file_read: Arc<Mutex<File>>,
+    device_file_write: Arc<Mutex<File>>,
+    transportations: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'buf>>>>>,
     stop_receiver: Receiver<bool>,
 }
 
@@ -34,12 +37,12 @@ where
     pub(crate) fn new(device_file_descriptor: i32, stop_receiver: Receiver<bool>) -> Result<Self, AgentError> {
         // let poll = Poll::new().map_err(NetworkError::InitializePoll)?;
         let device_file = unsafe { File::from_raw_fd(device_file_descriptor) };
-        let (device_file_read, device_file_write) = tokio::io::split(device_file);
-        let device_file_write = Arc::new(Mutex::new(device_file_write));
+        let device_file_read = Arc::new(Mutex::new(device_file));
+        let device_file_write = device_file_read.clone();
         Ok(TransportationProcessor {
             device_file_read,
             device_file_write,
-            transportations: HashMap::new(),
+            transportations: Default::default(),
             stop_receiver,
         })
     }
@@ -47,11 +50,10 @@ where
     pub(crate) async fn run(&mut self) -> Result<(), AgentError> {
         let mut device_file_read_buffer: [u8; 65536] = [0; 65536];
         loop {
-            let device_data = match self
-                .device_file_read
-                .read(&mut device_file_read_buffer)
-                .await
-            {
+            let device_data = match {
+                let mut device_file_read = self.device_file_read.lock().await;
+                device_file_read.read(&mut device_file_read_buffer)
+            } {
                 Ok(0) => {
                     break;
                 }
@@ -64,10 +66,13 @@ where
                 }
             };
             if let Some(trans_id) = self.get_or_create_transportation(device_data).await {
-                let transportation = self
-                    .transportations
-                    .get(&trans_id)
-                    .ok_or(ServerError::TransportationNotExist(trans_id))?;
+                let transportation = {
+                    let transportations = self.transportations.lock().await;
+                    transportations
+                        .get(&trans_id)
+                        .ok_or(ServerError::TransportationNotExist(trans_id))?
+                        .clone()
+                };
                 transportation.push_rx_to_device(device_data.to_vec()).await;
                 Self::write_to_device_file(
                     trans_id,
@@ -84,20 +89,36 @@ where
 
     async fn get_or_create_transportation(&mut self, data: &[u8]) -> Option<TransportationId> {
         let trans_id = TransportationId::new(data)?;
-        match self.transportations.entry(trans_id) {
+        let transportation_repository = self.transportations.clone();
+        let mut transportations = self.transportations.lock().await;
+        match transportations.entry(trans_id) {
             Entry::Occupied(_) => Some(trans_id),
             Entry::Vacant(entry) => {
                 debug!(">>>> Transportation {trans_id} not exist in repository create a new one.");
-                let transportation = Arc::new(Transportation::new(trans_id).await?);
+                let transportation = Arc::new(Transportation::new(trans_id)?);
                 entry.insert(Arc::clone(&transportation));
                 let device_file_write = self.device_file_write.clone();
                 tokio::spawn(async move {
+                    if let Err(e) = transportation.connect_remote().await {
+                        error!(">>>> Transportation {trans_id} fail connect to remote endpoint because of error: {e:?}");
+                        if let Err(destory_error) = Self::destroy_transportation(
+                            trans_id,
+                            transportation,
+                            device_file_write,
+                            transportation_repository,
+                        )
+                        .await
+                        {
+                            error!(">>>> Transportation {trans_id} fail to destory a unconnected remote endpoint because of error: {destory_error:?}");
+                        };
+                        return;
+                    };
                     loop {
                         // Poll remote endpoint and forward remote data to device endpoint.
                         let remote_io_ready = match transportation.poll_remote_endpoint().await {
                             Ok(remote_io_ready) => remote_io_ready,
                             Err(e) => {
-                                error!("<<<< Fail to poll remote endpoint because of error: {e:?}");
+                                error!("<<<< Transportation {trans_id} fail to poll remote endpoint because of error: {e:?}");
                                 continue;
                             }
                         };
@@ -106,6 +127,7 @@ where
                             transportation.clone(),
                             remote_io_ready,
                             device_file_write.clone(),
+                            transportation_repository.clone(),
                         )
                         .await
                         {
@@ -122,7 +144,8 @@ where
     async fn destroy_transportation(
         trans_id: TransportationId,
         transportation: Arc<Transportation<'_>>,
-        device_file_write: Arc<Mutex<WriteHalf<File>>>,
+        device_file_write: Arc<Mutex<File>>,
+        transportation_repository: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
     ) -> Result<(), NetworkError> {
         // Push any pending data back to device before destroying transportation.
         Self::write_to_device_endpoint(trans_id, transportation.clone()).await;
@@ -130,16 +153,17 @@ where
             error!("<<<< Transportation {trans_id} fail to write pending data in smoltcp to device when destory because of error: {e:?}");
             return Err(e);
         };
-        transportation.close_device_endpoint();
+        transportation.close_device_endpoint().await;
         transportation.close_remote_endpoint().await?;
-
+        let mut transportation_repository = transportation_repository.lock().await;
+        transportation_repository.remove(&trans_id);
         Ok(())
     }
 
     async fn write_to_device_file(
         trans_id: TransportationId,
         transportation: Arc<Transportation<'_>>,
-        device_file_write: Arc<Mutex<WriteHalf<File>>>,
+        device_file_write: Arc<Mutex<File>>,
     ) -> Result<(), NetworkError> {
         if transportation.poll_device_endpoint().await {
             debug!("<<<< Transportation {trans_id} change happen on smoltcp write the tx to device.");
@@ -147,7 +171,6 @@ where
                 let mut device_file_write = device_file_write.lock().await;
                 device_file_write
                     .write_all(&data_to_device)
-                    .await
                     .map_err(NetworkError::WriteToDevice)?;
             }
         };
@@ -158,11 +181,18 @@ where
         trans_id: TransportationId,
         transportation: Arc<Transportation<'_>>,
         ready: Ready,
-        device_file_write: Arc<Mutex<WriteHalf<File>>>,
+        device_file_write: Arc<Mutex<File>>,
+        transportation_repository: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
     ) -> Result<(), NetworkError> {
         if ready.is_readable() {
             debug!("<<<< Transportation {trans_id} is readable.");
-            Self::read_from_remote_endpoint(trans_id, transportation.clone(), device_file_write.clone()).await?;
+            Self::read_from_remote_endpoint(
+                trans_id,
+                transportation.clone(),
+                device_file_write.clone(),
+                transportation_repository.clone(),
+            )
+            .await?;
             Self::write_to_device_endpoint(trans_id, transportation.clone()).await;
             Self::write_to_device_file(trans_id, transportation.clone(), device_file_write.clone()).await?;
         }
@@ -173,7 +203,13 @@ where
         }
         if ready.is_read_closed() || ready.is_write_closed() {
             debug!("<<<< Transportation {trans_id} is read/write closed.");
-            Self::destroy_transportation(trans_id, transportation, device_file_write).await?;
+            Self::destroy_transportation(
+                trans_id,
+                transportation,
+                device_file_write,
+                transportation_repository,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -181,7 +217,8 @@ where
     async fn read_from_remote_endpoint(
         trans_id: TransportationId,
         transportation: Arc<Transportation<'_>>,
-        device_file_write: Arc<Mutex<WriteHalf<File>>>,
+        device_file_write: Arc<Mutex<File>>,
+        transportation_repository: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
     ) -> Result<(), NetworkError> {
         debug!("<<<< Transportation {trans_id} read from remote.");
 
@@ -207,7 +244,13 @@ where
             },
         };
         if is_transportation_closed {
-            Self::destroy_transportation(trans_id, transportation, device_file_write).await?;
+            Self::destroy_transportation(
+                trans_id,
+                transportation,
+                device_file_write,
+                transportation_repository,
+            )
+            .await?;
         }
         debug!("<<<< Transportation {trans_id} finished read from remote endpoint.",);
         Ok(())

@@ -12,7 +12,7 @@ use buffers::Buffer;
 
 use std::sync::Arc;
 
-use tokio::io::Ready;
+use tokio::{io::Ready, sync::Mutex};
 
 pub(crate) use self::value::InternetProtocol;
 pub(crate) use self::value::TransportProtocol;
@@ -21,14 +21,12 @@ pub(crate) use self::value::TransportationId;
 pub(crate) struct Transportation<'buf> {
     trans_id: TransportationId,
     device_endpoint: Arc<DeviceEndpoint<'buf>>,
-    remote_endpoint: Arc<RemoteEndpoint>,
+    remote_endpoint: Mutex<Option<Arc<RemoteEndpoint>>>,
     buffer: Arc<Buffer>,
 }
 
 impl<'buf> Transportation<'buf> {
-    pub(crate) async fn new(trans_id: TransportationId) -> Option<Transportation<'buf>> {
-        let remote_endpoint = Self::create_remote_endpoint(trans_id).await?;
-        let remote_endpoint = Arc::new(remote_endpoint);
+    pub(crate) fn new(trans_id: TransportationId) -> Option<Transportation<'buf>> {
         let buffer = match trans_id.transport_protocol {
             TransportProtocol::Tcp => Arc::new(Buffer::new_tcp_buffer()),
             TransportProtocol::Udp => Arc::new(Buffer::new_udp_buffer()),
@@ -41,7 +39,7 @@ impl<'buf> Transportation<'buf> {
                 trans_id.source,
                 trans_id.destination,
             )?),
-            remote_endpoint,
+            remote_endpoint: Mutex::new(None),
             buffer,
         };
 
@@ -49,8 +47,22 @@ impl<'buf> Transportation<'buf> {
         Some(transportation)
     }
 
+    pub(crate) async fn connect_remote(&self) -> Result<(), NetworkError> {
+        let connected_remote_endpoint = Self::create_remote_endpoint(self.trans_id)
+            .await
+            .ok_or(NetworkError::ConcreteRemoteEdgeNotExist)?;
+        let connected_remote_endpoint = Arc::new(connected_remote_endpoint);
+        let mut remote_endpoint = self.remote_endpoint.lock().await;
+        *remote_endpoint = Some(connected_remote_endpoint);
+        Ok(())
+    }
+
     pub(crate) async fn poll_remote_endpoint(&self) -> Result<Ready, NetworkError> {
-        self.remote_endpoint.poll().await
+        if let Some(remote_endpoint) = self.remote_endpoint.lock().await.as_ref() {
+            remote_endpoint.poll().await
+        } else {
+            Err(NetworkError::ConcreteRemoteEdgeNotExist)
+        }
     }
     async fn create_remote_endpoint(trans_id: TransportationId) -> Option<RemoteEndpoint> {
         let remote_endpoint = RemoteEndpoint::new(
@@ -85,16 +97,19 @@ impl<'buf> Transportation<'buf> {
     }
 
     pub(crate) async fn close_remote_endpoint(&self) -> Result<(), NetworkError> {
-        debug!(
-            ">>>> Transportation {} close remote endpoint.",
-            self.trans_id
-        );
-        if let Err(e) = self.remote_endpoint.close().await {
-            error!(
-                "<<<< Transportation {} fail to close remote endpoint because of error: {e:?}",
+        if let Some(remote_endpoint) = self.remote_endpoint.lock().await.as_ref() {
+            debug!(
+                ">>>> Transportation {} close remote endpoint.",
                 self.trans_id
             );
-        };
+            if let Err(e) = remote_endpoint.close().await {
+                error!(
+                    "<<<< Transportation {} fail to close remote endpoint because of error: {e:?}",
+                    self.trans_id
+                );
+            };
+        }
+
         Ok(())
     }
 
@@ -107,7 +122,11 @@ impl<'buf> Transportation<'buf> {
     }
 
     pub(crate) async fn read_from_remote_endpoint(&self) -> Result<(Vec<Vec<u8>>, bool), NetworkError> {
-        self.remote_endpoint.read().await
+        if let Some(remote_endpoint) = self.remote_endpoint.lock().await.as_ref() {
+            remote_endpoint.read().await
+        } else {
+            Err(NetworkError::ConcreteRemoteEdgeNotExist)
+        }
     }
 
     pub(crate) async fn read_from_device_endpoint(&self, data: &mut [u8]) -> Result<usize, NetworkError> {
@@ -160,19 +179,24 @@ impl<'buf> Transportation<'buf> {
     }
 
     /// Transfer the data inside remote buffer to remote endpoint
-    pub(crate) async fn transfer_remote_buffer(&self) {
+    pub(crate) async fn transfer_remote_buffer(&self) -> Result<(), NetworkError> {
         debug!(
             ">>>> Transportation {} going to transfer the data in remote buffer to remote endpoint.",
             self.trans_id
         );
         let trans_id = self.trans_id;
 
-        self.buffer
-            .consume_remote_buffer_with(
-                trans_id,
-                self.remote_endpoint.clone(),
-                Self::concrete_write_to_remote_endpoint,
-            )
-            .await;
+        if let Some(remote_endpoint) = self.remote_endpoint.lock().await.as_ref() {
+            self.buffer
+                .consume_remote_buffer_with(
+                    trans_id,
+                    remote_endpoint.clone(),
+                    Self::concrete_write_to_remote_endpoint,
+                )
+                .await;
+            Ok(())
+        } else {
+            Err(NetworkError::ConcreteRemoteEdgeNotExist)
+        }
     }
 }
