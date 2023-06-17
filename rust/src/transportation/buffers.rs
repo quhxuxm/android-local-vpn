@@ -79,10 +79,13 @@ impl Buffer {
                 device: device_buffer,
                 ..
             } => {
-                let mut device_buffer = device_buffer.lock().await;
-                let device_buffer_slice = device_buffer.make_contiguous();
-                match write_fn(trans_id, device_endpoint, device_buffer_slice.to_vec()).await {
+                let device_buffer_owned = {
+                    let mut device_buffer = device_buffer.lock().await;
+                    device_buffer.make_contiguous().to_vec()
+                };
+                match write_fn(trans_id, device_endpoint, device_buffer_owned).await {
                     Ok(consumed) => {
+                        let mut device_buffer = device_buffer.lock().await;
                         device_buffer.drain(..consumed);
                     }
                     Err(error) => {
@@ -100,17 +103,20 @@ impl Buffer {
                 device: all_datagrams,
                 ..
             } => {
-                let mut all_datagrams = all_datagrams.lock().await;
-                let all_datagrams_slice = all_datagrams.make_contiguous();
+                let all_datagrams_owned = {
+                    let mut all_datagrams = all_datagrams.lock().await;
+                    all_datagrams.make_contiguous().to_vec()
+                };
                 let mut consumed: usize = 0;
                 // write udp packets one by one
-                for datagram in all_datagrams_slice {
+                for datagram in all_datagrams_owned {
                     if let Err(error) = write_fn(trans_id, device_endpoint.clone(), datagram.to_vec()).await {
                         error!(">>>> Fail to write buffer data to device udp because of error: {error:?}");
                         break;
                     }
                     consumed += 1;
                 }
+                let mut all_datagrams = all_datagrams.lock().await;
                 all_datagrams.drain(..consumed);
             }
         }
@@ -126,10 +132,13 @@ impl Buffer {
                 remote: remote_buffer,
                 ..
             } => {
-                let mut remote_buffer = remote_buffer.lock().await;
-                let remote_buffer_owned = remote_buffer.make_contiguous().to_vec();
+                let remote_buffer_owned = {
+                    let mut remote_buffer = remote_buffer.lock().await;
+                    remote_buffer.make_contiguous().to_vec()
+                };
                 match write_fn(trans_id, remote_endpoint, remote_buffer_owned).await {
                     Ok(consumed) => {
+                        let mut remote_buffer = remote_buffer.lock().await;
                         remote_buffer.drain(..consumed);
                     }
                     Err(error) => {
@@ -147,11 +156,13 @@ impl Buffer {
                 remote: all_datagrams,
                 ..
             } => {
-                let mut all_datagrams = all_datagrams.lock().await;
-                let all_datagrams_slice = all_datagrams.make_contiguous();
+                let all_datagrams_owned = {
+                    let mut all_datagrams = all_datagrams.lock().await;
+                    all_datagrams.make_contiguous().to_vec()
+                };
                 let mut consumed: usize = 0;
                 // write udp packets one by one
-                for datagram in all_datagrams_slice {
+                for datagram in all_datagrams_owned {
                     let datagram_owned = datagram.to_vec();
                     if let Err(error) = write_fn(trans_id, remote_endpoint.clone(), datagram_owned).await {
                         error!(">>>> Fail to write buffer data to remote udp because of error: {error:?}");
@@ -159,6 +170,7 @@ impl Buffer {
                     }
                     consumed += 1;
                 }
+                let mut all_datagrams = all_datagrams.lock().await;
                 all_datagrams.drain(..consumed);
             }
         }
