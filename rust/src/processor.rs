@@ -81,7 +81,7 @@ where
                 Self::write_to_device_file(
                     trans_id,
                     Arc::clone(&transportation),
-                    self.device_file_write.clone(),
+                    Arc::clone(&self.device_file_write),
                 )
                 .await?;
                 Self::read_from_device_endpoint(trans_id, Arc::clone(&transportation)).await;
@@ -204,17 +204,22 @@ where
         if ready.is_readable() {
             Self::read_from_remote_endpoint(
                 trans_id,
-                transportation.clone(),
-                device_file_write.clone(),
-                transportations.clone(),
+                Arc::clone(&transportation),
+                Arc::clone(&device_file_write),
+                Arc::clone(&transportations),
             )
             .await?;
-            Self::write_to_device_endpoint(transportation.clone()).await;
-            Self::write_to_device_file(trans_id, transportation.clone(), device_file_write.clone()).await?;
+            Self::write_to_device_endpoint(Arc::clone(&transportation)).await;
+            Self::write_to_device_file(
+                trans_id,
+                Arc::clone(&transportation),
+                Arc::clone(&device_file_write),
+            )
+            .await?;
         }
         if ready.is_writable() {
-            Self::read_from_device_endpoint(trans_id, transportation.clone()).await;
-            Self::write_to_remote_endpoint(trans_id, transportation.clone()).await;
+            Self::read_from_device_endpoint(trans_id, Arc::clone(&transportation)).await;
+            Self::write_to_remote_endpoint(trans_id, Arc::clone(&transportation)).await;
         }
         if ready.is_read_closed() || ready.is_write_closed() {
             Self::destroy_transportation(trans_id, transportation, device_file_write, transportations).await?;
