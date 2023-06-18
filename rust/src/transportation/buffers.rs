@@ -8,10 +8,7 @@ use tokio::sync::Mutex;
 
 use crate::error::NetworkError;
 
-use super::{
-    endpoint::{DeviceEndpoint, RemoteEndpoint},
-    TransportationId,
-};
+use super::endpoint::{DeviceEndpoint, RemoteEndpoint};
 
 /// The buffer for 2 side in the transport.
 /// The buffer is internal mutable.
@@ -69,9 +66,9 @@ impl Buffer {
         }
     }
 
-    pub(crate) async fn consume_device_buffer_with<'b, F, Fut>(&self, trans_id: TransportationId, device_endpoint: Arc<DeviceEndpoint<'b>>, mut write_fn: F)
+    pub(crate) async fn consume_device_buffer_with<'b, F, Fut>(&self, device_endpoint: Arc<DeviceEndpoint<'b>>, mut write_fn: F)
     where
-        F: FnMut(TransportationId, Arc<DeviceEndpoint<'b>>, Vec<u8>) -> Fut,
+        F: FnMut(Arc<DeviceEndpoint<'b>>, Vec<u8>) -> Fut,
         Fut: Future<Output = Result<usize, NetworkError>>,
     {
         match self {
@@ -86,7 +83,7 @@ impl Buffer {
                 if device_buffer_owned.is_empty() {
                     return;
                 }
-                match write_fn(trans_id, device_endpoint, device_buffer_owned).await {
+                match write_fn(device_endpoint, device_buffer_owned).await {
                     Ok(consumed) => {
                         let mut device_buffer = device_buffer.lock().await;
                         device_buffer.drain(..consumed);
@@ -116,7 +113,7 @@ impl Buffer {
                 let mut consumed: usize = 0;
                 // write udp packets one by one
                 for datagram in all_datagrams_owned {
-                    if let Err(error) = write_fn(trans_id, device_endpoint.clone(), datagram.to_vec()).await {
+                    if let Err(error) = write_fn(device_endpoint.clone(), datagram.to_vec()).await {
                         error!(">>>> Fail to write buffer data to device udp because of error: {error:?}");
                         break;
                     }
@@ -128,9 +125,9 @@ impl Buffer {
         }
     }
 
-    pub(crate) async fn consume_remote_buffer_with<F, Fut>(&self, trans_id: TransportationId, remote_endpoint: Arc<RemoteEndpoint>, mut write_fn: F)
+    pub(crate) async fn consume_remote_buffer_with<F, Fut>(&self, remote_endpoint: Arc<RemoteEndpoint>, mut write_fn: F)
     where
-        F: FnMut(TransportationId, Arc<RemoteEndpoint>, Vec<u8>) -> Fut,
+        F: FnMut(Arc<RemoteEndpoint>, Vec<u8>) -> Fut,
         Fut: Future<Output = Result<usize, NetworkError>>,
     {
         match self {
@@ -145,7 +142,7 @@ impl Buffer {
                 if remote_buffer_owned.is_empty() {
                     return;
                 }
-                match write_fn(trans_id, remote_endpoint, remote_buffer_owned).await {
+                match write_fn(remote_endpoint, remote_buffer_owned).await {
                     Ok(consumed) => {
                         let mut remote_buffer = remote_buffer.lock().await;
                         remote_buffer.drain(..consumed);
@@ -176,7 +173,7 @@ impl Buffer {
                 // write udp packets one by one
                 for datagram in all_datagrams_owned {
                     let datagram_owned = datagram.to_vec();
-                    if let Err(error) = write_fn(trans_id, remote_endpoint.clone(), datagram_owned).await {
+                    if let Err(error) = write_fn(remote_endpoint.clone(), datagram_owned).await {
                         error!(">>>> Fail to write buffer data to remote udp because of error: {error:?}");
                         break;
                     }

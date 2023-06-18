@@ -1,9 +1,13 @@
-use crate::error::{AgentError, NetworkError, ServerError};
+use crate::{
+    error::{AgentError, NetworkError, ServerError},
+    util::log_ip_packet,
+};
 
 use super::transportation::Transportation;
 use super::transportation::TransportationId;
 use log::{debug, error};
 
+use smoltcp::wire::{Ipv4Packet, Ipv6Packet, PrettyPrinter};
 use tokio::{
     io::Ready,
     sync::{oneshot::Receiver, Mutex},
@@ -178,8 +182,9 @@ where
         device_file_write: Arc<Mutex<File>>,
     ) -> Result<(), NetworkError> {
         if transportation.poll_device_endpoint().await {
-            debug!("<<<< Transportation {trans_id} change happen on smoltcp write the tx to device.");
             while let Some(data_to_device) = transportation.pop_tx_from_device().await {
+                let log = log_ip_packet(&data_to_device);
+                debug!("<<<< Transportation {trans_id} write the tx to device:\n{log}\n",);
                 let mut device_file_write = device_file_write.lock().await;
                 device_file_write
                     .write_all(&data_to_device)
@@ -198,7 +203,6 @@ where
         transportations: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
     ) -> Result<bool, NetworkError> {
         if ready.is_readable() {
-            debug!("<<<< Transportation {trans_id} is readable.");
             Self::read_from_remote_endpoint(
                 trans_id,
                 transportation.clone(),
@@ -210,12 +214,10 @@ where
             Self::write_to_device_file(trans_id, transportation.clone(), device_file_write.clone()).await?;
         }
         if ready.is_writable() {
-            debug!("<<<< Transportation {trans_id} is writable.");
             Self::read_from_device_endpoint(trans_id, transportation.clone()).await;
             Self::write_to_remote_endpoint(trans_id, transportation.clone()).await;
         }
         if ready.is_read_closed() || ready.is_write_closed() {
-            debug!("<<<< Transportation {trans_id} is read/write closed.");
             Self::destroy_transportation(trans_id, transportation, device_file_write, transportations).await?;
             return Ok(false);
         }
@@ -228,11 +230,13 @@ where
         device_file_write: Arc<Mutex<File>>,
         transportation_repository: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
     ) -> Result<(), NetworkError> {
-        debug!("<<<< Transportation {trans_id} read from remote.");
-
         let is_transportation_closed = match transportation.read_from_remote_endpoint().await {
             Ok((remote_data, is_closed)) => {
                 for data in remote_data {
+                    debug!(
+                        "<<<< Transportation {trans_id} read data from remote endpoint: {}",
+                        pretty_hex::pretty_hex(&data)
+                    );
                     if !data.is_empty() {
                         transportation.push_data_to_remote_buffer(&data).await
                     }
@@ -265,7 +269,6 @@ where
     }
 
     async fn write_to_remote_endpoint(trans_id: TransportationId, transportation: Arc<Transportation<'_>>) {
-        debug!(">>>> Transportation {trans_id} begin to transfer remote buffer data to remote endpoint");
         if let Err(e) = transportation.transfer_remote_buffer().await {
             error!(">>>> Transportation {trans_id} fail to transfer remote buffer to remote endpoint because of error: {e:?}");
         };
@@ -275,7 +278,6 @@ where
         let mut data: [u8; 65535] = [0; 65535];
 
         while transportation.device_endpoint_can_receive().await {
-            debug!(">>>> Transportation {trans_id} can receive data from device, begin receive device data to device buffer.");
             match transportation.read_from_device_endpoint(&mut data).await {
                 Ok(data_len) => {
                     transportation
@@ -291,9 +293,7 @@ where
     }
 
     async fn write_to_device_endpoint(trans_id: TransportationId, transportation: Arc<Transportation<'_>>) {
-        debug!(">>>> Transportation {trans_id} write to device endpoint.");
         if transportation.device_endpoint_can_send().await {
-            debug!(">>>> Transportation {trans_id} can send data to device, begin send device buffer data to device.");
             transportation.transfer_device_buffer().await;
         }
     }

@@ -104,16 +104,34 @@ impl RemoteEndpoint {
 
     pub(crate) async fn write(&self, bytes: &[u8]) -> Result<usize, NetworkError> {
         match self {
-            Self::Tcp { tcp_stream, .. } => tcp_stream
-                .write()
-                .await
-                .write(bytes)
-                .await
-                .map_err(NetworkError::WriteToRemote),
-            Self::Udp { udp_socket, .. } => udp_socket
-                .send(bytes)
-                .await
-                .map_err(NetworkError::WriteToRemote),
+            Self::Tcp {
+                tcp_stream,
+                trans_id,
+            } => {
+                debug!(
+                    ">>>> Transportation {trans_id} write data to remote tcp stream: {}",
+                    pretty_hex::pretty_hex(&bytes)
+                );
+                tcp_stream
+                    .write()
+                    .await
+                    .write(bytes)
+                    .await
+                    .map_err(NetworkError::WriteToRemote)
+            }
+            Self::Udp {
+                udp_socket,
+                trans_id,
+            } => {
+                debug!(
+                    ">>>> Transportation {trans_id} write data to remote udp socket: {}",
+                    pretty_hex::pretty_hex(&bytes)
+                );
+                udp_socket
+                    .send(bytes)
+                    .await
+                    .map_err(NetworkError::WriteToRemote)
+            }
         }
     }
 

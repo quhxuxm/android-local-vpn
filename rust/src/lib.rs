@@ -1,6 +1,7 @@
 mod device;
 mod error;
 mod processor;
+mod util;
 
 mod server;
 mod transportation;

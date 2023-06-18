@@ -34,7 +34,7 @@ impl Display for TransportationId {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         write!(
             formatter,
-            "[{:?}][{:?}]{}:{}->{}:{}",
+            "[{:?}][{:?}][{}:{}->{}:{}]",
             self.internet_protocol,
             self.transport_protocol,
             self.source.ip(),

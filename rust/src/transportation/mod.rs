@@ -141,60 +141,40 @@ impl<'buf> Transportation<'buf> {
         self.buffer.push_remote_data_to_device(data).await
     }
 
-    async fn concrete_write_to_device_endpoint(
-        trans_id: TransportationId,
-        device_endpoint: Arc<DeviceEndpoint<'_>>,
-        data: Vec<u8>,
-    ) -> Result<usize, NetworkError> {
-        debug!(
-            "<<<< Transportation {} going to write data in device buffer to device endpoint: {}",
-            trans_id,
-            pretty_hex::pretty_hex(&data)
-        );
+    async fn concrete_write_to_device_endpoint(device_endpoint: Arc<DeviceEndpoint<'_>>, data: Vec<u8>) -> Result<usize, NetworkError> {
         device_endpoint.send(&data).await
     }
 
     /// Transfer the data inside device buffer to device endpoint.
     pub(crate) async fn transfer_device_buffer(&self) {
-        debug!(
-            ">>>> Transportation {} going to transfer the data in device buffer to device endpoint.",
-            self.trans_id
-        );
         self.buffer
             .consume_device_buffer_with(
-                self.trans_id,
                 self.device_endpoint.clone(),
                 Self::concrete_write_to_device_endpoint,
             )
             .await;
     }
 
-    async fn concrete_write_to_remote_endpoint(trans_id: TransportationId, remote_endpoint: Arc<RemoteEndpoint>, data: Vec<u8>) -> Result<usize, NetworkError> {
-        debug!(
-            ">>>> Transportation {} going to write data in remote buffer to remote point: {}",
-            trans_id,
-            pretty_hex::pretty_hex(&data)
-        );
+    async fn concrete_write_to_remote_endpoint(remote_endpoint: Arc<RemoteEndpoint>, data: Vec<u8>) -> Result<usize, NetworkError> {
         remote_endpoint.write(&data).await
     }
 
     /// Transfer the data inside remote buffer to remote endpoint
     pub(crate) async fn transfer_remote_buffer(&self) -> Result<(), NetworkError> {
-        debug!(
-            ">>>> Transportation {} going to transfer the data in remote buffer to remote endpoint.",
-            self.trans_id
-        );
         let trans_id = self.trans_id;
         if let Some(remote_endpoint) = self.remote_endpoint.read().await.as_ref() {
             self.buffer
                 .consume_remote_buffer_with(
-                    trans_id,
                     Arc::clone(remote_endpoint),
                     Self::concrete_write_to_remote_endpoint,
                 )
                 .await;
             Ok(())
         } else {
+            error!(
+                ">>>> Transportation {} fail transfer remote buffer data to remote point because of remote endpoint not exist",
+                trans_id,
+            );
             Err(NetworkError::ConcreteRemoteEdgeNotExist)
         }
     }
