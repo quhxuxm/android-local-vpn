@@ -148,18 +148,19 @@ impl<'buf> DeviceEndpoint<'buf> {
     }
 
     pub async fn send(&self, data: &[u8]) -> Result<usize, NetworkError> {
+        let trans_id = self.trans_id;
         match self.transport_protocol {
             TransportProtocol::Tcp => {
                 let mut socketset = self.socketset.write().await;
                 let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
                 debug!(
-                    "<<<< Transportation {} send tcp data to smoltcp stack: {}",
-                    self.trans_id,
+                    "<<<< Transportation {trans_id} send tcp data to smoltcp stack: {}",
                     pretty_hex::pretty_hex(&data)
                 );
-                socket
-                    .send_slice(data)
-                    .map_err(NetworkError::SendTcpDataToDevice)
+                socket.send_slice(data).map_err(|e| {
+                    error!("<<<< Transportation {trans_id} fail to send tcp data to smoltcp stack because of error: {e:?}");
+                    NetworkError::WriteToDeviceEndpoint
+                })
             }
             TransportProtocol::Udp => {
                 let mut socketset = self.socketset.write().await;
@@ -172,7 +173,10 @@ impl<'buf> DeviceEndpoint<'buf> {
                 socket
                     .send_slice(data, self.local_endpoint)
                     .and(Ok(data.len()))
-                    .map_err(NetworkError::SendUdpDataToDevice)
+                    .map_err(|e| {
+                        error!("<<<< Transportation {trans_id} fail to send udp data to smoltcp stack because of error: {e:?}");
+                        NetworkError::WriteToDeviceEndpoint
+                    })
             }
         }
     }
@@ -193,13 +197,15 @@ impl<'buf> DeviceEndpoint<'buf> {
     }
 
     pub async fn receive(&self, data: &mut [u8]) -> Result<usize, NetworkError> {
+        let trans_id = self.trans_id;
         match self.transport_protocol {
             TransportProtocol::Tcp => {
                 let mut socketset = self.socketset.write().await;
                 let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
-                let size = socket
-                    .recv_slice(data)
-                    .map_err(NetworkError::ReceiveTcpDataFromDevice)?;
+                let size = socket.recv_slice(data).map_err(|e| {
+                    error!(">>>> Transportation {trans_id} fail to receive tcp data from smoltcp stack because of error: {e:?}");
+                    NetworkError::ReadFromDeviceEndpoint
+                })?;
                 let data = &data[..size];
                 debug!(
                     ">>>> Transportation {} receive tcp data from smoltcp stack: {}",
@@ -211,10 +217,10 @@ impl<'buf> DeviceEndpoint<'buf> {
             TransportProtocol::Udp => {
                 let mut socketset = self.socketset.write().await;
                 let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
-                let size = socket
-                    .recv_slice(data)
-                    .map(|r| r.0)
-                    .map_err(NetworkError::ReceiveUdpDataFromDevice)?;
+                let size = socket.recv_slice(data).map(|r| r.0).map_err(|e| {
+                    error!(">>>> Transportation {trans_id} fail to receive udp data from smoltcp stack because of error: {e:?}");
+                    NetworkError::ReadFromDeviceEndpoint
+                })?;
                 let data = &data[..size];
                 debug!(
                     ">>>> Transportation {} receive udp data from smoltcp stack: {}",

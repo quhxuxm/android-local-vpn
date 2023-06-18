@@ -50,7 +50,7 @@ impl<'buf> Transportation<'buf> {
     pub(crate) async fn connect_remote(&self) -> Result<(), NetworkError> {
         let connected_remote_endpoint = Self::create_remote_endpoint(self.trans_id)
             .await
-            .ok_or(NetworkError::ConcreteRemoteEdgeNotExist)?;
+            .ok_or(NetworkError::RemoteEndpointInInvalidState)?;
         let connected_remote_endpoint = Arc::new(connected_remote_endpoint);
         let mut remote_endpoint = self.remote_endpoint.write().await;
         *remote_endpoint = Some(connected_remote_endpoint);
@@ -61,7 +61,7 @@ impl<'buf> Transportation<'buf> {
         if let Some(remote_endpoint) = self.remote_endpoint.read().await.as_ref() {
             remote_endpoint.poll().await
         } else {
-            Err(NetworkError::ConcreteRemoteEdgeNotExist)
+            Err(NetworkError::RemoteEndpointInInvalidState)
         }
     }
     async fn create_remote_endpoint(trans_id: TransportationId) -> Option<RemoteEndpoint> {
@@ -125,7 +125,7 @@ impl<'buf> Transportation<'buf> {
         if let Some(remote_endpoint) = self.remote_endpoint.read().await.as_ref() {
             remote_endpoint.read().await
         } else {
-            Err(NetworkError::ConcreteRemoteEdgeNotExist)
+            Err(NetworkError::RemoteEndpointInInvalidState)
         }
     }
 
@@ -175,7 +175,7 @@ impl<'buf> Transportation<'buf> {
                 ">>>> Transportation {} fail transfer remote buffer data to remote point because of remote endpoint not exist",
                 trans_id,
             );
-            Err(NetworkError::ConcreteRemoteEdgeNotExist)
+            Err(NetworkError::RemoteEndpointInInvalidState)
         }
     }
 }

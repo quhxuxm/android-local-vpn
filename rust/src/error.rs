@@ -15,40 +15,32 @@ pub enum AgentError {
 
 #[derive(Error, Debug)]
 pub enum NetworkError {
-    #[error("Fail to initialize poll because of error: {0:?}")]
-    InitializePoll(#[source] StdIoError),
-    #[error("Fail to initialize waker because of error: {0:?}")]
-    InitializeWaker(#[source] StdIoError),
-    #[error("Fail to register source because of error: {0:?}")]
-    RegisterSource(#[source] StdIoError),
-    #[error("Fail to deregister source because of error: {0:?}")]
-    DeregisterSource(#[source] StdIoError),
-    #[error("Fail to poll source because of error: {0:?}")]
-    PollSource(#[source] StdIoError),
-    #[error("Fail to send tcp data to device because of error: {0:?}")]
-    SendTcpDataToDevice(TcpSendError),
-    #[error("Fail to send udp data to device because of error: {0:?}")]
-    SendUdpDataToDevice(UdpSendError),
-    #[error("Fail to receive tcp data from device because of error: {0:?}")]
-    ReceiveTcpDataFromDevice(TcpRecvError),
-    #[error("Fail to receive udp data from device because of error: {0:?}")]
-    ReceiveUdpDataFromDevice(UdpRecvError),
-    #[error("Fail to read from device because of error: {0:?}")]
-    ReadFromDevice(#[source] StdIoError),
     #[error("Fail to write data to remote because of error: {0:?}")]
-    WriteToRemote(#[source] StdIoError),
+    WriteToRemoteEndpoint(#[source] StdIoError),
     #[error("Fail to read data from remote because of error: {0:?}")]
-    ReadFromRemote(#[source] StdIoError),
-    #[error("Fail to write data to device because of error: {0:?}")]
-    WriteToDevice(#[source] StdIoError),
+    ReadFromRemoteEndpoint(#[source] StdIoError),
+    #[error("Fail to write data to device file because of error: {0:?}")]
+    WriteToDeviceFile(#[source] StdIoError),
+    #[error("Fail to write data to device.")]
+    WriteToDeviceEndpoint,
+    #[error("Fail to read data from device.")]
+    ReadFromDeviceEndpoint,
+    #[error("Fail to poll remote endpoint because of error: {0:?}")]
+    PollRemoteEndpoint(#[source] StdIoError),
+    #[error("Fail to poll device endpoint because of error: {0:?}")]
+    PollDeviceEndpoint(#[source] StdIoError),
     #[error("Fail to create device endpoint")]
     DeviceEndpointCreation,
-    #[error("Concrete remote edge not exist")]
-    ConcreteRemoteEdgeNotExist,
+    #[error("Fail to create remote endpoint")]
+    RemoteEndpointCreation,
     #[error("Would block")]
     WouldBlock,
-    #[error("Closed")]
-    Closed,
+    #[error("Fail to close remote endpoint")]
+    RemoteEndpointClosed,
+    #[error("Fail to close device endpoint")]
+    DeviceEndpointClose,
+    #[error("Remote endpoint in invalid state")]
+    RemoteEndpointInInvalidState,
 }
 
 #[derive(Error, Debug)]

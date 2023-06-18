@@ -187,7 +187,7 @@ where
                 let mut device_file_write = device_file_write.lock().await;
                 device_file_write
                     .write_all(&data_to_device)
-                    .map_err(NetworkError::WriteToDevice)?;
+                    .map_err(NetworkError::WriteToDeviceFile)?;
             }
         };
         Ok(())
@@ -249,7 +249,7 @@ where
             }
             Err(error) => match error {
                 NetworkError::WouldBlock => false,
-                NetworkError::Closed => true,
+                NetworkError::RemoteEndpointClosed => true,
                 other => {
                     error!(
                         "<<<< Transportation {trans_id} failed to read from remote endpoint, errro={:?}",

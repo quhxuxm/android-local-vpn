@@ -73,11 +73,11 @@ impl RemoteEndpoint {
                 .await
                 .ready(Interest::READABLE | Interest::WRITABLE)
                 .await
-                .map_err(NetworkError::PollSource),
+                .map_err(NetworkError::PollRemoteEndpoint),
             Self::Udp { udp_socket, .. } => udp_socket
                 .ready(Interest::READABLE)
                 .await
-                .map_err(NetworkError::PollSource),
+                .map_err(NetworkError::PollRemoteEndpoint),
         }
     }
 
@@ -87,16 +87,14 @@ impl RemoteEndpoint {
                 tcp_stream,
                 trans_id,
             } => {
-                debug!(">>>> Transportation {trans_id} going to shutdown remote tcp stream.");
-                tcp_stream
-                    .write()
-                    .await
-                    .shutdown()
-                    .await
-                    .map_err(NetworkError::DeregisterSource)?
+                debug!(">>>> Transportation {trans_id} going to close remote tcp stream.");
+                tcp_stream.write().await.shutdown().await.map_err(|e| {
+                    error!(">>>> Transportation {trans_id} fail to close remote tcp stream because of error: {e:?}");
+                    NetworkError::RemoteEndpointClosed
+                })?
             }
             RemoteEndpoint::Udp { trans_id, .. } => {
-                debug!(">>>> Transportation {trans_id} nothing to do for close udp socket.");
+                debug!(">>>> Transportation {trans_id} nothing to do for close remote udp socket.");
             }
         }
         Ok(())
@@ -117,7 +115,7 @@ impl RemoteEndpoint {
                     .await
                     .write(bytes)
                     .await
-                    .map_err(NetworkError::WriteToRemote)
+                    .map_err(NetworkError::WriteToRemoteEndpoint)
             }
             Self::Udp {
                 udp_socket,
@@ -130,7 +128,7 @@ impl RemoteEndpoint {
                 udp_socket
                     .send(bytes)
                     .await
-                    .map_err(NetworkError::WriteToRemote)
+                    .map_err(NetworkError::WriteToRemoteEndpoint)
             }
         }
     }
@@ -169,7 +167,7 @@ impl RemoteEndpoint {
                     } else {
                         error!(">>>> Transportation {trans_id} fail to read data from remote because of error: {e:?}");
                         _is_closed = true;
-                        return Err(NetworkError::ReadFromRemote(e));
+                        return Err(NetworkError::ReadFromRemoteEndpoint(e));
                     }
                 }
             }
