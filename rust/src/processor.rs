@@ -7,7 +7,6 @@ use super::transportation::Transportation;
 use super::transportation::TransportationId;
 use log::{debug, error};
 
-use smoltcp::wire::{Ipv4Packet, Ipv6Packet, PrettyPrinter};
 use tokio::{
     io::Ready,
     sync::{oneshot::Receiver, Mutex},
@@ -164,7 +163,7 @@ where
         transportation_repository: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
     ) -> Result<(), NetworkError> {
         // Push any pending data back to device before destroying transportation.
-        Self::write_to_device_endpoint(trans_id, transportation.clone()).await;
+        Self::write_to_device_endpoint(transportation.clone()).await;
         if let Err(e) = Self::write_to_device_file(trans_id, transportation.clone(), device_file_write).await {
             error!("<<<< Transportation {trans_id} fail to write pending data in smoltcp to device when destory because of error: {e:?}");
             return Err(e);
@@ -210,7 +209,7 @@ where
                 transportations.clone(),
             )
             .await?;
-            Self::write_to_device_endpoint(trans_id, transportation.clone()).await;
+            Self::write_to_device_endpoint(transportation.clone()).await;
             Self::write_to_device_file(trans_id, transportation.clone(), device_file_write.clone()).await?;
         }
         if ready.is_writable() {
@@ -292,7 +291,7 @@ where
         }
     }
 
-    async fn write_to_device_endpoint(trans_id: TransportationId, transportation: Arc<Transportation<'_>>) {
+    async fn write_to_device_endpoint(transportation: Arc<Transportation<'_>>) {
         if transportation.device_endpoint_can_send().await {
             transportation.transfer_device_buffer().await;
         }
