@@ -185,12 +185,11 @@ impl<'buf> Transportation<'buf> {
             self.trans_id
         );
         let trans_id = self.trans_id;
-
         if let Some(remote_endpoint) = self.remote_endpoint.read().await.as_ref() {
             self.buffer
                 .consume_remote_buffer_with(
                     trans_id,
-                    remote_endpoint.clone(),
+                    Arc::clone(remote_endpoint),
                     Self::concrete_write_to_remote_endpoint,
                 )
                 .await;

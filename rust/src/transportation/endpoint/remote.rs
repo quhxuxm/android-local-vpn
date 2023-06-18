@@ -105,12 +105,14 @@ impl RemoteEndpoint {
     pub(crate) async fn write(&self, bytes: &[u8]) -> Result<usize, NetworkError> {
         match self {
             Self::Tcp { tcp_stream, .. } => tcp_stream
-                .read()
+                .write()
                 .await
-                .try_write(bytes)
+                .write(bytes)
+                .await
                 .map_err(NetworkError::WriteToRemote),
             Self::Udp { udp_socket, .. } => udp_socket
-                .try_send(bytes)
+                .send(bytes)
+                .await
                 .map_err(NetworkError::WriteToRemote),
         }
     }
@@ -118,7 +120,7 @@ impl RemoteEndpoint {
     pub(crate) async fn read(&self) -> Result<(Vec<Vec<u8>>, bool), NetworkError> {
         let mut bytes: Vec<Vec<u8>> = Vec::new();
         let mut buffer = [0; 65536]; // maximum UDP packet size
-        let mut is_closed = false;
+        let mut _is_closed = false;
         loop {
             let (read_result, trans_id) = match self {
                 Self::Tcp {
@@ -134,24 +136,26 @@ impl RemoteEndpoint {
             };
             match read_result {
                 Ok(0) => {
-                    is_closed = true;
+                    _is_closed = true;
                     break;
                 }
                 Ok(count) => {
                     // bytes.extend_from_slice(&buffer[..count]);
                     let data = buffer[..count].to_vec();
-                    bytes.push(data)
+                    bytes.push(data);
+                    continue;
                 }
                 Err(e) => {
                     if e.kind() == ErrorKind::WouldBlock {
-                        break;
+                        continue;
                     } else {
                         error!(">>>> Transportation {trans_id} fail to read data from remote because of error: {e:?}");
+                        _is_closed = true;
                         return Err(NetworkError::ReadFromRemote(e));
                     }
                 }
             }
         }
-        Ok((bytes, is_closed))
+        Ok((bytes, _is_closed))
     }
 }

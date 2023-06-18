@@ -68,28 +68,72 @@ where
             if let Some(trans_id) = self.get_or_create_transportation(device_data).await {
                 let transportation = {
                     let transportations = self.transportations.lock().await;
-                    transportations
-                        .get(&trans_id)
-                        .ok_or(ServerError::TransportationNotExist(trans_id))?
-                        .clone()
+                    Arc::clone(
+                        transportations
+                            .get(&trans_id)
+                            .ok_or(ServerError::TransportationNotExist(trans_id))?,
+                    )
                 };
                 transportation.push_rx_to_device(device_data.to_vec()).await;
                 Self::write_to_device_file(
                     trans_id,
-                    transportation.clone(),
+                    Arc::clone(&transportation),
                     self.device_file_write.clone(),
                 )
                 .await?;
-                Self::read_from_device_endpoint(trans_id, transportation.clone()).await;
-                Self::write_to_remote_endpoint(trans_id, transportation.clone()).await;
+                Self::read_from_device_endpoint(trans_id, Arc::clone(&transportation)).await;
+                Self::write_to_remote_endpoint(trans_id, transportation).await;
             }
         }
         Ok(())
     }
 
+    async fn start_remote_io_loop(
+        trans_id: TransportationId,
+        transportation: Arc<Transportation<'_>>,
+        device_file_write: Arc<Mutex<File>>,
+        transportations: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
+    ) {
+        if let Err(e) = transportation.connect_remote().await {
+            error!(">>>> Transportation {trans_id} fail connect to remote endpoint because of error: {e:?}");
+            if let Err(destory_error) = Self::destroy_transportation(trans_id, transportation, device_file_write, transportations).await {
+                error!(">>>> Transportation {trans_id} fail to destory a unconnected remote endpoint because of error: {destory_error:?}");
+            };
+            return;
+        };
+        loop {
+            // Poll remote endpoint and forward remote data to device endpoint.
+            let remote_io_ready = match transportation.poll_remote_endpoint().await {
+                Ok(remote_io_ready) => remote_io_ready,
+                Err(e) => {
+                    error!("<<<< Transportation {trans_id} fail to poll remote endpoint because of error: {e:?}");
+                    break;
+                }
+            };
+            match Self::handle_remote_io(
+                trans_id,
+                Arc::clone(&transportation),
+                remote_io_ready,
+                Arc::clone(&device_file_write),
+                Arc::clone(&transportations),
+            )
+            .await
+            {
+                Ok(continue_loop) => {
+                    if !continue_loop {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!("<<<< Fail to handle remote io because of error: {e:?}");
+                    break;
+                }
+            }
+        }
+    }
     async fn get_or_create_transportation(&mut self, data: &[u8]) -> Option<TransportationId> {
         let trans_id = TransportationId::new(data)?;
-        let transportation_repository = self.transportations.clone();
+        let transportations_owned = self.transportations.clone();
         let mut transportations = self.transportations.lock().await;
         match transportations.entry(trans_id) {
             Entry::Occupied(_) => Some(trans_id),
@@ -97,45 +141,13 @@ where
                 debug!(">>>> Transportation {trans_id} not exist in repository create a new one.");
                 let transportation = Arc::new(Transportation::new(trans_id)?);
                 entry.insert(Arc::clone(&transportation));
-                let device_file_write = self.device_file_write.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = transportation.connect_remote().await {
-                        error!(">>>> Transportation {trans_id} fail connect to remote endpoint because of error: {e:?}");
-                        if let Err(destory_error) = Self::destroy_transportation(
-                            trans_id,
-                            transportation,
-                            device_file_write,
-                            transportation_repository,
-                        )
-                        .await
-                        {
-                            error!(">>>> Transportation {trans_id} fail to destory a unconnected remote endpoint because of error: {destory_error:?}");
-                        };
-                        return;
-                    };
-                    loop {
-                        // Poll remote endpoint and forward remote data to device endpoint.
-                        let remote_io_ready = match transportation.poll_remote_endpoint().await {
-                            Ok(remote_io_ready) => remote_io_ready,
-                            Err(e) => {
-                                error!("<<<< Transportation {trans_id} fail to poll remote endpoint because of error: {e:?}");
-                                continue;
-                            }
-                        };
-                        if let Err(e) = Self::handle_remote_io(
-                            trans_id,
-                            transportation.clone(),
-                            remote_io_ready,
-                            device_file_write.clone(),
-                            transportation_repository.clone(),
-                        )
-                        .await
-                        {
-                            error!("<<<< Fail to handle remote io because of error: {e:?}");
-                            break;
-                        };
-                    }
-                });
+                let device_file_write = Arc::clone(&self.device_file_write);
+                tokio::spawn(Self::start_remote_io_loop(
+                    trans_id,
+                    transportation,
+                    device_file_write,
+                    transportations_owned,
+                ));
                 Some(trans_id)
             }
         }
@@ -177,20 +189,21 @@ where
         Ok(())
     }
 
+    /// Handle the remote io event, if return false means stop the loop, if return true means continue the loop
     async fn handle_remote_io(
         trans_id: TransportationId,
         transportation: Arc<Transportation<'_>>,
         ready: Ready,
         device_file_write: Arc<Mutex<File>>,
-        transportation_repository: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
-    ) -> Result<(), NetworkError> {
+        transportations: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
+    ) -> Result<bool, NetworkError> {
         if ready.is_readable() {
             debug!("<<<< Transportation {trans_id} is readable.");
             Self::read_from_remote_endpoint(
                 trans_id,
                 transportation.clone(),
                 device_file_write.clone(),
-                transportation_repository.clone(),
+                transportations.clone(),
             )
             .await?;
             Self::write_to_device_endpoint(trans_id, transportation.clone()).await;
@@ -203,15 +216,10 @@ where
         }
         if ready.is_read_closed() || ready.is_write_closed() {
             debug!("<<<< Transportation {trans_id} is read/write closed.");
-            Self::destroy_transportation(
-                trans_id,
-                transportation,
-                device_file_write,
-                transportation_repository,
-            )
-            .await?;
+            Self::destroy_transportation(trans_id, transportation, device_file_write, transportations).await?;
+            return Ok(false);
         }
-        Ok(())
+        Ok(true)
     }
 
     async fn read_from_remote_endpoint(
@@ -265,10 +273,8 @@ where
 
     async fn read_from_device_endpoint(trans_id: TransportationId, transportation: Arc<Transportation<'_>>) {
         let mut data: [u8; 65535] = [0; 65535];
-        loop {
-            if !transportation.device_endpoint_can_receive().await {
-                break;
-            }
+
+        while transportation.device_endpoint_can_receive().await {
             debug!(">>>> Transportation {trans_id} can receive data from device, begin receive device data to device buffer.");
             match transportation.read_from_device_endpoint(&mut data).await {
                 Ok(data_len) => {
@@ -277,7 +283,7 @@ where
                         .await;
                 }
                 Err(error) => {
-                    error!(">>>> Transportation {trans_id} fail to push device data to buffer because of error: {error:?}");
+                    error!(">>>> Transportation {trans_id} fail to read device data because of error: {error:?}");
                     break;
                 }
             }

@@ -83,6 +83,9 @@ impl Buffer {
                     let mut device_buffer = device_buffer.lock().await;
                     device_buffer.make_contiguous().to_vec()
                 };
+                if device_buffer_owned.is_empty() {
+                    return;
+                }
                 match write_fn(trans_id, device_endpoint, device_buffer_owned).await {
                     Ok(consumed) => {
                         let mut device_buffer = device_buffer.lock().await;
@@ -107,6 +110,9 @@ impl Buffer {
                     let mut all_datagrams = all_datagrams.lock().await;
                     all_datagrams.make_contiguous().to_vec()
                 };
+                if all_datagrams_owned.is_empty() {
+                    return;
+                }
                 let mut consumed: usize = 0;
                 // write udp packets one by one
                 for datagram in all_datagrams_owned {
@@ -136,6 +142,9 @@ impl Buffer {
                     let mut remote_buffer = remote_buffer.lock().await;
                     remote_buffer.make_contiguous().to_vec()
                 };
+                if remote_buffer_owned.is_empty() {
+                    return;
+                }
                 match write_fn(trans_id, remote_endpoint, remote_buffer_owned).await {
                     Ok(consumed) => {
                         let mut remote_buffer = remote_buffer.lock().await;
@@ -160,6 +169,9 @@ impl Buffer {
                     let mut all_datagrams = all_datagrams.lock().await;
                     all_datagrams.make_contiguous().to_vec()
                 };
+                if all_datagrams_owned.is_empty() {
+                    return;
+                }
                 let mut consumed: usize = 0;
                 // write udp packets one by one
                 for datagram in all_datagrams_owned {

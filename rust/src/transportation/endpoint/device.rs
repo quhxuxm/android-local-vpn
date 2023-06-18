@@ -197,30 +197,31 @@ impl<'buf> DeviceEndpoint<'buf> {
             TransportProtocol::Tcp => {
                 let mut socketset = self.socketset.write().await;
                 let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
-                let result = socket
+                let size = socket
                     .recv_slice(data)
-                    .map_err(NetworkError::ReceiveTcpDataFromDevice);
-
+                    .map_err(NetworkError::ReceiveTcpDataFromDevice)?;
+                let data = &data[..size];
                 debug!(
                     ">>>> Transportation {} receive tcp data from smoltcp stack: {}",
                     self.trans_id,
                     pretty_hex::pretty_hex(&data)
                 );
-                result
+                Ok(size)
             }
             TransportProtocol::Udp => {
                 let mut socketset = self.socketset.write().await;
                 let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
-                let result = socket
+                let size = socket
                     .recv_slice(data)
                     .map(|r| r.0)
-                    .map_err(NetworkError::ReceiveUdpDataFromDevice);
+                    .map_err(NetworkError::ReceiveUdpDataFromDevice)?;
+                let data = &data[..size];
                 debug!(
                     ">>>> Transportation {} receive udp data from smoltcp stack: {}",
                     self.trans_id,
                     pretty_hex::pretty_hex(&data)
                 );
-                result
+                Ok(size)
             }
         }
     }
