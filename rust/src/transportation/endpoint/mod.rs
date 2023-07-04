@@ -1,5 +1,5 @@
-mod device;
+mod local;
 mod remote;
 
-pub(super) use device::DeviceEndpoint;
+pub(super) use local::LocalEndpoint;
 pub(super) use remote::RemoteEndpoint;

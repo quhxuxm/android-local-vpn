@@ -1,6 +1,5 @@
 use crate::{
     device::PpaassVpnDevice,
-    error::NetworkError,
     transportation::{TransportProtocol, TransportationId},
 };
 
@@ -15,12 +14,14 @@ use smoltcp::{
     time::Instant,
 };
 
+use anyhow::anyhow;
+use anyhow::Result;
 use smoltcp::socket::udp::{PacketBuffer as UdpSocketBuffer, PacketMetadata, Socket as UdpSocket};
 use smoltcp::wire::IpEndpoint;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
 
-pub struct DeviceEndpoint<'buf> {
+pub struct LocalEndpoint<'buf> {
     socket_handle: SocketHandle,
     transport_protocol: TransportProtocol,
     local_endpoint: IpEndpoint,
@@ -30,7 +31,7 @@ pub struct DeviceEndpoint<'buf> {
     trans_id: TransportationId,
 }
 
-impl<'buf> DeviceEndpoint<'buf> {
+impl<'buf> LocalEndpoint<'buf> {
     pub(crate) fn new(
         trans_id: TransportationId,
         transport_protocol: TransportProtocol,
@@ -65,7 +66,7 @@ impl<'buf> DeviceEndpoint<'buf> {
         Some(socket)
     }
 
-    fn prepare_iface_and_device(trans_id: TransportationId) -> Result<(Interface, PpaassVpnDevice), NetworkError> {
+    fn prepare_iface_and_device(trans_id: TransportationId) -> Result<(Interface, PpaassVpnDevice)> {
         let mut routes = Routes::new();
         let default_gateway_ipv4 = Ipv4Address::new(0, 0, 0, 1);
         routes.add_default_ipv4_route(default_gateway_ipv4).unwrap();
@@ -84,7 +85,7 @@ impl<'buf> DeviceEndpoint<'buf> {
             .add_default_ipv4_route(Ipv4Address::new(0, 0, 0, 1))
             .map_err(|e| {
                 error!(">>>> Transportation {trans_id} fail to add default ipv4 route because of error: {e:?}");
-                NetworkError::DeviceEndpointCreation
+                anyhow!("{e:?}")
             })?;
 
         Ok((interface, vpn_device))
@@ -147,7 +148,7 @@ impl<'buf> DeviceEndpoint<'buf> {
         }
     }
 
-    pub async fn send(&self, data: &[u8]) -> Result<usize, NetworkError> {
+    pub async fn send(&self, data: &[u8]) -> Result<usize> {
         let trans_id = self.trans_id;
         match self.transport_protocol {
             TransportProtocol::Tcp => {
@@ -159,7 +160,7 @@ impl<'buf> DeviceEndpoint<'buf> {
                 );
                 socket.send_slice(data).map_err(|e| {
                     error!("<<<< Transportation {trans_id} fail to send tcp data to smoltcp stack because of error: {e:?}");
-                    NetworkError::WriteToDeviceEndpoint
+                    anyhow!("{e:?}")
                 })
             }
             TransportProtocol::Udp => {
@@ -175,7 +176,7 @@ impl<'buf> DeviceEndpoint<'buf> {
                     .and(Ok(data.len()))
                     .map_err(|e| {
                         error!("<<<< Transportation {trans_id} fail to send udp data to smoltcp stack because of error: {e:?}");
-                        NetworkError::WriteToDeviceEndpoint
+                        anyhow!("{e:?}")
                     })
             }
         }
@@ -196,7 +197,7 @@ impl<'buf> DeviceEndpoint<'buf> {
         }
     }
 
-    pub async fn receive(&self, data: &mut [u8]) -> Result<usize, NetworkError> {
+    pub async fn receive(&self, data: &mut [u8]) -> Result<usize> {
         let trans_id = self.trans_id;
         match self.transport_protocol {
             TransportProtocol::Tcp => {
@@ -204,7 +205,7 @@ impl<'buf> DeviceEndpoint<'buf> {
                 let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
                 let size = socket.recv_slice(data).map_err(|e| {
                     error!(">>>> Transportation {trans_id} fail to receive tcp data from smoltcp stack because of error: {e:?}");
-                    NetworkError::ReadFromDeviceEndpoint
+                    anyhow!("{e:?}")
                 })?;
                 let data = &data[..size];
                 debug!(
@@ -219,7 +220,7 @@ impl<'buf> DeviceEndpoint<'buf> {
                 let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
                 let size = socket.recv_slice(data).map(|r| r.0).map_err(|e| {
                     error!(">>>> Transportation {trans_id} fail to receive udp data from smoltcp stack because of error: {e:?}");
-                    NetworkError::ReadFromDeviceEndpoint
+                    anyhow!("{e:?}")
                 })?;
                 let data = &data[..size];
                 debug!(

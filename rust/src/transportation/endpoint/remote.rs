@@ -1,10 +1,11 @@
 use crate::{
-    error::NetworkError,
     protect_socket,
     transportation::{InternetProtocol, TransportProtocol, TransportationId},
 };
+use anyhow::anyhow;
 use log::{debug, error};
 
+use anyhow::Result;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
@@ -66,22 +67,18 @@ impl RemoteEndpoint {
         }
     }
 
-    pub(crate) async fn poll(&self) -> Result<Ready, NetworkError> {
+    pub(crate) async fn poll(&self) -> Result<Ready> {
         match self {
-            Self::Tcp { tcp_stream, .. } => tcp_stream
+            Self::Tcp { tcp_stream, .. } => Ok(tcp_stream
                 .read()
                 .await
                 .ready(Interest::READABLE | Interest::WRITABLE)
-                .await
-                .map_err(NetworkError::PollRemoteEndpoint),
-            Self::Udp { udp_socket, .. } => udp_socket
-                .ready(Interest::READABLE)
-                .await
-                .map_err(NetworkError::PollRemoteEndpoint),
+                .await?),
+            Self::Udp { udp_socket, .. } => Ok(udp_socket.ready(Interest::READABLE).await?),
         }
     }
 
-    pub(crate) async fn close(&self) -> Result<(), NetworkError> {
+    pub(crate) async fn close(&self) -> Result<()> {
         match self {
             RemoteEndpoint::Tcp {
                 tcp_stream,
@@ -90,7 +87,7 @@ impl RemoteEndpoint {
                 debug!(">>>> Transportation {trans_id} going to close remote tcp stream.");
                 tcp_stream.write().await.shutdown().await.map_err(|e| {
                     error!(">>>> Transportation {trans_id} fail to close remote tcp stream because of error: {e:?}");
-                    NetworkError::RemoteEndpointClosed
+                    anyhow!(e)
                 })?
             }
             RemoteEndpoint::Udp { trans_id, .. } => {
@@ -100,7 +97,7 @@ impl RemoteEndpoint {
         Ok(())
     }
 
-    pub(crate) async fn write(&self, bytes: &[u8]) -> Result<usize, NetworkError> {
+    pub(crate) async fn write(&self, bytes: &[u8]) -> Result<usize> {
         match self {
             Self::Tcp {
                 tcp_stream,
@@ -110,12 +107,7 @@ impl RemoteEndpoint {
                     ">>>> Transportation {trans_id} write data to remote tcp stream: {}",
                     pretty_hex::pretty_hex(&bytes)
                 );
-                tcp_stream
-                    .write()
-                    .await
-                    .write(bytes)
-                    .await
-                    .map_err(NetworkError::WriteToRemoteEndpoint)
+                Ok(tcp_stream.write().await.write(bytes).await?)
             }
             Self::Udp {
                 udp_socket,
@@ -125,15 +117,12 @@ impl RemoteEndpoint {
                     ">>>> Transportation {trans_id} write data to remote udp socket: {}",
                     pretty_hex::pretty_hex(&bytes)
                 );
-                udp_socket
-                    .send(bytes)
-                    .await
-                    .map_err(NetworkError::WriteToRemoteEndpoint)
+                Ok(udp_socket.send(bytes).await?)
             }
         }
     }
 
-    pub(crate) async fn read(&self) -> Result<(Vec<Vec<u8>>, bool), NetworkError> {
+    pub(crate) async fn read(&self) -> Result<(Vec<Vec<u8>>, bool)> {
         let mut bytes: Vec<Vec<u8>> = Vec::new();
         let mut buffer = [0; 65536]; // maximum UDP packet size
         let mut _is_closed = false;
@@ -167,7 +156,7 @@ impl RemoteEndpoint {
                     } else {
                         error!(">>>> Transportation {trans_id} fail to read data from remote because of error: {e:?}");
                         _is_closed = true;
-                        return Err(NetworkError::ReadFromRemoteEndpoint(e));
+                        return Err(anyhow!(e));
                     }
                 }
             }

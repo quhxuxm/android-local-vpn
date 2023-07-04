@@ -2,9 +2,7 @@ mod buffers;
 mod endpoint;
 mod value;
 
-use crate::error::NetworkError;
-
-use endpoint::DeviceEndpoint;
+use endpoint::LocalEndpoint;
 use endpoint::RemoteEndpoint;
 use log::{debug, error, trace};
 
@@ -15,6 +13,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Result;
+use anyhow::{anyhow, Error as AnyhowError};
 use tokio::{
     io::Ready,
     sync::{
@@ -32,7 +32,7 @@ where
     'buf: 'static,
 {
     trans_id: TransportationId,
-    device_endpoint: Arc<DeviceEndpoint<'buf>>,
+    local_endpoint: Arc<LocalEndpoint<'buf>>,
     remote_endpoint: RwLock<Option<Arc<RemoteEndpoint>>>,
     buffer: Arc<Buffer>,
     notify_transfer_to_remote_sender: Sender<Instant>,
@@ -50,7 +50,7 @@ where
         };
         let transportation = Transportation {
             trans_id,
-            device_endpoint: Arc::new(DeviceEndpoint::new(
+            local_endpoint: Arc::new(LocalEndpoint::new(
                 trans_id,
                 trans_id.transport_protocol,
                 trans_id.source,
@@ -87,10 +87,10 @@ where
         Some(transportation)
     }
 
-    pub(crate) async fn init(&self) -> Result<(), NetworkError> {
+    pub(crate) async fn init(&self) -> Result<()> {
         let connected_remote_endpoint = Self::create_remote_endpoint(self.trans_id)
             .await
-            .ok_or(NetworkError::RemoteEndpointInInvalidState)?;
+            .ok_or(anyhow!("Fail to init transportation"))?;
         let connected_remote_endpoint = Arc::new(connected_remote_endpoint);
         let mut remote_endpoint = self.remote_endpoint.write().await;
         *remote_endpoint = Some(connected_remote_endpoint);
@@ -111,11 +111,11 @@ where
         }
     }
 
-    pub(crate) async fn poll_remote_endpoint(&self) -> Result<Ready, NetworkError> {
+    pub(crate) async fn poll_remote_endpoint(&self) -> Result<Ready> {
         if let Some(remote_endpoint) = self.remote_endpoint.read().await.as_ref() {
             remote_endpoint.poll().await
         } else {
-            Err(NetworkError::RemoteEndpointInInvalidState)
+            Err(anyhow!("Remote endpoint not exist."))
         }
     }
     async fn create_remote_endpoint(trans_id: TransportationId) -> Option<RemoteEndpoint> {
@@ -131,11 +131,11 @@ where
 
     /// Poll the device endpoint smoltcp to trigger the iface
     pub(crate) async fn poll_device_endpoint(&self) -> bool {
-        self.device_endpoint.poll().await
+        self.local_endpoint.poll().await
     }
 
     pub(crate) async fn close_device_endpoint(&self) {
-        self.device_endpoint.close().await;
+        self.local_endpoint.close().await;
         debug!(
             ">>>> Transportation {} close device endpoint.",
             self.trans_id
@@ -143,14 +143,14 @@ where
     }
 
     pub(crate) async fn device_endpoint_can_receive(&self) -> bool {
-        self.device_endpoint.can_receive().await
+        self.local_endpoint.can_receive().await
     }
 
     pub(crate) async fn device_endpoint_can_send(&self) -> bool {
-        self.device_endpoint.can_send().await
+        self.local_endpoint.can_send().await
     }
 
-    pub(crate) async fn close_remote_endpoint(&self) -> Result<(), NetworkError> {
+    pub(crate) async fn close_remote_endpoint(&self) -> Result<()> {
         if let Some(remote_endpoint) = self.remote_endpoint.read().await.as_ref() {
             debug!(
                 ">>>> Transportation {} close remote endpoint.",
@@ -168,23 +168,23 @@ where
     }
 
     pub(crate) async fn push_rx_to_device(&self, rx_data: Vec<u8>) {
-        self.device_endpoint.push_rx_to_device(rx_data).await
+        self.local_endpoint.push_rx_to_device(rx_data).await
     }
 
     pub(crate) async fn pop_tx_from_device(&self) -> Option<Vec<u8>> {
-        self.device_endpoint.pop_tx_from_device().await
+        self.local_endpoint.pop_tx_from_device().await
     }
 
-    pub(crate) async fn read_from_remote_endpoint(&self) -> Result<(Vec<Vec<u8>>, bool), NetworkError> {
+    pub(crate) async fn read_from_remote_endpoint(&self) -> Result<(Vec<Vec<u8>>, bool)> {
         if let Some(remote_endpoint) = self.remote_endpoint.read().await.as_ref() {
             remote_endpoint.read().await
         } else {
-            Err(NetworkError::RemoteEndpointInInvalidState)
+            Err(anyhow!("Remote endpoint not exist."))
         }
     }
 
-    pub(crate) async fn read_from_device_endpoint(&self, data: &mut [u8]) -> Result<usize, NetworkError> {
-        self.device_endpoint.receive(data).await
+    pub(crate) async fn read_from_device_endpoint(&self, data: &mut [u8]) -> Result<usize> {
+        self.local_endpoint.receive(data).await
     }
 
     pub(crate) async fn store_data_to_remote_buffer(&self, data: &[u8]) {
@@ -195,7 +195,7 @@ where
         self.buffer.push_remote_data_to_device(data).await
     }
 
-    async fn concrete_write_to_device_endpoint(device_endpoint: Arc<DeviceEndpoint<'_>>, data: Vec<u8>) -> Result<usize, NetworkError> {
+    async fn concrete_write_to_device_endpoint(device_endpoint: Arc<LocalEndpoint<'_>>, data: Vec<u8>) -> Result<usize> {
         device_endpoint.send(&data).await
     }
 
@@ -203,18 +203,18 @@ where
     pub(crate) async fn transfer_device_buffer(&self) {
         self.buffer
             .consume_device_buffer_with(
-                self.device_endpoint.clone(),
+                self.local_endpoint.clone(),
                 Self::concrete_write_to_device_endpoint,
             )
             .await;
     }
 
-    async fn concrete_write_to_remote_endpoint(remote_endpoint: Arc<RemoteEndpoint>, data: Vec<u8>) -> Result<usize, NetworkError> {
+    async fn concrete_write_to_remote_endpoint(remote_endpoint: Arc<RemoteEndpoint>, data: Vec<u8>) -> Result<usize> {
         remote_endpoint.write(&data).await
     }
 
     /// Transfer the data inside remote buffer to remote endpoint
-    async fn transfer_remote_buffer(&self) -> Result<(), NetworkError> {
+    async fn transfer_remote_buffer(&self) -> Result<()> {
         let trans_id = self.trans_id;
         if let Some(remote_endpoint) = self.remote_endpoint.read().await.as_ref() {
             self.buffer
@@ -226,7 +226,7 @@ where
             Ok(())
         } else {
             error!(">>>> Transportation {trans_id} fail transfer remote buffer data to remote point because of remote endpoint not exist");
-            Err(NetworkError::RemoteEndpointInInvalidState)
+            Err(anyhow!("Remote endpoint not exist."))
         }
     }
 

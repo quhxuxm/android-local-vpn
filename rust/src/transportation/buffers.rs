@@ -1,14 +1,12 @@
+use super::endpoint::{LocalEndpoint, RemoteEndpoint};
+use anyhow::Result;
 use log::error;
-use std::{collections::VecDeque, error::Error, sync::Arc};
+use std::{collections::VecDeque, sync::Arc};
 use std::{
     future::Future,
     io::{Error as StdIoError, ErrorKind},
 };
 use tokio::sync::Mutex;
-
-use crate::error::NetworkError;
-
-use super::endpoint::{DeviceEndpoint, RemoteEndpoint};
 
 /// The buffer for 2 side in the transport.
 /// The buffer is internal mutable.
@@ -66,10 +64,10 @@ impl Buffer {
         }
     }
 
-    pub(crate) async fn consume_device_buffer_with<'b, F, Fut>(&self, device_endpoint: Arc<DeviceEndpoint<'b>>, mut write_fn: F)
+    pub(crate) async fn consume_device_buffer_with<'b, F, Fut>(&self, device_endpoint: Arc<LocalEndpoint<'b>>, mut write_fn: F)
     where
-        F: FnMut(Arc<DeviceEndpoint<'b>>, Vec<u8>) -> Fut,
-        Fut: Future<Output = Result<usize, NetworkError>>,
+        F: FnMut(Arc<LocalEndpoint<'b>>, Vec<u8>) -> Fut,
+        Fut: Future<Output = Result<usize>>,
     {
         match self {
             Buffer::Tcp {
@@ -128,7 +126,7 @@ impl Buffer {
     pub(crate) async fn consume_remote_buffer_with<F, Fut>(&self, remote_endpoint: Arc<RemoteEndpoint>, mut write_fn: F)
     where
         F: FnMut(Arc<RemoteEndpoint>, Vec<u8>) -> Fut,
-        Fut: Future<Output = Result<usize, NetworkError>>,
+        Fut: Future<Output = Result<usize>>,
     {
         match self {
             Buffer::Tcp {

@@ -1,8 +1,4 @@
-use crate::{
-    error::{AgentError, NetworkError, ServerError},
-    transportation,
-    util::log_ip_packet,
-};
+use crate::util::log_ip_packet;
 
 use super::transportation::Transportation;
 use super::transportation::TransportationId;
@@ -13,16 +9,15 @@ use tokio::{
     sync::{oneshot::Receiver, Mutex},
 };
 
+use anyhow::Result;
+use std::io::ErrorKind;
+use std::os::unix::io::FromRawFd;
 use std::{
     collections::hash_map::Entry,
     io::{Read, Write},
     sync::Arc,
 };
 use std::{collections::HashMap, fs::File};
-
-use std::io::ErrorKind;
-
-use std::os::unix::io::FromRawFd;
 
 pub(crate) struct TransportationProcessor<'buf>
 where
@@ -38,8 +33,7 @@ impl<'buf> TransportationProcessor<'buf>
 where
     'buf: 'static,
 {
-    pub(crate) fn new(device_file_descriptor: i32, stop_receiver: Receiver<bool>) -> Result<Self, AgentError> {
-        // let poll = Poll::new().map_err(NetworkError::InitializePoll)?;
+    pub(crate) fn new(device_file_descriptor: i32, stop_receiver: Receiver<bool>) -> Result<Self> {
         let device_file = unsafe { File::from_raw_fd(device_file_descriptor) };
         let device_file_read = Arc::new(Mutex::new(device_file));
         let device_file_write = device_file_read.clone();
@@ -51,7 +45,7 @@ where
         })
     }
 
-    pub(crate) async fn run(&mut self) -> Result<(), AgentError> {
+    pub(crate) async fn run(&mut self) -> Result<()> {
         let mut device_file_read_buffer: [u8; 65536] = [0; 65536];
         loop {
             let device_data = match {
@@ -156,7 +150,7 @@ where
         transportation: Arc<Transportation<'_>>,
         device_file_write: Arc<Mutex<File>>,
         transportation_repository: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
-    ) -> Result<(), NetworkError> {
+    ) -> Result<()> {
         // Push any pending data back to device before destroying transportation.
         Self::write_to_device_endpoint(transportation.clone()).await;
         if let Err(e) = Self::write_to_device_file(trans_id, transportation.clone(), device_file_write).await {
@@ -170,19 +164,13 @@ where
         Ok(())
     }
 
-    async fn write_to_device_file(
-        trans_id: TransportationId,
-        transportation: Arc<Transportation<'_>>,
-        device_file_write: Arc<Mutex<File>>,
-    ) -> Result<(), NetworkError> {
+    async fn write_to_device_file(trans_id: TransportationId, transportation: Arc<Transportation<'_>>, device_file_write: Arc<Mutex<File>>) -> Result<()> {
         if transportation.poll_device_endpoint().await {
             while let Some(data_to_device) = transportation.pop_tx_from_device().await {
                 let log = log_ip_packet(&data_to_device);
                 debug!("<<<< Transportation {trans_id} write the tx to device:\n{log}\n",);
                 let mut device_file_write = device_file_write.lock().await;
-                device_file_write
-                    .write_all(&data_to_device)
-                    .map_err(NetworkError::WriteToDeviceFile)?;
+                device_file_write.write_all(&data_to_device)?;
             }
         };
         Ok(())
@@ -195,7 +183,7 @@ where
         ready: Ready,
         device_file_write: Arc<Mutex<File>>,
         transportations: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
-    ) -> Result<bool, NetworkError> {
+    ) -> Result<bool> {
         if ready.is_readable() {
             Self::read_from_remote_endpoint(
                 trans_id,
@@ -228,7 +216,7 @@ where
         transportation: Arc<Transportation<'_>>,
         device_file_write: Arc<Mutex<File>>,
         transportation_repository: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
-    ) -> Result<(), NetworkError> {
+    ) -> Result<()> {
         let is_transportation_closed = match transportation.read_from_remote_endpoint().await {
             Ok((remote_data, is_closed)) => {
                 for data in remote_data {

@@ -1,5 +1,4 @@
 mod device;
-mod error;
 mod processor;
 mod util;
 

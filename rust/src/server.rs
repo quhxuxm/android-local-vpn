@@ -1,7 +1,4 @@
-use crate::{
-    error::{AgentError, ServerError},
-    processor::TransportationProcessor,
-};
+use crate::processor::TransportationProcessor;
 use log::{debug, error};
 
 use tokio::{
@@ -10,12 +7,15 @@ use tokio::{
     task::JoinHandle,
 };
 
+use anyhow::Result;
+use anyhow::{anyhow, Error as AnyhowError};
+
 #[derive(Debug)]
 pub struct PpaassVpnServer {
     file_descriptor: i32,
     stop_sender: Option<Sender<bool>>,
     _runtime: Option<TokioRuntime>,
-    processor_handle: Option<JoinHandle<Result<(), AgentError>>>,
+    processor_handle: Option<JoinHandle<Result<()>>>,
 }
 
 impl PpaassVpnServer {
@@ -28,18 +28,16 @@ impl PpaassVpnServer {
         }
     }
 
-    fn init_runtime() -> Result<TokioRuntime, AgentError> {
+    fn init_runtime() -> Result<TokioRuntime> {
         let mut runtime_builder = TokioRuntimeBuilder::new_multi_thread();
         runtime_builder.worker_threads(128);
         runtime_builder.enable_all();
         runtime_builder.thread_name("PPAASS");
-        let runtime = runtime_builder
-            .build()
-            .map_err(|e| ServerError::Initialize(Box::new(e)))?;
+        let runtime = runtime_builder.build()?;
         Ok(runtime)
     }
 
-    pub fn start(&mut self) -> Result<(), AgentError> {
+    pub fn start(&mut self) -> Result<()> {
         debug!("Ppaass vpn server starting");
         let runtime = Self::init_runtime()?;
         let file_descriptor = self.file_descriptor;
@@ -51,7 +49,7 @@ impl PpaassVpnServer {
                 error!("Error happen when process transportation: {e:?}")
             };
             debug!("Ppaass vpn server processor thread complete.");
-            Ok::<(), AgentError>(())
+            Ok::<(), AnyhowError>(())
         });
         self._runtime = Some(runtime);
         self.stop_sender = Some(stop_sender);
@@ -60,18 +58,17 @@ impl PpaassVpnServer {
         Ok(())
     }
 
-    pub fn stop(&mut self) -> Result<(), AgentError> {
+    pub fn stop(&mut self) -> Result<()> {
         debug!("Stop ppaass vpn server");
         self._runtime.take();
         let stop_sender = self.stop_sender.take().unwrap();
-        stop_sender.send(true).map_err(|_| {
-            error!("Fail to stop ppaass vpn server");
-            ServerError::FailToStopProcessor
-        })?;
+        stop_sender
+            .send(true)
+            .map_err(|_| anyhow!("Fail to send stop request to ppaass vpn server."))?;
         let processor_handle = self
             .processor_handle
             .take()
-            .ok_or(ServerError::ProcessorHandleNotExist)?;
+            .ok_or(anyhow!("Fail to take processor handler."))?;
         processor_handle.abort();
         Ok(())
     }
