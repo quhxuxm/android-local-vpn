@@ -4,17 +4,14 @@ mod value;
 
 use endpoint::LocalEndpoint;
 use endpoint::RemoteEndpoint;
-use log::{debug, error, trace};
+use log::{debug, error};
 
 use buffers::Buffer;
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Instant};
 
+use anyhow::anyhow;
 use anyhow::Result;
-use anyhow::{anyhow, Error as AnyhowError};
 use tokio::{
     io::Ready,
     sync::{
@@ -94,21 +91,7 @@ where
         let connected_remote_endpoint = Arc::new(connected_remote_endpoint);
         let mut remote_endpoint = self.remote_endpoint.write().await;
         *remote_endpoint = Some(connected_remote_endpoint);
-        self.notify_transfer_to_remote().await;
         Ok(())
-    }
-
-    pub(crate) async fn notify_transfer_to_remote(&self) {
-        if let Err(e) = self
-            .notify_transfer_to_remote_sender
-            .send(Instant::now())
-            .await
-        {
-            error!(
-                ">>>> Transportation {} fail to notify transfer remote buffer because of error: {e:?}",
-                self.trans_id
-            );
-        }
     }
 
     pub(crate) async fn poll_remote_endpoint(&self) -> Result<Ready> {
@@ -130,7 +113,7 @@ where
     }
 
     /// Poll the device endpoint smoltcp to trigger the iface
-    pub(crate) async fn poll_device_endpoint(&self) -> bool {
+    pub(crate) async fn poll_local_endpoint(&self) -> bool {
         self.local_endpoint.poll().await
     }
 
@@ -142,11 +125,11 @@ where
         )
     }
 
-    pub(crate) async fn device_endpoint_can_receive(&self) -> bool {
+    pub(crate) async fn local_endpoint_can_receive(&self) -> bool {
         self.local_endpoint.can_receive().await
     }
 
-    pub(crate) async fn device_endpoint_can_send(&self) -> bool {
+    pub(crate) async fn local_endpoint_can_send(&self) -> bool {
         self.local_endpoint.can_send().await
     }
 
@@ -183,7 +166,7 @@ where
         }
     }
 
-    pub(crate) async fn read_from_device_endpoint(&self, data: &mut [u8]) -> Result<usize> {
+    pub(crate) async fn read_from_local_endpoint(&self, data: &mut [u8]) -> Result<usize> {
         self.local_endpoint.receive(data).await
     }
 

@@ -46,7 +46,7 @@ where
     }
 
     pub(crate) async fn run(&mut self) -> Result<()> {
-        let mut device_file_read_buffer: [u8; 65536] = [0; 65536];
+        let mut device_file_read_buffer = [0u8; 65536];
         loop {
             let device_data = match {
                 let mut device_file_read = self.device_file_read.lock().await;
@@ -72,8 +72,7 @@ where
                     Arc::clone(&self.device_file_write),
                 )
                 .await?;
-                Self::read_from_device_endpoint(trans_id, Arc::clone(&transportation)).await;
-                transportation.notify_transfer_to_remote().await
+                Self::read_from_local_endpoint(trans_id, Arc::clone(&transportation)).await;
             }
         }
         Ok(())
@@ -152,7 +151,7 @@ where
         transportation_repository: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>,
     ) -> Result<()> {
         // Push any pending data back to device before destroying transportation.
-        Self::write_to_device_endpoint(transportation.clone()).await;
+        Self::write_to_local_endpoint(transportation.clone()).await;
         if let Err(e) = Self::write_to_device_file(trans_id, transportation.clone(), device_file_write).await {
             error!("<<<< Transportation {trans_id} fail to write pending data in smoltcp to device when destory because of error: {e:?}");
             return Err(e);
@@ -165,7 +164,7 @@ where
     }
 
     async fn write_to_device_file(trans_id: TransportationId, transportation: Arc<Transportation<'_>>, device_file_write: Arc<Mutex<File>>) -> Result<()> {
-        if transportation.poll_device_endpoint().await {
+        if transportation.poll_local_endpoint().await {
             while let Some(data_to_device) = transportation.pop_tx_from_device().await {
                 let log = log_ip_packet(&data_to_device);
                 debug!("<<<< Transportation {trans_id} write the tx to device:\n{log}\n",);
@@ -192,7 +191,7 @@ where
                 Arc::clone(&transportations),
             )
             .await?;
-            Self::write_to_device_endpoint(Arc::clone(&transportation)).await;
+            Self::write_to_local_endpoint(Arc::clone(&transportation)).await;
             Self::write_to_device_file(
                 trans_id,
                 Arc::clone(&transportation),
@@ -201,8 +200,7 @@ where
             .await?;
         }
         if ready.is_writable() {
-            Self::read_from_device_endpoint(trans_id, Arc::clone(&transportation)).await;
-            transportation.notify_transfer_to_remote().await
+            Self::read_from_local_endpoint(trans_id, Arc::clone(&transportation)).await;
         }
         if ready.is_read_closed() || ready.is_write_closed() {
             Self::destroy_transportation(trans_id, transportation, device_file_write, transportations).await?;
@@ -255,11 +253,11 @@ where
         Ok(())
     }
 
-    async fn read_from_device_endpoint(trans_id: TransportationId, transportation: Arc<Transportation<'_>>) {
+    async fn read_from_local_endpoint(trans_id: TransportationId, transportation: Arc<Transportation<'_>>) {
         let mut data: [u8; 65535] = [0; 65535];
 
-        while transportation.device_endpoint_can_receive().await {
-            match transportation.read_from_device_endpoint(&mut data).await {
+        while transportation.local_endpoint_can_receive().await {
+            match transportation.read_from_local_endpoint(&mut data).await {
                 Ok(0) => {
                     return;
                 }
@@ -267,7 +265,6 @@ where
                     transportation
                         .store_data_to_remote_buffer(&data[..data_len])
                         .await;
-                    transportation.notify_transfer_to_remote().await;
                 }
                 Err(error) => {
                     error!(">>>> Transportation {trans_id} fail to read device data because of error: {error:?}");
@@ -277,8 +274,8 @@ where
         }
     }
 
-    async fn write_to_device_endpoint(transportation: Arc<Transportation<'_>>) {
-        if transportation.device_endpoint_can_send().await {
+    async fn write_to_local_endpoint(transportation: Arc<Transportation<'_>>) {
+        if transportation.local_endpoint_can_send().await {
             transportation.transfer_device_buffer().await;
         }
     }

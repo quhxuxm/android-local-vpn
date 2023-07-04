@@ -34,26 +34,18 @@ impl RemoteEndpoint {
         remote_address: SocketAddr,
     ) -> Option<Self> {
         match transport_protocol {
-            TransportProtocol::Tcp => match internet_protocol {
-                InternetProtocol::Ipv4 => {
-                    let remote_tcp_socket = TcpSocket::new_v4().ok()?;
-                    let remote_tcp_socket_fd = remote_tcp_socket.as_raw_fd();
-                    protect_socket(remote_tcp_socket_fd).ok()?;
-                    Some(RemoteEndpoint::Tcp {
-                        tcp_stream: RwLock::new(remote_tcp_socket.connect(remote_address).await.ok()?),
-                        trans_id,
-                    })
-                }
-                InternetProtocol::Ipv6 => {
-                    let remote_tcp_socket = TcpSocket::new_v6().ok()?;
-                    let remote_tcp_socket_fd = remote_tcp_socket.as_raw_fd();
-                    protect_socket(remote_tcp_socket_fd).ok()?;
-                    Some(RemoteEndpoint::Tcp {
-                        tcp_stream: RwLock::new(remote_tcp_socket.connect(remote_address).await.ok()?),
-                        trans_id,
-                    })
-                }
-            },
+            TransportProtocol::Tcp => {
+                let remote_tcp_socket = match internet_protocol {
+                    InternetProtocol::Ipv4 => TcpSocket::new_v4().ok()?,
+                    InternetProtocol::Ipv6 => TcpSocket::new_v6().ok()?,
+                };
+                let remote_tcp_socket_fd = remote_tcp_socket.as_raw_fd();
+                protect_socket(remote_tcp_socket_fd).ok()?;
+                Some(RemoteEndpoint::Tcp {
+                    tcp_stream: RwLock::new(remote_tcp_socket.connect(remote_address).await.ok()?),
+                    trans_id,
+                })
+            }
             TransportProtocol::Udp => {
                 let remote_udp_socket = UdpSocket::bind("0.0.0.0:0").await.ok()?;
                 let remote_udp_socket_fd = remote_udp_socket.as_raw_fd();
