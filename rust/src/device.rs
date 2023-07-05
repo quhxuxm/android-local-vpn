@@ -10,15 +10,15 @@ use std::collections::VecDeque;
 use crate::transportation::TransportationId;
 
 #[derive(Debug)]
-pub(crate) struct PpaassVpnDevice {
+pub(crate) struct SmoltcpDevice {
     trans_id: TransportationId,
     rx_queue: VecDeque<Vec<u8>>,
     tx_queue: VecDeque<Vec<u8>>,
 }
 
-impl PpaassVpnDevice {
-    pub(crate) fn new(trans_id: TransportationId) -> PpaassVpnDevice {
-        PpaassVpnDevice {
+impl SmoltcpDevice {
+    pub(crate) fn new(trans_id: TransportationId) -> SmoltcpDevice {
+        SmoltcpDevice {
             trans_id,
             rx_queue: VecDeque::new(),
             tx_queue: VecDeque::new(),
@@ -34,7 +34,7 @@ impl PpaassVpnDevice {
     }
 }
 
-impl Device for PpaassVpnDevice {
+impl Device for SmoltcpDevice {
     type RxToken<'a> = RxToken where Self: 'a;
     type TxToken<'a> = TxToken<'a> where Self: 'a;
 

@@ -1,5 +1,5 @@
 use crate::{
-    device::PpaassVpnDevice,
+    device::SmoltcpDevice,
     transportation::{TransportProtocol, TransportationId},
 };
 
@@ -18,8 +18,10 @@ use anyhow::anyhow;
 use anyhow::Result;
 use smoltcp::socket::udp::{PacketBuffer as UdpSocketBuffer, PacketMetadata, Socket as UdpSocket};
 use smoltcp::wire::IpEndpoint;
-use std::{net::SocketAddr, sync::Arc};
+use std::{collections::VecDeque, future::Future, net::SocketAddr, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
+
+use super::RemoteEndpoint;
 
 pub struct LocalEndpoint<'buf> {
     socket_handle: SocketHandle,
@@ -27,8 +29,9 @@ pub struct LocalEndpoint<'buf> {
     local_endpoint: IpEndpoint,
     socketset: Arc<RwLock<SocketSet<'buf>>>,
     interface: Mutex<Interface>,
-    device: Mutex<PpaassVpnDevice>,
+    device: Mutex<SmoltcpDevice>,
     trans_id: TransportationId,
+    local_recv_buf: Arc<Mutex<VecDeque<u8>>>,
 }
 
 impl<'buf> LocalEndpoint<'buf> {
@@ -61,18 +64,19 @@ impl<'buf> LocalEndpoint<'buf> {
             socketset: Arc::new(RwLock::new(socketset)),
             interface: Mutex::new(interface),
             device: Mutex::new(device),
+            local_recv_buf: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
         };
 
         Some(socket)
     }
 
-    fn prepare_iface_and_device(trans_id: TransportationId) -> Result<(Interface, PpaassVpnDevice)> {
+    fn prepare_iface_and_device(trans_id: TransportationId) -> Result<(Interface, SmoltcpDevice)> {
         let mut routes = Routes::new();
         let default_gateway_ipv4 = Ipv4Address::new(0, 0, 0, 1);
         routes.add_default_ipv4_route(default_gateway_ipv4).unwrap();
         let mut interface_config = Config::default();
         interface_config.random_seed = rand::random::<u64>();
-        let mut vpn_device = PpaassVpnDevice::new(trans_id);
+        let mut vpn_device = SmoltcpDevice::new(trans_id);
         let mut interface = Interface::new(interface_config, &mut vpn_device);
         interface.set_any_ip(true);
         interface.update_ip_addrs(|ip_addrs| {
@@ -133,7 +137,7 @@ impl<'buf> LocalEndpoint<'buf> {
         Some(socket)
     }
 
-    pub async fn can_send(&self) -> bool {
+    pub async fn can_send_to_smoltcp(&self) -> bool {
         match self.transport_protocol {
             TransportProtocol::Tcp => {
                 let socketset = self.socketset.read().await;
@@ -148,7 +152,7 @@ impl<'buf> LocalEndpoint<'buf> {
         }
     }
 
-    pub async fn send(&self, data: &[u8]) -> Result<usize> {
+    pub async fn send_to_smoltcp(&self, data: &[u8]) -> Result<usize> {
         let trans_id = self.trans_id;
         match self.transport_protocol {
             TransportProtocol::Tcp => {
@@ -182,7 +186,7 @@ impl<'buf> LocalEndpoint<'buf> {
         }
     }
 
-    pub async fn can_receive(&self) -> bool {
+    pub async fn can_receive_from_smoltcp(&self) -> bool {
         match self.transport_protocol {
             TransportProtocol::Tcp => {
                 let socketset = self.socketset.read().await;
@@ -197,40 +201,47 @@ impl<'buf> LocalEndpoint<'buf> {
         }
     }
 
-    pub async fn receive(&self, data: &mut [u8]) -> Result<usize> {
+    pub async fn receive_from_smoltcp(&self) -> Result<()> {
         let trans_id = self.trans_id;
-        match self.transport_protocol {
-            TransportProtocol::Tcp => {
-                let mut socketset = self.socketset.write().await;
-                let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
-                let size = socket.recv_slice(data).map_err(|e| {
-                    error!(">>>> Transportation {trans_id} fail to receive tcp data from smoltcp stack because of error: {e:?}");
-                    anyhow!("{e:?}")
-                })?;
-                let data = &data[..size];
-                debug!(
-                    ">>>> Transportation {} receive tcp data from smoltcp stack: {}",
-                    self.trans_id,
-                    pretty_hex::pretty_hex(&data)
-                );
-                Ok(size)
-            }
-            TransportProtocol::Udp => {
-                let mut socketset = self.socketset.write().await;
-                let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
-                let size = socket.recv_slice(data).map(|r| r.0).map_err(|e| {
-                    error!(">>>> Transportation {trans_id} fail to receive udp data from smoltcp stack because of error: {e:?}");
-                    anyhow!("{e:?}")
-                })?;
-                let data = &data[..size];
-                debug!(
-                    ">>>> Transportation {} receive udp data from smoltcp stack: {}",
-                    self.trans_id,
-                    pretty_hex::pretty_hex(&data)
-                );
-                Ok(size)
+        while self.can_receive_from_smoltcp().await {
+            match self.transport_protocol {
+                TransportProtocol::Tcp => {
+                    let mut data = [0u8; 65536];
+                    let mut socketset = self.socketset.write().await;
+                    let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
+                    let size = socket.recv_slice(&mut data).map_err(|e| {
+                        error!(">>>> Transportation {trans_id} fail to receive tcp data from smoltcp stack because of error: {e:?}");
+                        anyhow!("{e:?}")
+                    })?;
+                    let data = &data[..size];
+                    debug!(
+                        ">>>> Transportation {} receive tcp data from smoltcp stack: {}",
+                        self.trans_id,
+                        pretty_hex::pretty_hex(&data)
+                    );
+                    let mut local_recv_buf = self.local_recv_buf.lock().await;
+                    local_recv_buf.extend(data);
+                }
+                TransportProtocol::Udp => {
+                    let mut data = [0u8; 65536];
+                    let mut socketset = self.socketset.write().await;
+                    let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
+                    let size = socket.recv_slice(&mut data).map(|r| r.0).map_err(|e| {
+                        error!(">>>> Transportation {trans_id} fail to receive udp data from smoltcp stack because of error: {e:?}");
+                        anyhow!("{e:?}")
+                    })?;
+                    let data = &data[..size];
+                    debug!(
+                        ">>>> Transportation {} receive udp data from smoltcp stack: {}",
+                        self.trans_id,
+                        pretty_hex::pretty_hex(&data)
+                    );
+                    let mut local_recv_buf = self.local_recv_buf.lock().await;
+                    local_recv_buf.extend(data);
+                }
             }
         }
+        Ok(())
     }
 
     pub async fn close(&self) {
@@ -263,5 +274,24 @@ impl<'buf> LocalEndpoint<'buf> {
     pub async fn pop_tx_from_device(&self) -> Option<Vec<u8>> {
         let mut device = self.device.lock().await;
         device.pop_tx()
+    }
+
+    pub(crate) async fn consume_local_recv_buf_with<F, Fut>(&self, mut consume_fn: F)
+    where
+        F: FnMut(&[u8]) -> Fut,
+        Fut: Future<Output = Result<usize>>,
+    {
+        let mut local_recv_buf = self.local_recv_buf.lock().await;
+        if local_recv_buf.is_empty() {
+            return;
+        }
+        match consume_fn(local_recv_buf.make_contiguous()).await {
+            Ok(consumed) => {
+                local_recv_buf.drain(..consumed);
+            }
+            Err(e) => {
+                error!(">>>> Fail to write local receive buffer data because of error: {e:?}")
+            }
+        }
     }
 }
