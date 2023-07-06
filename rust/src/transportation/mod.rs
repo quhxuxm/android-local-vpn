@@ -5,7 +5,7 @@ use endpoint::LocalEndpoint;
 use endpoint::RemoteEndpoint;
 use log::{debug, error};
 
-use std::{fs::File, io::Write, sync::Arc};
+use std::{fs::File, io::Write, sync::Arc, time::Duration};
 
 use anyhow::anyhow;
 use anyhow::Result;
@@ -56,15 +56,21 @@ where
             self.trans_id.destination,
         )
         .await
-        .ok_or(anyhow!("Fail to start remote endpoint."))?;
-        let connected_remote_endpoint = Arc::new(connected_remote_endpoint);
-        let mut remote_endpoint = self.remote_endpoint.lock().await;
+        .ok_or(anyhow!(
+            "Transportation {} fail to start remote endpoint.",
+            self.trans_id
+        ))?;
         connected_remote_endpoint.start_read_remote();
-        *remote_endpoint = Some(connected_remote_endpoint);
+
+        {
+            let mut remote_endpoint = self.remote_endpoint.lock().await;
+            *remote_endpoint = Some(Arc::new(connected_remote_endpoint));
+        }
         loop {
             self.consume_remote_recv_buf().await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        Ok(())
+        // Ok(())
     }
 
     /// Poll the device endpoint smoltcp to trigger the iface
