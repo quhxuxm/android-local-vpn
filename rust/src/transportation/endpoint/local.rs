@@ -19,7 +19,10 @@ use anyhow::Result;
 use smoltcp::socket::udp::{PacketBuffer as UdpSocketBuffer, PacketMetadata, Socket as UdpSocket};
 use smoltcp::wire::IpEndpoint;
 use std::{collections::VecDeque, future::Future, net::SocketAddr, sync::Arc};
-use tokio::sync::{Mutex, RwLock};
+use tokio::{
+    io::AsyncWrite,
+    sync::{Mutex, RwLock},
+};
 
 use super::RemoteEndpoint;
 
@@ -276,16 +279,22 @@ impl<'buf> LocalEndpoint<'buf> {
         device.pop_tx()
     }
 
-    pub(crate) async fn consume_local_recv_buf_with<F, Fut>(&self, mut consume_fn: F)
+    pub(crate) async fn consume_local_recv_buf_with<F, Fut>(&self, trans_id: TransportationId, remote_endpoint: Arc<RemoteEndpoint>, mut consume_fn: F)
     where
-        F: FnMut(&[u8]) -> Fut,
+        F: FnMut(TransportationId, Arc<RemoteEndpoint>, Vec<u8>) -> Fut,
         Fut: Future<Output = Result<usize>>,
     {
         let mut local_recv_buf = self.local_recv_buf.lock().await;
         if local_recv_buf.is_empty() {
             return;
         }
-        match consume_fn(local_recv_buf.make_contiguous()).await {
+        match consume_fn(
+            trans_id,
+            remote_endpoint,
+            local_recv_buf.make_contiguous().to_vec(),
+        )
+        .await
+        {
             Ok(consumed) => {
                 local_recv_buf.drain(..consumed);
             }

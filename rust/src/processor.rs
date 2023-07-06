@@ -77,7 +77,7 @@ where
                 };
                 // Read data from smoltcp and store to the local receive buffer
                 transportation.receive_from_local_endpoint().await?;
-                transportation.consume_local_recv_buf_with().await;
+                transportation.consume_local_recv_buf().await;
             }
         }
         Ok(())
@@ -90,7 +90,7 @@ where
             Entry::Occupied(entry) => Some(entry.get().clone()),
             Entry::Vacant(entry) => {
                 debug!(">>>> Transportation {trans_id} not exist in repository create a new one.");
-                let transportation = Transportation::new(trans_id)?;
+                let transportation = Transportation::new(trans_id, Arc::clone(&self.client_file_write))?;
                 entry.insert(Arc::clone(&transportation));
                 let transportation_for_remote = Arc::clone(&transportation);
                 tokio::spawn(async move {

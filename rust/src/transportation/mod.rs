@@ -1,4 +1,3 @@
-mod buffers;
 mod endpoint;
 mod value;
 
@@ -6,13 +5,13 @@ use endpoint::LocalEndpoint;
 use endpoint::RemoteEndpoint;
 use log::{debug, error};
 
-use buffers::Buffer;
-
-use std::{future::Future, sync::Arc};
+use std::{fs::File, io::Write, sync::Arc};
 
 use anyhow::anyhow;
 use anyhow::Result;
 use tokio::sync::Mutex;
+
+use crate::util::log_ip_packet;
 
 pub(crate) use self::value::InternetProtocol;
 pub(crate) use self::value::TransportProtocol;
@@ -25,18 +24,14 @@ where
     trans_id: TransportationId,
     local_endpoint: Arc<LocalEndpoint<'buf>>,
     remote_endpoint: Mutex<Option<Arc<RemoteEndpoint>>>,
-    buffer: Arc<Buffer>,
+    client_file_write: Arc<Mutex<File>>,
 }
 
 impl<'buf> Transportation<'buf>
 where
     'buf: 'static,
 {
-    pub(crate) fn new(trans_id: TransportationId) -> Option<Arc<Transportation<'buf>>> {
-        let buffer = match trans_id.transport_protocol {
-            TransportProtocol::Tcp => Arc::new(Buffer::new_tcp_buffer()),
-            TransportProtocol::Udp => Arc::new(Buffer::new_udp_buffer()),
-        };
+    pub(crate) fn new(trans_id: TransportationId, client_file_write: Arc<Mutex<File>>) -> Option<Arc<Transportation<'buf>>> {
         let transportation = Transportation {
             trans_id,
             local_endpoint: Arc::new(LocalEndpoint::new(
@@ -46,7 +41,7 @@ where
                 trans_id.destination,
             )?),
             remote_endpoint: Mutex::new(None),
-            buffer,
+            client_file_write,
         };
 
         debug!(">>>> Transportation {trans_id} created.");
@@ -64,8 +59,11 @@ where
         .ok_or(anyhow!("Fail to start remote endpoint."))?;
         let connected_remote_endpoint = Arc::new(connected_remote_endpoint);
         let mut remote_endpoint = self.remote_endpoint.lock().await;
-        connected_remote_endpoint.start();
+        connected_remote_endpoint.start_read_remote();
         *remote_endpoint = Some(connected_remote_endpoint);
+        loop {
+            self.consume_remote_recv_buf().await;
+        }
         Ok(())
     }
 
@@ -127,16 +125,61 @@ where
         let remote_endpoint = self.remote_endpoint.lock().await;
         if let Some(remote_endpoint) = &*remote_endpoint {
             self.local_endpoint
-                .consume_local_recv_buf_with(Self::consume_local_recv_buf_fn)
+                .consume_local_recv_buf_with(
+                    self.trans_id,
+                    Arc::clone(remote_endpoint),
+                    Self::consume_local_recv_buf_fn,
+                )
                 .await
         }
     }
 
-    async fn consume_local_recv_buf_fn(data: &[u8]) -> Result<usize> {
-        todo!()
+    async fn consume_local_recv_buf_fn(trans_id: TransportationId, remote_endpont: Arc<RemoteEndpoint>, data: Vec<u8>) -> Result<usize> {
+        debug!(
+            ">>>> Transportation {trans_id} begin write data to remote: {}",
+            pretty_hex::pretty_hex(&data)
+        );
+        let remote_write_result = remote_endpont.write_to_remote(&data).await;
+        debug!(">>>> Transportation {trans_id} complete to write data to remote",);
+        remote_write_result
     }
 
-    pub(crate) async fn write_to_remote(remote_endpoint: Arc<RemoteEndpoint>, data: &[u8]) {
-        remote_endpoint.write_to_remote(data).await;
+    pub(crate) async fn consume_remote_recv_buf(&self) {
+        let remote_endpoint = self.remote_endpoint.lock().await;
+        if let Some(remote_endpoint) = &*remote_endpoint {
+            remote_endpoint
+                .consume_remote_recv_buf_with(
+                    self.trans_id,
+                    Arc::clone(&self.client_file_write),
+                    Arc::clone(&self.local_endpoint),
+                    Self::consume_remote_recv_buf_fn,
+                )
+                .await
+        }
+    }
+
+    async fn consume_remote_recv_buf_fn(
+        trans_id: TransportationId,
+        client_file_write: Arc<Mutex<File>>,
+        local_endpoint: Arc<LocalEndpoint<'_>>,
+        data: Vec<u8>,
+    ) -> Result<usize> {
+        debug!(
+            "<<<< Transportation {trans_id} begin write data to client: {}",
+            pretty_hex::pretty_hex(&data)
+        );
+        let local_write_result = local_endpoint.send_to_smoltcp(&data).await;
+
+        if local_endpoint.poll().await {
+            while let Some(data_to_client) = local_endpoint.pop_tx_from_device().await {
+                let log = log_ip_packet(&data_to_client);
+                debug!("<<<< Transportation {trans_id} write the tx to client:\n{log}\n",);
+                let mut client_file_write = client_file_write.lock().await;
+                client_file_write.write_all(&data_to_client)?;
+            }
+        }
+
+        debug!("<<<< Transportation {trans_id} complete to write data to client",);
+        local_write_result
     }
 }

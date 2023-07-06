@@ -6,9 +6,11 @@ use anyhow::anyhow;
 use log::{debug, error};
 
 use anyhow::Result;
-use std::sync::Arc;
-use std::{collections::VecDeque, os::unix::io::AsRawFd};
+
+use std::{collections::VecDeque, fs::File, os::unix::io::AsRawFd};
 use std::{future::Future, net::SocketAddr};
+
+use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
@@ -17,6 +19,8 @@ use tokio::{
     },
     sync::Mutex,
 };
+
+use super::LocalEndpoint;
 
 pub(crate) enum RemoteEndpoint {
     Tcp {
@@ -70,7 +74,7 @@ impl RemoteEndpoint {
         }
     }
 
-    pub(crate) fn start(&self) {
+    pub(crate) fn start_read_remote(&self) {
         match self {
             RemoteEndpoint::Tcp {
                 tcp_read,
@@ -78,6 +82,7 @@ impl RemoteEndpoint {
                 trans_id,
                 ..
             } => {
+                let trans_id = *trans_id;
                 let tcp_read = Arc::clone(tcp_read);
                 let rx_buffer = Arc::clone(remote_recv_buf);
                 tokio::spawn(async move {
@@ -94,7 +99,7 @@ impl RemoteEndpoint {
                                 rx_buffer.extend(data);
                             }
                             Err(e) => {
-                                error!("Fail to read remote endpoint tcp data because of error: {e:?}");
+                                error!("<<<< Transportation {trans_id} fail to read remote endpoint tcp data because of error: {e:?}");
                                 break;
                             }
                         };
@@ -107,6 +112,7 @@ impl RemoteEndpoint {
                 remote_recv_buf,
                 ..
             } => {
+                let trans_id = *trans_id;
                 let udp_socket = Arc::clone(udp_socket);
                 let rx_buffer = Arc::clone(remote_recv_buf);
                 tokio::spawn(async move {
@@ -118,7 +124,7 @@ impl RemoteEndpoint {
                             rx_buffer.push_back(data.to_vec());
                         }
                         Err(e) => {
-                            error!("Fail to read remote endpoint udp data because of error: {e:?}");
+                            error!("<<<< Transportation {trans_id} fail to read remote endpoint udp data because of error: {e:?}");
                         }
                     };
                 });
@@ -173,9 +179,14 @@ impl RemoteEndpoint {
         }
     }
 
-    pub(crate) async fn consume_remote_recv_buf_with<F, Fut>(&self, mut consume_fn: F)
-    where
-        F: FnMut(&mut [u8]) -> Fut,
+    pub(crate) async fn consume_remote_recv_buf_with<'buf, F, Fut>(
+        &self,
+        trans_id: TransportationId,
+        client_file_write: Arc<Mutex<File>>,
+        local_endpoint: Arc<LocalEndpoint<'buf>>,
+        mut consume_fn: F,
+    ) where
+        F: FnMut(TransportationId, Arc<Mutex<File>>, Arc<LocalEndpoint<'buf>>, Vec<u8>) -> Fut,
         Fut: Future<Output = Result<usize>>,
     {
         match self {
@@ -186,7 +197,14 @@ impl RemoteEndpoint {
                 if remote_recv_buf.is_empty() {
                     return;
                 }
-                match consume_fn(remote_recv_buf.make_contiguous()).await {
+                match consume_fn(
+                    trans_id,
+                    client_file_write,
+                    local_endpoint,
+                    remote_recv_buf.make_contiguous().to_vec(),
+                )
+                .await
+                {
                     Ok(consumed) => {
                         remote_recv_buf.drain(..consumed);
                     }
@@ -205,7 +223,14 @@ impl RemoteEndpoint {
                 let mut consumed: usize = 0;
                 // write udp packets one by one
                 for datagram in remote_recv_buf.make_contiguous() {
-                    if let Err(e) = consume_fn(&mut datagram[..]).await {
+                    if let Err(e) = consume_fn(
+                        trans_id,
+                        Arc::clone(&client_file_write),
+                        Arc::clone(&local_endpoint),
+                        datagram.to_owned(),
+                    )
+                    .await
+                    {
                         error!(">>>> Fail to consume remote receive buffer data for udp because of error: {e:?}");
                         break;
                     }
