@@ -30,7 +30,7 @@ pub struct LocalEndpoint<'buf> {
     socket_handle: SocketHandle,
     transport_protocol: TransportProtocol,
     local_endpoint: IpEndpoint,
-    socketset: Arc<RwLock<SocketSet<'buf>>>,
+    socketset: Arc<Mutex<SocketSet<'buf>>>,
     interface: Mutex<Interface>,
     device: Mutex<SmoltcpDevice>,
     trans_id: TransportationId,
@@ -64,7 +64,7 @@ impl<'buf> LocalEndpoint<'buf> {
             socket_handle,
             transport_protocol,
             local_endpoint,
-            socketset: Arc::new(RwLock::new(socketset)),
+            socketset: Arc::new(Mutex::new(socketset)),
             interface: Mutex::new(interface),
             device: Mutex::new(device),
             local_recv_buf: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
@@ -143,12 +143,12 @@ impl<'buf> LocalEndpoint<'buf> {
     pub async fn can_send_to_smoltcp(&self) -> bool {
         match self.transport_protocol {
             TransportProtocol::Tcp => {
-                let socketset = self.socketset.read().await;
+                let socketset = self.socketset.lock().await;
                 let socket = socketset.get::<TcpSocket>(self.socket_handle);
                 socket.may_send()
             }
             TransportProtocol::Udp => {
-                let socketset = self.socketset.read().await;
+                let socketset = self.socketset.lock().await;
                 let socket = socketset.get::<UdpSocket>(self.socket_handle);
                 socket.can_send()
             }
@@ -159,7 +159,7 @@ impl<'buf> LocalEndpoint<'buf> {
         let trans_id = self.trans_id;
         match self.transport_protocol {
             TransportProtocol::Tcp => {
-                let mut socketset = self.socketset.write().await;
+                let mut socketset = self.socketset.lock().await;
                 let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
                 debug!(
                     "<<<< Transportation {trans_id} send tcp data to smoltcp stack: {}",
@@ -171,7 +171,7 @@ impl<'buf> LocalEndpoint<'buf> {
                 })
             }
             TransportProtocol::Udp => {
-                let mut socketset = self.socketset.write().await;
+                let mut socketset = self.socketset.lock().await;
                 let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
                 debug!(
                     "<<<< Transportation {} send udp data to smoltcp stack: {}",
@@ -192,12 +192,12 @@ impl<'buf> LocalEndpoint<'buf> {
     pub async fn can_receive_from_smoltcp(&self) -> bool {
         match self.transport_protocol {
             TransportProtocol::Tcp => {
-                let socketset = self.socketset.read().await;
+                let socketset = self.socketset.lock().await;
                 let socket = socketset.get::<TcpSocket>(self.socket_handle);
                 socket.can_recv()
             }
             TransportProtocol::Udp => {
-                let socketset = self.socketset.read().await;
+                let socketset = self.socketset.lock().await;
                 let socket = socketset.get::<UdpSocket>(self.socket_handle);
                 socket.can_recv()
             }
@@ -210,12 +210,14 @@ impl<'buf> LocalEndpoint<'buf> {
             match self.transport_protocol {
                 TransportProtocol::Tcp => {
                     let mut data = [0u8; 65536];
-                    let mut socketset = self.socketset.write().await;
-                    let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
-                    let size = socket.recv_slice(&mut data).map_err(|e| {
-                        error!(">>>> Transportation {trans_id} fail to receive tcp data from smoltcp stack because of error: {e:?}");
-                        anyhow!("{e:?}")
-                    })?;
+                    let size = {
+                        let mut socketset = self.socketset.lock().await;
+                        let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
+                        socket.recv_slice(&mut data).map_err(|e| {
+                            error!(">>>> Transportation {trans_id} fail to receive tcp data from smoltcp stack because of error: {e:?}");
+                            anyhow!("{e:?}")
+                        })?
+                    };
                     let data = &data[..size];
                     debug!(
                         ">>>> Transportation {} receive tcp data from smoltcp stack: {}",
@@ -227,12 +229,14 @@ impl<'buf> LocalEndpoint<'buf> {
                 }
                 TransportProtocol::Udp => {
                     let mut data = [0u8; 65536];
-                    let mut socketset = self.socketset.write().await;
-                    let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
-                    let size = socket.recv_slice(&mut data).map(|r| r.0).map_err(|e| {
-                        error!(">>>> Transportation {trans_id} fail to receive udp data from smoltcp stack because of error: {e:?}");
-                        anyhow!("{e:?}")
-                    })?;
+                    let size = {
+                        let mut socketset = self.socketset.lock().await;
+                        let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
+                        socket.recv_slice(&mut data).map(|r| r.0).map_err(|e| {
+                            error!(">>>> Transportation {trans_id} fail to receive udp data from smoltcp stack because of error: {e:?}");
+                            anyhow!("{e:?}")
+                        })?
+                    };
                     let data = &data[..size];
                     debug!(
                         ">>>> Transportation {} receive udp data from smoltcp stack: {}",
@@ -250,12 +254,12 @@ impl<'buf> LocalEndpoint<'buf> {
     pub async fn close(&self) {
         match self.transport_protocol {
             TransportProtocol::Tcp => {
-                let mut socketset = self.socketset.write().await;
+                let mut socketset = self.socketset.lock().await;
                 let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
                 socket.close();
             }
             TransportProtocol::Udp => {
-                let mut socketset = self.socketset.write().await;
+                let mut socketset = self.socketset.lock().await;
                 let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
                 socket.close();
             }
@@ -265,7 +269,7 @@ impl<'buf> LocalEndpoint<'buf> {
     pub async fn poll(&self) -> bool {
         let mut interface = self.interface.lock().await;
         let mut device = self.device.lock().await;
-        let mut socketset = self.socketset.write().await;
+        let mut socketset = self.socketset.lock().await;
         interface.poll(Instant::now(), &mut *device, &mut socketset)
     }
 
