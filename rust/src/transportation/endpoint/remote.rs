@@ -7,7 +7,7 @@ use log::{debug, error};
 
 use anyhow::Result;
 
-use std::{collections::VecDeque, fs::File, os::unix::io::AsRawFd};
+use std::{collections::VecDeque, fs::File, io::ErrorKind, os::unix::io::AsRawFd, time::Duration};
 use std::{future::Future, net::SocketAddr};
 
 use std::sync::Arc;
@@ -88,8 +88,11 @@ impl RemoteEndpoint {
                 tokio::spawn(async move {
                     let mut data = [0u8; 65536];
                     loop {
-                        let mut tcp_read = tcp_read.lock().await;
-                        match tcp_read.read(&mut data).await {
+                        let read_result = {
+                            let tcp_read = tcp_read.lock().await;
+                            tcp_read.try_read(&mut data)
+                        };
+                        match read_result {
                             Ok(0) => {
                                 break;
                             }
@@ -99,6 +102,10 @@ impl RemoteEndpoint {
                                 rx_buffer.extend(data);
                             }
                             Err(e) => {
+                                if e.kind() == ErrorKind::WouldBlock {
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                    continue;
+                                }
                                 error!("<<<< Transportation {trans_id} fail to read remote endpoint tcp data because of error: {e:?}");
                                 break;
                             }
