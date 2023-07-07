@@ -1,6 +1,6 @@
 use crate::{
     protect_socket,
-    transportation::{InternetProtocol, TransportProtocol, Transportation, TransportationId},
+    transportation::{InternetProtocol, TransportProtocol, TransportationId},
 };
 use anyhow::anyhow;
 use log::{debug, error};
@@ -8,7 +8,7 @@ use log::{debug, error};
 use anyhow::Result;
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     fs::File,
     os::unix::io::AsRawFd,
     sync::Arc,
@@ -23,6 +23,7 @@ use tokio::{
     },
     sync::{Mutex, Notify},
 };
+use crate::types::TransportationsRepository;
 
 use super::LocalEndpoint;
 
@@ -57,7 +58,13 @@ impl RemoteEndpoint {
                 };
                 let remote_tcp_socket_fd = remote_tcp_socket.as_raw_fd();
                 protect_socket(remote_tcp_socket_fd).ok()?;
-                let tcp_stream = remote_tcp_socket.connect(remote_address).await.ok()?;
+                let tcp_stream = match remote_tcp_socket.connect(remote_address).await{
+                    Ok(tcp_stream) => tcp_stream,
+                    Err(e) => {
+                        error!(">>>> Transportation {trans_id} fail to connect remote address [{remote_address}] in tcp because of error: {e:}");
+                        return None;
+                    }
+                };
                 let (tcp_read, tcp_write) = tcp_stream.into_split();
                 Some(RemoteEndpoint::Tcp {
                     tcp_read: Arc::new(Mutex::new(tcp_read)),
@@ -71,7 +78,10 @@ impl RemoteEndpoint {
                 let remote_udp_socket = UdpSocket::bind("0.0.0.0:0").await.ok()?;
                 let remote_udp_socket_fd = remote_udp_socket.as_raw_fd();
                 protect_socket(remote_udp_socket_fd).ok()?;
-                remote_udp_socket.connect(remote_address).await.ok()?;
+                if let Err(e) = remote_udp_socket.connect(remote_address).await{
+                    error!(">>>> Transportation {trans_id} fail to connect remote address [{remote_address}] in udp because of error: {e:}");
+                    return  None
+                };
                 Some(RemoteEndpoint::Udp {
                     udp_socket: Arc::new(remote_udp_socket),
                     remote_recv_buf: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
@@ -95,7 +105,7 @@ impl RemoteEndpoint {
         }
     }
 
-    pub(crate) fn start_read_remote(&self, transportations: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>) {
+    pub(crate) fn start_read_remote(&self, transportations: TransportationsRepository<'_>) {
         match self {
             RemoteEndpoint::Tcp {
                 tcp_read,
@@ -273,7 +283,7 @@ impl RemoteEndpoint {
                         remote_recv_buf.drain(..consumed);
                     }
                     Err(e) => {
-                        error!(">>>> Fail to consume remote receive buffer data for tcp because of error: {e:?}");
+                        error!(">>>> Transportation {trans_id} fail to consume remote receive buffer data for tcp because of error: {e:?}");
                     }
                 }
             }
@@ -295,7 +305,7 @@ impl RemoteEndpoint {
                     )
                     .await
                     {
-                        error!(">>>> Fail to consume remote receive buffer data for udp because of error: {e:?}");
+                        error!(">>>> Transportation {trans_id} fail to consume remote receive buffer data for udp because of error: {e:?}");
                         break;
                     }
                     consumed += 1;

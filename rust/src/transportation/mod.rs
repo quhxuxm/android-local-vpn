@@ -19,6 +19,7 @@ use std::{
 use anyhow::anyhow;
 use anyhow::Result;
 use tokio::sync::Mutex;
+use crate::types::TransportationsRepository;
 
 use crate::util::log_ip_packet;
 
@@ -59,7 +60,7 @@ where
         Some(Arc::new(transportation))
     }
 
-    pub(crate) async fn start_remote_endpoint(&self, transportations: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'buf>>>>>) -> Result<()> {
+    pub(crate) async fn start_remote_endpoint(&self, transportations: TransportationsRepository<'buf>) -> Result<()> {
         let connected_remote_endpoint = RemoteEndpoint::new(
             self.trans_id,
             self.trans_id.transport_protocol,
@@ -68,7 +69,7 @@ where
         )
         .await
         .ok_or(anyhow!(
-            "Transportation {} fail to start remote endpoint.",
+            ">>>> Transportation {} fail to start remote endpoint.",
             self.trans_id
         ))?;
         connected_remote_endpoint.start_read_remote(transportations);
@@ -84,6 +85,15 @@ where
                 );
                 break;
             }
+            let remote_endpoint = {
+                let remote_endpoint = self.remote_endpoint.lock().await;
+                if let Some(remote_endpoint) = &*remote_endpoint {
+                    Arc::clone(remote_endpoint)
+                } else {
+                    break;
+                }
+            };
+            remote_endpoint.waiting_for_consume_notify().await;
             self.consume_remote_recv_buf().await;
         }
         Ok(())
@@ -157,7 +167,6 @@ where
                 return;
             }
         };
-        remote_endpoint.waiting_for_consume_notify().await;
         remote_endpoint
             .consume_remote_recv_buf_with(
                 self.trans_id,

@@ -14,21 +14,23 @@ use std::{
     io::{Read, Write},
     sync::Arc,
 };
-use std::{collections::HashMap, fs::File};
+use std::fs::File;
+use super::types::TransportationsRepository;
 
 pub(crate) struct TransportationProcessor<'buf>
-where
-    'buf: 'static,
+    where
+        'buf: 'static,
 {
     client_file_read: Arc<Mutex<File>>,
     client_file_write: Arc<Mutex<File>>,
-    transportations: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'buf>>>>>,
+    transportations: TransportationsRepository<'buf>,
     stop_receiver: Receiver<bool>,
 }
 
+
 impl<'buf> TransportationProcessor<'buf>
-where
-    'buf: 'static,
+    where
+        'buf: 'static,
 {
     pub(crate) fn new(client_file_descriptor: i32, stop_receiver: Receiver<bool>) -> Result<Self> {
         let client_file = unsafe { File::from_raw_fd(client_file_descriptor) };
@@ -103,9 +105,11 @@ where
                         error!(">>>> Transportation {trans_id} fail connect to remote endpoint because of error: {e:?}");
                         let mut transportations_for_remote = transportations_for_remote.lock().await;
                         transportations_for_remote.remove(&trans_id);
+                        return;
                     };
+                    let mut transportations_for_remote = transportations_for_remote.lock().await;
+                    transportations_for_remote.insert(trans_id, transportation_for_remote);
                 });
-                entry.insert(Arc::clone(&transportation));
                 Some(transportation)
             }
         }
