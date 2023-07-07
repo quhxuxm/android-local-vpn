@@ -5,7 +5,16 @@ use endpoint::LocalEndpoint;
 use endpoint::RemoteEndpoint;
 use log::debug;
 
-use std::{collections::HashMap, fs::File, io::Write, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::Write,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use anyhow::anyhow;
 use anyhow::Result;
@@ -25,6 +34,7 @@ where
     local_endpoint: Arc<LocalEndpoint<'buf>>,
     remote_endpoint: Mutex<Option<Arc<RemoteEndpoint>>>,
     client_file_write: Arc<Mutex<File>>,
+    closed: AtomicBool,
 }
 
 impl<'buf> Transportation<'buf>
@@ -42,6 +52,7 @@ where
             )?),
             remote_endpoint: Mutex::new(None),
             client_file_write,
+            closed: AtomicBool::new(false),
         };
 
         debug!(">>>> Transportation {trans_id} created.");
@@ -66,9 +77,16 @@ where
             *remote_endpoint = Some(Arc::new(connected_remote_endpoint));
         }
         loop {
+            if self.closed.load(Ordering::Relaxed) {
+                debug!(
+                    "Transportation {} closed break the consume remote receive buffer loop.",
+                    self.trans_id
+                );
+                break;
+            }
             self.consume_remote_recv_buf().await;
         }
-        // Ok(())
+        Ok(())
     }
 
     /// Poll the device endpoint smoltcp to trigger the iface
@@ -95,6 +113,7 @@ where
     pub(crate) async fn close_local_endpoint(&self) {
         self.consume_remote_recv_buf().await;
         self.local_endpoint.close().await;
+        self.closed.swap(true, Ordering::Relaxed);
         debug!(
             ">>>> Transportation {} close device endpoint.",
             self.trans_id
