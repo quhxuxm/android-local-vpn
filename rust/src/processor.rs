@@ -6,7 +6,9 @@ use log::{debug, error};
 
 use tokio::sync::{oneshot::Receiver, Mutex};
 
+use super::types::TransportationsRepository;
 use anyhow::Result;
+use std::fs::File;
 use std::io::ErrorKind;
 use std::os::unix::io::FromRawFd;
 use std::{
@@ -14,12 +16,10 @@ use std::{
     io::{Read, Write},
     sync::Arc,
 };
-use std::fs::File;
-use super::types::TransportationsRepository;
 
 pub(crate) struct TransportationProcessor<'buf>
-    where
-        'buf: 'static,
+where
+    'buf: 'static,
 {
     client_file_read: Arc<Mutex<File>>,
     client_file_write: Arc<Mutex<File>>,
@@ -27,10 +27,9 @@ pub(crate) struct TransportationProcessor<'buf>
     stop_receiver: Receiver<bool>,
 }
 
-
 impl<'buf> TransportationProcessor<'buf>
-    where
-        'buf: 'static,
+where
+    'buf: 'static,
 {
     pub(crate) fn new(client_file_descriptor: i32, stop_receiver: Receiver<bool>) -> Result<Self> {
         let client_file = unsafe { File::from_raw_fd(client_file_descriptor) };
@@ -92,23 +91,23 @@ impl<'buf> TransportationProcessor<'buf>
 
         match transportations.entry(trans_id) {
             Entry::Occupied(entry) => Some(entry.get().clone()),
-            Entry::Vacant(entry) => {
+            Entry::Vacant(_) => {
                 debug!(">>>> Transportation {trans_id} not exist in repository create a new one.");
                 let transportation = Transportation::new(trans_id, Arc::clone(&self.client_file_write))?;
                 let transportation_for_remote = Arc::clone(&transportation);
                 tokio::spawn(async move {
                     // Spawn a task for transportation
+                    transportations_for_remote
+                        .lock()
+                        .await
+                        .insert(trans_id, Arc::clone(&transportation_for_remote));
                     if let Err(e) = transportation_for_remote
                         .start_remote_endpoint(Arc::clone(&transportations_for_remote))
                         .await
                     {
                         error!(">>>> Transportation {trans_id} fail connect to remote endpoint because of error: {e:?}");
-                        let mut transportations_for_remote = transportations_for_remote.lock().await;
-                        transportations_for_remote.remove(&trans_id);
                         return;
                     };
-                    let mut transportations_for_remote = transportations_for_remote.lock().await;
-                    transportations_for_remote.insert(trans_id, transportation_for_remote);
                 });
                 Some(transportation)
             }

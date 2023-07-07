@@ -16,10 +16,10 @@ use std::{
     time::Duration,
 };
 
+use crate::types::TransportationsRepository;
 use anyhow::anyhow;
 use anyhow::Result;
 use tokio::sync::Mutex;
-use crate::types::TransportationsRepository;
 
 use crate::util::log_ip_packet;
 
@@ -77,6 +77,7 @@ where
             let mut remote_endpoint = self.remote_endpoint.lock().await;
             *remote_endpoint = Some(Arc::new(connected_remote_endpoint));
         }
+
         loop {
             if self.closed.load(Ordering::Relaxed) {
                 debug!(
