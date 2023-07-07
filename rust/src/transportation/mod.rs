@@ -3,9 +3,9 @@ mod value;
 
 use endpoint::LocalEndpoint;
 use endpoint::RemoteEndpoint;
-use log::{debug, error};
+use log::debug;
 
-use std::{fs::File, io::Write, sync::Arc, time::Duration};
+use std::{collections::HashMap, fs::File, io::Write, sync::Arc, time::Duration};
 
 use anyhow::anyhow;
 use anyhow::Result;
@@ -48,7 +48,7 @@ where
         Some(Arc::new(transportation))
     }
 
-    pub(crate) async fn start_remote_endpoint(&self) -> Result<()> {
+    pub(crate) async fn start_remote_endpoint(&self, transportations: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'buf>>>>>) -> Result<()> {
         let connected_remote_endpoint = RemoteEndpoint::new(
             self.trans_id,
             self.trans_id.transport_protocol,
@@ -60,15 +60,13 @@ where
             "Transportation {} fail to start remote endpoint.",
             self.trans_id
         ))?;
-        connected_remote_endpoint.start_read_remote();
-
+        connected_remote_endpoint.start_read_remote(transportations);
         {
             let mut remote_endpoint = self.remote_endpoint.lock().await;
             *remote_endpoint = Some(Arc::new(connected_remote_endpoint));
         }
         loop {
             self.consume_remote_recv_buf().await;
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
         // Ok(())
     }
@@ -76,39 +74,6 @@ where
     /// Poll the device endpoint smoltcp to trigger the iface
     pub(crate) async fn poll_local_endpoint(&self) -> bool {
         self.local_endpoint.poll().await
-    }
-
-    pub(crate) async fn close_local_endpoint(&self) {
-        self.local_endpoint.close().await;
-        debug!(
-            ">>>> Transportation {} close device endpoint.",
-            self.trans_id
-        )
-    }
-
-    pub(crate) async fn local_endpoint_can_receive(&self) -> bool {
-        self.local_endpoint.can_receive_from_smoltcp().await
-    }
-
-    pub(crate) async fn local_endpoint_can_send(&self) -> bool {
-        self.local_endpoint.can_send_to_smoltcp().await
-    }
-
-    pub(crate) async fn close_remote_endpoint(&self) -> Result<()> {
-        if let Some(remote_endpoint) = self.remote_endpoint.lock().await.as_ref() {
-            debug!(
-                ">>>> Transportation {} close remote endpoint.",
-                self.trans_id
-            );
-            if let Err(e) = remote_endpoint.close().await {
-                error!(
-                    "<<<< Transportation {} fail to close remote endpoint because of error: {e:?}",
-                    self.trans_id
-                );
-            };
-        }
-
-        Ok(())
     }
 
     pub(crate) async fn push_rx_to_smoltcp_device(&self, rx_data: Vec<u8>) {
@@ -127,20 +92,34 @@ where
         self.trans_id
     }
 
-    pub(crate) async fn consume_local_recv_buf(&self) {
-        let remote_endpoint = self.remote_endpoint.lock().await;
-        if let Some(remote_endpoint) = &*remote_endpoint {
-            self.local_endpoint
-                .consume_local_recv_buf_with(
-                    self.trans_id,
-                    Arc::clone(remote_endpoint),
-                    Self::consume_local_recv_buf_fn,
-                )
-                .await
-        }
+    pub(crate) async fn close_local_endpoint(&self) {
+        self.consume_remote_recv_buf().await;
+        self.local_endpoint.close().await;
+        debug!(
+            ">>>> Transportation {} close device endpoint.",
+            self.trans_id
+        )
     }
 
-    async fn consume_local_recv_buf_fn(trans_id: TransportationId, remote_endpont: Arc<RemoteEndpoint>, data: Vec<u8>) -> Result<usize> {
+    pub(crate) async fn transfer_local_recv_buf_to_remote(&self) {
+        let remote_endpoint = {
+            let remote_endpoint = self.remote_endpoint.lock().await;
+            if let Some(remote_endpoint) = &*remote_endpoint {
+                Arc::clone(remote_endpoint)
+            } else {
+                return;
+            }
+        };
+        self.local_endpoint
+            .consume_local_recv_buf_with(
+                self.trans_id,
+                remote_endpoint,
+                Self::concrete_transfer_to_remote_fn,
+            )
+            .await
+    }
+
+    async fn concrete_transfer_to_remote_fn(trans_id: TransportationId, remote_endpont: Arc<RemoteEndpoint>, data: Vec<u8>) -> Result<usize> {
         debug!(
             ">>>> Transportation {trans_id} begin write data to remote: {}",
             pretty_hex::pretty_hex(&data)
@@ -151,17 +130,23 @@ where
     }
 
     pub(crate) async fn consume_remote_recv_buf(&self) {
-        let remote_endpoint = self.remote_endpoint.lock().await;
-        if let Some(remote_endpoint) = &*remote_endpoint {
-            remote_endpoint
-                .consume_remote_recv_buf_with(
-                    self.trans_id,
-                    Arc::clone(&self.client_file_write),
-                    Arc::clone(&self.local_endpoint),
-                    Self::consume_remote_recv_buf_fn,
-                )
-                .await
-        }
+        let remote_endpoint = {
+            let remote_endpoint = self.remote_endpoint.lock().await;
+            if let Some(remote_endpoint) = &*remote_endpoint {
+                Arc::clone(remote_endpoint)
+            } else {
+                return;
+            }
+        };
+        remote_endpoint.waiting_for_consume_notify().await;
+        remote_endpoint
+            .consume_remote_recv_buf_with(
+                self.trans_id,
+                Arc::clone(&self.client_file_write),
+                Arc::clone(&self.local_endpoint),
+                Self::consume_remote_recv_buf_fn,
+            )
+            .await
     }
 
     async fn consume_remote_recv_buf_fn(

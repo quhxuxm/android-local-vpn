@@ -1,23 +1,27 @@
 use crate::{
     protect_socket,
-    transportation::{InternetProtocol, TransportProtocol, TransportationId},
+    transportation::{InternetProtocol, TransportProtocol, Transportation, TransportationId},
 };
 use anyhow::anyhow;
 use log::{debug, error};
 
 use anyhow::Result;
 
-use std::{collections::VecDeque, fs::File, io::ErrorKind, os::unix::io::AsRawFd, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    fs::File,
+    os::unix::io::AsRawFd,
+    sync::Arc,
+};
 use std::{future::Future, net::SocketAddr};
 
-use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpSocket, UdpSocket,
     },
-    sync::Mutex,
+    sync::{Mutex, Notify},
 };
 
 use super::LocalEndpoint;
@@ -28,11 +32,13 @@ pub(crate) enum RemoteEndpoint {
         tcp_write: Arc<Mutex<OwnedWriteHalf>>,
         remote_recv_buf: Arc<Mutex<VecDeque<u8>>>,
         trans_id: TransportationId,
+        able_to_consume_remote_recv_buf_notify: Arc<Notify>,
     },
     Udp {
         udp_socket: Arc<UdpSocket>,
         remote_recv_buf: Arc<Mutex<VecDeque<Vec<u8>>>>,
         trans_id: TransportationId,
+        able_to_consume_remote_recv_buf_notify: Arc<Notify>,
     },
 }
 
@@ -58,6 +64,7 @@ impl RemoteEndpoint {
                     tcp_write: Arc::new(Mutex::new(tcp_write)),
                     remote_recv_buf: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
                     trans_id,
+                    able_to_consume_remote_recv_buf_notify: Arc::new(Notify::new()),
                 })
             }
             TransportProtocol::Udp => {
@@ -69,44 +76,74 @@ impl RemoteEndpoint {
                     udp_socket: Arc::new(remote_udp_socket),
                     remote_recv_buf: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
                     trans_id,
+                    able_to_consume_remote_recv_buf_notify: Arc::new(Notify::new()),
                 })
             }
         }
     }
 
-    pub(crate) fn start_read_remote(&self) {
+    pub(crate) async fn waiting_for_consume_notify(&self) {
+        match self {
+            RemoteEndpoint::Tcp {
+                able_to_consume_remote_recv_buf_notify,
+                ..
+            } => able_to_consume_remote_recv_buf_notify.notified().await,
+            RemoteEndpoint::Udp {
+                able_to_consume_remote_recv_buf_notify,
+                ..
+            } => able_to_consume_remote_recv_buf_notify.notified().await,
+        }
+    }
+
+    pub(crate) fn start_read_remote(&self, transportations: Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'_>>>>>) {
         match self {
             RemoteEndpoint::Tcp {
                 tcp_read,
                 remote_recv_buf,
                 trans_id,
+                able_to_consume_remote_recv_buf_notify,
                 ..
             } => {
                 let trans_id = *trans_id;
                 let tcp_read = Arc::clone(tcp_read);
                 let rx_buffer = Arc::clone(remote_recv_buf);
+                let able_to_consume_remote_recv_buf_notify = Arc::clone(able_to_consume_remote_recv_buf_notify);
                 tokio::spawn(async move {
                     let mut data = [0u8; 65536];
                     loop {
                         let read_result = {
-                            let tcp_read = tcp_read.lock().await;
-                            tcp_read.try_read(&mut data)
+                            let mut tcp_read = tcp_read.lock().await;
+                            tcp_read.read(&mut data).await
                         };
                         match read_result {
                             Ok(0) => {
+                                let transportation = {
+                                    let mut transportations = transportations.lock().await;
+                                    transportations.remove(&trans_id)
+                                };
+                                if let Some(transportation) = transportation {
+                                    transportation.close_local_endpoint().await;
+                                }
                                 break;
                             }
                             Ok(size) => {
                                 let data = &data[..size];
                                 let mut rx_buffer = rx_buffer.lock().await;
                                 rx_buffer.extend(data);
+                                able_to_consume_remote_recv_buf_notify.notify_one();
                             }
                             Err(e) => {
-                                if e.kind() == ErrorKind::WouldBlock {
-                                    tokio::time::sleep(Duration::from_millis(100)).await;
-                                    continue;
-                                }
+                                // if e.kind() == ErrorKind::WouldBlock {
+                                //     continue;
+                                // }
                                 error!("<<<< Transportation {trans_id} fail to read remote endpoint tcp data because of error: {e:?}");
+                                let transportation = {
+                                    let mut transportations = transportations.lock().await;
+                                    transportations.remove(&trans_id)
+                                };
+                                if let Some(transportation) = transportation {
+                                    transportation.close_local_endpoint().await;
+                                }
                                 break;
                             }
                         };
@@ -117,21 +154,41 @@ impl RemoteEndpoint {
                 udp_socket,
                 trans_id,
                 remote_recv_buf,
+                able_to_consume_remote_recv_buf_notify,
                 ..
             } => {
                 let trans_id = *trans_id;
                 let udp_socket = Arc::clone(udp_socket);
                 let rx_buffer = Arc::clone(remote_recv_buf);
+                let able_to_consume_remote_recv_buf_notify = Arc::clone(able_to_consume_remote_recv_buf_notify);
                 tokio::spawn(async move {
                     let mut data = [0u8; 65535];
                     match udp_socket.recv(&mut data).await {
+                        Ok(0) => {
+                            debug!("<<<< Transportation {trans_id} nothing read from remote endpoint udp data.");
+                            let transportation = {
+                                let mut transportations = transportations.lock().await;
+                                transportations.remove(&trans_id)
+                            };
+                            if let Some(transportation) = transportation {
+                                transportation.close_local_endpoint().await;
+                            }
+                        }
                         Ok(size) => {
                             let data = &data[..size];
                             let mut rx_buffer = rx_buffer.lock().await;
                             rx_buffer.push_back(data.to_vec());
+                            able_to_consume_remote_recv_buf_notify.notify_one();
                         }
                         Err(e) => {
                             error!("<<<< Transportation {trans_id} fail to read remote endpoint udp data because of error: {e:?}");
+                            let transportation = {
+                                let mut transportations = transportations.lock().await;
+                                transportations.remove(&trans_id)
+                            };
+                            if let Some(transportation) = transportation {
+                                transportation.close_local_endpoint().await;
+                            }
                         }
                     };
                 });

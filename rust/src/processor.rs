@@ -77,7 +77,7 @@ where
                 };
                 // Read data from smoltcp and store to the local receive buffer
                 transportation.receive_from_local_endpoint().await?;
-                transportation.consume_local_recv_buf().await;
+                transportation.transfer_local_recv_buf_to_remote().await;
             }
         }
         Ok(())
@@ -85,20 +85,27 @@ where
 
     async fn get_or_create_transportation(&mut self, data: &[u8]) -> Option<Arc<Transportation<'buf>>> {
         let trans_id = TransportationId::new(data)?;
+        let transportations_for_remote = Arc::clone(&self.transportations);
         let mut transportations = self.transportations.lock().await;
+
         match transportations.entry(trans_id) {
             Entry::Occupied(entry) => Some(entry.get().clone()),
             Entry::Vacant(entry) => {
                 debug!(">>>> Transportation {trans_id} not exist in repository create a new one.");
                 let transportation = Transportation::new(trans_id, Arc::clone(&self.client_file_write))?;
-                entry.insert(Arc::clone(&transportation));
                 let transportation_for_remote = Arc::clone(&transportation);
                 tokio::spawn(async move {
                     // Spawn a task for transportation
-                    if let Err(e) = transportation_for_remote.start_remote_endpoint().await {
+                    if let Err(e) = transportation_for_remote
+                        .start_remote_endpoint(Arc::clone(&transportations_for_remote))
+                        .await
+                    {
                         error!(">>>> Transportation {trans_id} fail connect to remote endpoint because of error: {e:?}");
+                        let mut transportations_for_remote = transportations_for_remote.lock().await;
+                        transportations_for_remote.remove(&trans_id);
                     };
                 });
+                entry.insert(Arc::clone(&transportation));
                 Some(transportation)
             }
         }

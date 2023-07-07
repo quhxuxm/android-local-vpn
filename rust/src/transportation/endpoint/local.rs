@@ -19,10 +19,7 @@ use anyhow::Result;
 use smoltcp::socket::udp::{PacketBuffer as UdpSocketBuffer, PacketMetadata, Socket as UdpSocket};
 use smoltcp::wire::IpEndpoint;
 use std::{collections::VecDeque, future::Future, net::SocketAddr, sync::Arc};
-use tokio::{
-    io::AsyncWrite,
-    sync::{Mutex, RwLock},
-};
+use tokio::sync::Mutex;
 
 use super::RemoteEndpoint;
 
