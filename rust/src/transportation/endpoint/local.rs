@@ -137,21 +137,6 @@ impl<'buf> LocalEndpoint<'buf> {
         Some(socket)
     }
 
-    pub async fn can_send_to_smoltcp(&self) -> bool {
-        match self.transport_protocol {
-            TransportProtocol::Tcp => {
-                let socketset = self.socketset.lock().await;
-                let socket = socketset.get::<TcpSocket>(self.socket_handle);
-                socket.may_send()
-            }
-            TransportProtocol::Udp => {
-                let socketset = self.socketset.lock().await;
-                let socket = socketset.get::<UdpSocket>(self.socket_handle);
-                socket.can_send()
-            }
-        }
-    }
-
     pub async fn send_to_smoltcp(&self, data: &[u8]) -> Result<usize> {
         let trans_id = self.trans_id;
         match self.transport_protocol {

@@ -1,0 +1,35 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Start emulator",
+            "program": "C:/Software/AndroidSDK/emulator/emulator.exe",
+            "args": [
+                "-avd",
+                "Pixel_4_API_33"
+            ]
+        },
+        {
+            "type": "PowerShell",
+            "name": "Build and install to android",
+            "request": "launch",
+            "script": "./gradlew.bat",
+            "args": [
+                "clean",
+                "build",
+                "installDebug"
+            ]
+        },
+        {
+            "type": "PowerShell",
+            "request": "launch",
+            "name": "Start Logcat",
+            "script": "`C:/Software/AndroidSDK/platform-tools/adb.exe logcat -b all -v color -d PPAASS-VPN-RUST:D *:S`",
+        },
+    ]
+}

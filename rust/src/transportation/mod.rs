@@ -6,14 +6,12 @@ use endpoint::RemoteEndpoint;
 use log::debug;
 
 use std::{
-    collections::HashMap,
     fs::File,
     io::Write,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::Duration,
 };
 
 use crate::types::TransportationsRepository;

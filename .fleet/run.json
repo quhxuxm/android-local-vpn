@@ -1,0 +1,37 @@
+{
+    "configurations": [
+        {
+            "type": "command",
+            "name": "Start emulator",
+            "program": "C:/Software/AndroidSDK/emulator/emulator.exe",
+            "args": [
+                "-avd",
+                "Pixel_4_API_33"
+            ]
+        },
+        {
+            "type": "gradle",
+            "name": "Build and install to android",
+            "tasks": [
+                "clean",
+                "build",
+                "installDebug"
+            ]
+        },
+        {
+            "type": "command",
+            "name": "Start logcat",
+            "workingDir": "./",
+            "program": "C:/Software/AndroidSDK/platform-tools/adb.exe",
+            "args": [
+                "logcat",
+                "-b",
+                "all",
+                "-v",
+                "color",
+                "-d",
+                "PPAASS-VPN-RUST:D *:S"
+            ]
+        }
+    ]
+}

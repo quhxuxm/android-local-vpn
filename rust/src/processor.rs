@@ -91,24 +91,21 @@ where
 
         match transportations.entry(trans_id) {
             Entry::Occupied(entry) => Some(entry.get().clone()),
-            Entry::Vacant(_) => {
+            Entry::Vacant(entry) => {
                 debug!(">>>> Transportation {trans_id} not exist in repository create a new one.");
                 let transportation = Transportation::new(trans_id, Arc::clone(&self.client_file_write))?;
                 let transportation_for_remote = Arc::clone(&transportation);
                 tokio::spawn(async move {
                     // Spawn a task for transportation
-                    transportations_for_remote
-                        .lock()
-                        .await
-                        .insert(trans_id, Arc::clone(&transportation_for_remote));
                     if let Err(e) = transportation_for_remote
                         .start_remote_endpoint(Arc::clone(&transportations_for_remote))
                         .await
                     {
                         error!(">>>> Transportation {trans_id} fail connect to remote endpoint because of error: {e:?}");
-                        return;
                     };
                 });
+                entry
+                    .insert(Arc::clone(&transportation));
                 Some(transportation)
             }
         }

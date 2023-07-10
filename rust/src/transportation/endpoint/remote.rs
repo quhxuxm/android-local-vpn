@@ -2,19 +2,14 @@ use crate::{
     protect_socket,
     transportation::{InternetProtocol, TransportProtocol, TransportationId},
 };
-use anyhow::anyhow;
 use log::{debug, error};
 
 use anyhow::Result;
 
-use std::{
-    collections::VecDeque,
-    fs::File,
-    os::unix::io::AsRawFd,
-    sync::Arc,
-};
+use std::{collections::VecDeque, fs::File, os::unix::io::AsRawFd, sync::Arc};
 use std::{future::Future, net::SocketAddr};
 
+use crate::types::TransportationsRepository;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
@@ -23,7 +18,6 @@ use tokio::{
     },
     sync::{Mutex, Notify},
 };
-use crate::types::TransportationsRepository;
 
 use super::LocalEndpoint;
 
@@ -58,7 +52,7 @@ impl RemoteEndpoint {
                 };
                 let remote_tcp_socket_fd = remote_tcp_socket.as_raw_fd();
                 protect_socket(remote_tcp_socket_fd).ok()?;
-                let tcp_stream = match remote_tcp_socket.connect(remote_address).await{
+                let tcp_stream = match remote_tcp_socket.connect(remote_address).await {
                     Ok(tcp_stream) => tcp_stream,
                     Err(e) => {
                         error!(">>>> Transportation {trans_id} fail to connect remote address [{remote_address}] in tcp because of error: {e:}");
@@ -78,9 +72,9 @@ impl RemoteEndpoint {
                 let remote_udp_socket = UdpSocket::bind("0.0.0.0:0").await.ok()?;
                 let remote_udp_socket_fd = remote_udp_socket.as_raw_fd();
                 protect_socket(remote_udp_socket_fd).ok()?;
-                if let Err(e) = remote_udp_socket.connect(remote_address).await{
+                if let Err(e) = remote_udp_socket.connect(remote_address).await {
                     error!(">>>> Transportation {trans_id} fail to connect remote address [{remote_address}] in udp because of error: {e:}");
-                    return  None
+                    return None;
                 };
                 Some(RemoteEndpoint::Udp {
                     udp_socket: Arc::new(remote_udp_socket),
@@ -109,6 +103,7 @@ impl RemoteEndpoint {
         match self {
             RemoteEndpoint::Tcp {
                 tcp_read,
+                tcp_write,
                 remote_recv_buf,
                 trans_id,
                 able_to_consume_remote_recv_buf_notify,
@@ -116,6 +111,7 @@ impl RemoteEndpoint {
             } => {
                 let trans_id = *trans_id;
                 let tcp_read = Arc::clone(tcp_read);
+                let tcp_write = Arc::clone(tcp_write);
                 let rx_buffer = Arc::clone(remote_recv_buf);
                 let able_to_consume_remote_recv_buf_notify = Arc::clone(able_to_consume_remote_recv_buf_notify);
                 tokio::spawn(async move {
@@ -127,12 +123,21 @@ impl RemoteEndpoint {
                         };
                         match read_result {
                             Ok(0) => {
-                                let transportation = {
-                                    let mut transportations = transportations.lock().await;
-                                    transportations.remove(&trans_id)
-                                };
-                                if let Some(transportation) = transportation {
-                                    transportation.close_local_endpoint().await;
+                                {
+                                    let mut tcp_write = tcp_write.lock().await;
+                                    if let Err(e) = tcp_write.shutdown().await {
+                                        error!("<<<< Transportation {trans_id} fail to shutdown remote endpoint because of error: {e:?}");
+                                    };
+                                }
+
+                                {
+                                    let transportation = {
+                                        let mut transportations = transportations.lock().await;
+                                        transportations.remove(&trans_id)
+                                    };
+                                    if let Some(transportation) = transportation {
+                                        transportation.close_local_endpoint().await;
+                                    }
                                 }
                                 break;
                             }
@@ -143,16 +148,22 @@ impl RemoteEndpoint {
                                 able_to_consume_remote_recv_buf_notify.notify_one();
                             }
                             Err(e) => {
-                                // if e.kind() == ErrorKind::WouldBlock {
-                                //     continue;
-                                // }
                                 error!("<<<< Transportation {trans_id} fail to read remote endpoint tcp data because of error: {e:?}");
-                                let transportation = {
-                                    let mut transportations = transportations.lock().await;
-                                    transportations.remove(&trans_id)
-                                };
-                                if let Some(transportation) = transportation {
-                                    transportation.close_local_endpoint().await;
+                                {
+                                    let mut tcp_write = tcp_write.lock().await;
+                                    if let Err(e) = tcp_write.shutdown().await {
+                                        error!("<<<< Transportation {trans_id} fail to shutdown remote endpoint because of error: {e:?}");
+                                    };
+                                }
+
+                                {
+                                    let transportation = {
+                                        let mut transportations = transportations.lock().await;
+                                        transportations.remove(&trans_id)
+                                    };
+                                    if let Some(transportation) = transportation {
+                                        transportation.close_local_endpoint().await;
+                                    }
                                 }
                                 break;
                             }
@@ -204,26 +215,6 @@ impl RemoteEndpoint {
                 });
             }
         }
-    }
-
-    pub(crate) async fn close(&self) -> Result<()> {
-        match self {
-            RemoteEndpoint::Tcp {
-                tcp_write,
-                trans_id,
-                ..
-            } => {
-                debug!(">>>> Transportation {trans_id} going to close remote tcp stream.");
-                tcp_write.lock().await.shutdown().await.map_err(|e| {
-                    error!(">>>> Transportation {trans_id} fail to close remote tcp stream because of error: {e:?}");
-                    anyhow!(e)
-                })?
-            }
-            RemoteEndpoint::Udp { trans_id, .. } => {
-                debug!(">>>> Transportation {trans_id} nothing to do for close remote udp socket.");
-            }
-        }
-        Ok(())
     }
 
     pub(crate) async fn write_to_remote(&self, bytes: &[u8]) -> Result<usize> {
