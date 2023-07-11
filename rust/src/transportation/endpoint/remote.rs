@@ -2,7 +2,7 @@ use crate::{
     protect_socket,
     transportation::{InternetProtocol, TransportProtocol, TransportationId},
 };
-use log::{debug, error};
+use log::{debug, error, trace};
 
 use anyhow::Result;
 
@@ -123,6 +123,7 @@ impl RemoteEndpoint {
                         };
                         match read_result {
                             Ok(0) => {
+                                debug!("<<<< Transportation {trans_id} complete to read data from remote, going to close it.");
                                 {
                                     let mut tcp_write = tcp_write.lock().await;
                                     if let Err(e) = tcp_write.shutdown().await {
@@ -224,7 +225,7 @@ impl RemoteEndpoint {
                 trans_id,
                 ..
             } => {
-                debug!(
+                trace!(
                     ">>>> Transportation {trans_id} write data to remote tcp stream: {}",
                     pretty_hex::pretty_hex(&bytes)
                 );
@@ -235,7 +236,7 @@ impl RemoteEndpoint {
                 trans_id,
                 ..
             } => {
-                debug!(
+                trace!(
                     ">>>> Transportation {trans_id} write data to remote udp socket: {}",
                     pretty_hex::pretty_hex(&bytes)
                 );

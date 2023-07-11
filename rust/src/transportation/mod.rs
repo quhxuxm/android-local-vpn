@@ -3,7 +3,7 @@ mod value;
 
 use endpoint::LocalEndpoint;
 use endpoint::RemoteEndpoint;
-use log::debug;
+use log::{debug, trace};
 
 use std::{
     fs::File,
@@ -148,7 +148,7 @@ where
     }
 
     async fn concrete_transfer_to_remote_fn(trans_id: TransportationId, remote_endpont: Arc<RemoteEndpoint>, data: Vec<u8>) -> Result<usize> {
-        debug!(
+        trace!(
             ">>>> Transportation {trans_id} begin write data to remote: {}",
             pretty_hex::pretty_hex(&data)
         );
@@ -182,12 +182,11 @@ where
         local_endpoint: Arc<LocalEndpoint<'_>>,
         data: Vec<u8>,
     ) -> Result<usize> {
-        debug!(
+        trace!(
             "<<<< Transportation {trans_id} begin write data to client: {}",
             pretty_hex::pretty_hex(&data)
         );
         let local_write_result = local_endpoint.send_to_smoltcp(&data).await;
-
         if local_endpoint.poll().await {
             while let Some(data_to_client) = local_endpoint.pop_tx_from_device().await {
                 let log = log_ip_packet(&data_to_client);
@@ -196,7 +195,6 @@ where
                 client_file_write.write_all(&data_to_client)?;
             }
         }
-
         debug!("<<<< Transportation {trans_id} complete to write data to client",);
         local_write_result
     }

@@ -41,6 +41,7 @@ impl PpaassVpnServer {
         debug!("Ppaass vpn server starting");
         let runtime = Self::init_runtime()?;
         let file_descriptor = self.file_descriptor;
+
         let (stop_sender, stop_receiver) = channel::<bool>();
         let processor_handle = runtime.spawn(async move {
             let mut processor = TransportationProcessor::new(file_descriptor, stop_receiver)?;

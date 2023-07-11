@@ -3,7 +3,7 @@ use crate::{
     transportation::{TransportProtocol, TransportationId},
 };
 
-use log::{debug, error};
+use log::{debug, error, trace};
 use smoltcp::{
     iface::{Config, Routes},
     socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer},
@@ -143,18 +143,24 @@ impl<'buf> LocalEndpoint<'buf> {
             TransportProtocol::Tcp => {
                 let mut socketset = self.socketset.lock().await;
                 let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
-                debug!(
+                if !socket.may_send() {
+                    return Ok(0);
+                }
+                trace!(
                     "<<<< Transportation {trans_id} send tcp data to smoltcp stack: {}",
                     pretty_hex::pretty_hex(&data)
                 );
                 socket.send_slice(data).map_err(|e| {
                     error!("<<<< Transportation {trans_id} fail to send tcp data to smoltcp stack because of error: {e:?}");
-                    anyhow!("{e:?}")
+                    anyhow!("Transportation {trans_id} fail to send tcp data to smoltcp stack because of error: {e:?}")
                 })
             }
             TransportProtocol::Udp => {
                 let mut socketset = self.socketset.lock().await;
                 let socket = socketset.get_mut::<UdpSocket>(self.socket_handle);
+                if !socket.can_send() {
+                    return Ok(0);
+                }
                 debug!(
                     "<<<< Transportation {} send udp data to smoltcp stack: {}",
                     self.trans_id,
@@ -165,7 +171,7 @@ impl<'buf> LocalEndpoint<'buf> {
                     .and(Ok(data.len()))
                     .map_err(|e| {
                         error!("<<<< Transportation {trans_id} fail to send udp data to smoltcp stack because of error: {e:?}");
-                        anyhow!("{e:?}")
+                        anyhow!("Transportation {trans_id} fail to send udp data to smoltcp stack because of error: {e:?}")
                     })
             }
         }
@@ -201,7 +207,7 @@ impl<'buf> LocalEndpoint<'buf> {
                         })?
                     };
                     let data = &data[..size];
-                    debug!(
+                    trace!(
                         ">>>> Transportation {} receive tcp data from smoltcp stack: {}",
                         self.trans_id,
                         pretty_hex::pretty_hex(&data)
