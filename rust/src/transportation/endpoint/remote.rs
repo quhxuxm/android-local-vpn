@@ -124,6 +124,7 @@ impl RemoteEndpoint {
                         match read_result {
                             Ok(0) => {
                                 debug!("<<<< Transportation {trans_id} complete to read data from remote, going to close it.");
+                                able_to_consume_remote_recv_buf_notify.notify_one();
                                 {
                                     let mut tcp_write = tcp_write.lock().await;
                                     if let Err(e) = tcp_write.shutdown().await {
@@ -150,6 +151,7 @@ impl RemoteEndpoint {
                             }
                             Err(e) => {
                                 error!("<<<< Transportation {trans_id} fail to read remote endpoint tcp data because of error: {e:?}");
+                                able_to_consume_remote_recv_buf_notify.notify_one();
                                 {
                                     let mut tcp_write = tcp_write.lock().await;
                                     if let Err(e) = tcp_write.shutdown().await {
@@ -188,6 +190,7 @@ impl RemoteEndpoint {
                     match udp_socket.recv(&mut data).await {
                         Ok(0) => {
                             debug!("<<<< Transportation {trans_id} nothing read from remote endpoint udp data.");
+                            able_to_consume_remote_recv_buf_notify.notify_one();
                             let transportation = {
                                 let mut transportations = transportations.lock().await;
                                 transportations.remove(&trans_id)
@@ -204,6 +207,7 @@ impl RemoteEndpoint {
                         }
                         Err(e) => {
                             error!("<<<< Transportation {trans_id} fail to read remote endpoint udp data because of error: {e:?}");
+                            able_to_consume_remote_recv_buf_notify.notify_one();
                             let transportation = {
                                 let mut transportations = transportations.lock().await;
                                 transportations.remove(&trans_id)

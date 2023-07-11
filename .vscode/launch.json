@@ -15,15 +15,10 @@
             ]
         },
         {
-            "type": "PowerShell",
+            "type": "android",
             "name": "Build and install to android",
             "request": "launch",
-            "script": "./gradlew.bat",
-            "args": [
-                "clean",
-                "build",
-                "installDebug"
-            ]
+            "preLaunchTask": "gradle: build clean install"
         },
         {
             "type": "PowerShell",

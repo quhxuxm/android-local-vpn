@@ -77,13 +77,6 @@ where
         }
 
         loop {
-            if self.closed.load(Ordering::Relaxed) {
-                debug!(
-                    "Transportation {} closed break the consume remote receive buffer loop.",
-                    self.trans_id
-                );
-                break;
-            }
             let remote_endpoint = {
                 let remote_endpoint = self.remote_endpoint.lock().await;
                 if let Some(remote_endpoint) = &*remote_endpoint {
@@ -94,6 +87,13 @@ where
             };
             remote_endpoint.waiting_for_consume_notify().await;
             self.consume_remote_recv_buf().await;
+            if self.closed.load(Ordering::Relaxed) {
+                debug!(
+                    "Transportation {} closed break the consume remote receive buffer loop.",
+                    self.trans_id
+                );
+                break;
+            }
         }
         Ok(())
     }
@@ -195,7 +195,6 @@ where
                 client_file_write.write_all(&data_to_client)?;
             }
         }
-        debug!("<<<< Transportation {trans_id} complete to write data to client",);
         local_write_result
     }
 }
