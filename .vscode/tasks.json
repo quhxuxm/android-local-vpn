@@ -1,0 +1,36 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "gradle",
+			"id": "d:\\Workspace\\Git\\ppaass-android-main-tokioapp:buildapp",
+			"script": "app:build",
+			"description": "Assembles and tests this project.",
+			"group": "build",
+			"project": "app",
+			"buildFile": "D:\\Workspace\\Git\\ppaass-android-main-tokio\\app\\build.gradle",
+			"rootProject": "Ppaass Agent",
+			"projectFolder": "d:\\Workspace\\Git\\ppaass-android-main-tokio",
+			"workspaceFolder": "d:\\Workspace\\Git\\ppaass-android-main-tokio",
+			"args": "",
+			"javaDebug": false,
+			"problemMatcher": [
+				"$gradle"
+			],
+			"label": "gradle: app:build"
+		},
+		{
+			"label": "gradle: build clean install",
+			"type": "shell",
+			"command": "${workspaceRoot}/gradlew clean build installDebug",
+			"windows": {
+				"command": "${workspaceRoot}\\gradlew.bat clean build installDebug"
+			},
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				//   "panel": "new"
+			}
+		},
+	]
+}
