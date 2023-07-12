@@ -20,3 +20,4 @@ pretty-hex="0.3.0"
 thiserror="1.0.40"
 derive_more="0.99.17"
 tokio = { version = "1.28.1", features = ["macros", "time", "net", "io-util", "rt-multi-thread", "fs", "sync"]}
+mio = {version = "0.8.6", features = ["os-poll", "net", "os-ext"]}
