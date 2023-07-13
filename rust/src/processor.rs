@@ -71,7 +71,7 @@ where
                 if transportation.poll_local_endpoint().await {
                     while let Some(data_to_client) = transportation.pop_tx_from_smoltcp_device().await {
                         let log = log_ip_packet(&data_to_client);
-                        debug!("<<<< Transportation {trans_id} write the tx to device:\n{log}\n",);
+                        debug!("<<<< Transportation {trans_id} write the tx to device on receive data from local endpoint:\n{log}\n",);
                         let mut client_file_write = self.client_file_write.lock().await;
                         client_file_write.write_all(&data_to_client)?;
                     }

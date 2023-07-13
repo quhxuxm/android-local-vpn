@@ -214,6 +214,7 @@ impl<'buf> LocalEndpoint<'buf> {
                     );
                     let mut local_recv_buf = self.local_recv_buf.lock().await;
                     local_recv_buf.extend(data);
+
                 }
                 TransportProtocol::Udp => {
                     let mut data = [0u8; 65536];
@@ -226,7 +227,7 @@ impl<'buf> LocalEndpoint<'buf> {
                         })?
                     };
                     let data = &data[..size];
-                    debug!(
+                    trace!(
                         ">>>> Transportation {} receive udp data from smoltcp stack: {}",
                         self.trans_id,
                         pretty_hex::pretty_hex(&data)
@@ -236,6 +237,13 @@ impl<'buf> LocalEndpoint<'buf> {
                 }
             }
         }
+
+        let mut socketset = self.socketset.lock().await;
+        let socket = socketset.get_mut::<TcpSocket>(self.socket_handle);
+        if socket.is_open(){
+
+        }
+
         Ok(())
     }
 

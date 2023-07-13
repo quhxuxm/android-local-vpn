@@ -138,6 +138,7 @@ impl RemoteEndpoint {
                                         transportations.remove(&trans_id)
                                     };
                                     if let Some(transportation) = transportation {
+                                        transportation.consume_remote_recv_buf().await;
                                         transportation.close_local_endpoint().await;
                                     }
                                 }
@@ -165,6 +166,7 @@ impl RemoteEndpoint {
                                         transportations.remove(&trans_id)
                                     };
                                     if let Some(transportation) = transportation {
+                                        transportation.consume_remote_recv_buf().await;
                                         transportation.close_local_endpoint().await;
                                     }
                                 }
@@ -196,6 +198,7 @@ impl RemoteEndpoint {
                                 transportations.remove(&trans_id)
                             };
                             if let Some(transportation) = transportation {
+                                transportation.consume_remote_recv_buf().await;
                                 transportation.close_local_endpoint().await;
                             }
                         }
@@ -213,6 +216,7 @@ impl RemoteEndpoint {
                                 transportations.remove(&trans_id)
                             };
                             if let Some(transportation) = transportation {
+                                transportation.consume_remote_recv_buf().await;
                                 transportation.close_local_endpoint().await;
                             }
                         }
