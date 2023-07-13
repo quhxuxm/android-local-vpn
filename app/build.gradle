@@ -46,7 +46,6 @@ android {
     }
 
     packagingOptions {
-        doNotStrip "**/libvpn.so"
         resources {
             excludes += '/META-INF/{AL2.0,LGPL2.1}'
         }
@@ -57,7 +56,7 @@ apply plugin: 'org.mozilla.rust-android-gradle.rust-android'
 
 cargo {
     module = "../rust"       // Or whatever directory contains your Cargo.toml
-    libname = "vpn"          // Or whatever matches Cargo.toml's [package] name.
+    libname = "ppaass_agent_android"          // Or whatever matches Cargo.toml's [package] name.
     targets = ['arm64', 'x86_64']      // See bellow for a longer list of options
     verbose = true
     profile = 'release'

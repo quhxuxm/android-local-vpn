@@ -87,7 +87,7 @@ internal class LocalVpnService : VpnService() {
         internal const val INTENT_EXTRA_CONFIGURATION = "LocalVpnServiceConfiguration"
 
         init {
-            System.loadLibrary("vpn")
+            System.loadLibrary("ppaass_agent_android")
         }
     }
 

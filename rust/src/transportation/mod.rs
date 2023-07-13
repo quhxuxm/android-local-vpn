@@ -120,7 +120,7 @@ where
     }
 
     pub(crate) async fn close_local_endpoint(&self) {
-        self.consume_remote_recv_buf().await;
+        // self.consume_remote_recv_buf().await;
         self.local_endpoint.close().await;
         self.closed.swap(true, Ordering::Relaxed);
         debug!(
@@ -190,11 +190,14 @@ where
         if local_endpoint.poll().await {
             while let Some(data_to_client) = local_endpoint.pop_tx_from_device().await {
                 let log = log_ip_packet(&data_to_client);
-                debug!("<<<< Transportation {trans_id} write the tx to client:\n{log}\n",);
+                debug!("<<<< Transportation {trans_id} write the tx to client on consume remote receive buffer:\n{log}\n",);
                 let mut client_file_write = client_file_write.lock().await;
                 client_file_write.write_all(&data_to_client)?;
             }
+            local_write_result
+        }else{
+            Ok(0)
         }
-        local_write_result
+
     }
 }
