@@ -1,7 +1,8 @@
 mod device;
+mod endpoint;
 mod processor;
-mod util;
 mod types;
+mod util;
 
 mod server;
 mod transportation;

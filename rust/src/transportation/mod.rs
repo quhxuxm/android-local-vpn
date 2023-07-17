@@ -35,7 +35,6 @@ where
     Tcp {
         trans_id: TransportationId,
         smoltcp_socket_handle: SocketHandle,
-
         smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
         smoltcp_interface: Arc<Mutex<Interface>>,
         smoltcp_device: Arc<Mutex<SmoltcpDevice>>,
@@ -51,7 +50,6 @@ where
     Udp {
         trans_id: TransportationId,
         smoltcp_socket_handle: SocketHandle,
-
         smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
         smoltcp_interface: Arc<Mutex<Interface>>,
         smoltcp_device: Arc<Mutex<SmoltcpDevice>>,
