@@ -1,5 +1,3 @@
-use crate::util::log_ip_packet;
-
 use super::transportation::Transportation;
 use super::transportation::TransportationId;
 use log::{debug, error};
@@ -11,11 +9,7 @@ use anyhow::Result;
 use std::fs::File;
 use std::io::ErrorKind;
 use std::os::unix::io::FromRawFd;
-use std::{
-    collections::hash_map::Entry,
-    io::{Read, Write},
-    sync::Arc,
-};
+use std::{collections::hash_map::Entry, io::Read, sync::Arc};
 
 pub(crate) struct TransportationProcessor<'buf>
 where
@@ -62,23 +56,8 @@ where
                 }
             };
             if let Some(transportation) = self.get_or_create_transportation(client_data).await {
-                let trans_id = transportation.get_trans_id();
-                // Push the ip packet to smoltcp
-                transportation
-                    .push_rx_to_smoltcp_device(client_data.to_vec())
-                    .await;
                 // Poll smoltcp to make sure the protocol packet will send to client side
-                if transportation.poll_local_endpoint().await {
-                    while let Some(data_to_client) = transportation.pop_tx_from_smoltcp_device().await {
-                        let log = log_ip_packet(&data_to_client);
-                        debug!("<<<< Transportation {trans_id} write the tx to device on receive data from local endpoint:\n{log}\n",);
-                        let mut client_file_write = self.client_file_write.lock().await;
-                        client_file_write.write_all(&data_to_client)?;
-                    }
-                };
-                // Read data from smoltcp and store to the local receive buffer
-                transportation.receive_from_local_endpoint().await?;
-                transportation.transfer_local_recv_buf_to_remote().await;
+                transportation.send_to_smoltcp(client_data).await;
             }
         }
         Ok(())
@@ -86,26 +65,27 @@ where
 
     async fn get_or_create_transportation(&mut self, data: &[u8]) -> Option<Arc<Transportation<'buf>>> {
         let trans_id = TransportationId::new(data)?;
-        let transportations_for_remote = Arc::clone(&self.transportations);
         let mut transportations = self.transportations.lock().await;
 
         match transportations.entry(trans_id) {
-            Entry::Occupied(entry) => Some(entry.get().clone()),
+            Entry::Occupied(entry) => {
+                entry.get().send_to_smoltcp(data).await;
+                Some(entry.get().clone())
+            }
             Entry::Vacant(entry) => {
                 debug!(">>>> Transportation {trans_id} not exist in repository create a new one.");
-                let transportation = Transportation::new(trans_id, Arc::clone(&self.client_file_write))?;
-                let transportation_for_remote = Arc::clone(&transportation);
-                tokio::spawn(async move {
-                    // Spawn a task for transportation
-                    if let Err(e) = transportation_for_remote
-                        .start_remote_endpoint(Arc::clone(&transportations_for_remote))
-                        .await
-                    {
-                        error!(">>>> Transportation {trans_id} fail connect to remote endpoint because of error: {e:?}");
-                    };
+                  let client_file_write = Arc::clone(&self.client_file_write);
+                tokio::spawn(async move{
+
                 });
-                entry
-                    .insert(Arc::clone(&transportation));
+              
+                let transportation = Transportation::new(trans_id, client_file_write).await?;
+                transportation.send_to_smoltcp(data).await;
+                let transportation = Arc::new(transportation);
+                entry.insert(Arc::clone(&transportation));
+                if let Err(e) = transportation.start().await {
+                    error!(">>>> Transportation {trans_id} fail to start because of error: {e:?}")
+                };
                 Some(transportation)
             }
         }
