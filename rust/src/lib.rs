@@ -5,7 +5,7 @@ mod types;
 mod util;
 
 mod server;
-mod transportation;
+mod transport;
 
 use crate::server::PpaassVpnServer;
 use android_logger::Config;

@@ -1,6 +1,6 @@
+use crate::transport::{Transport, TransportId};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::transportation::{Transportation, TransportationId};
 
-pub(crate) type TransportationsRepository<'buf>=Arc<Mutex<HashMap<TransportationId, Arc<Transportation<'buf>>>>>;
+pub(crate) type TransportationsRepository<'buf> = Arc<Mutex<HashMap<TransportId, Arc<Transport<'buf>>>>>;

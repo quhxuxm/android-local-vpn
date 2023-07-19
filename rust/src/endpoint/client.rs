@@ -1,28 +1,32 @@
-use crate::protect_socket;
 use crate::types::TransportationsRepository;
 use crate::util::log_ip_packet;
-use crate::{device::SmoltcpDevice, transportation::TransportationId};
+use crate::{device::SmoltcpDevice, transport::TransportId};
+use crate::{protect_socket, transport::ControlProtocol};
 use log::{debug, error, trace};
 
 use std::os::fd::AsRawFd;
 use std::{collections::VecDeque, sync::Arc};
 use std::{fs::File, io::Write, sync::atomic::AtomicBool};
 
-use crate::transportation::common::{create_smoltcp_tcp_socket, create_smoltcp_udp_socket, prepare_smoltcp_iface_and_device};
 use anyhow::{anyhow, Result};
 use pretty_hex::pretty_hex;
-use smoltcp::iface::{Interface, SocketHandle, SocketSet};
-use smoltcp::socket::tcp::Socket as SmoltcpTcpSocket;
-use smoltcp::socket::udp::Socket as SmoltcpUdpSocket;
+use smoltcp::iface::Config;
+use smoltcp::socket::tcp::{Socket as SmoltcpTcpSocket, SocketBuffer as SmoltcpTcpSocketBuffer};
+use smoltcp::socket::udp::{PacketBuffer as SmoltcpUdpSocketBuffer, PacketMetadata as SmoltcpUdpPacketMetadata, Socket as SmoltcpUdpSocket};
 use smoltcp::time::Instant;
 use smoltcp::wire::IpEndpoint;
+use smoltcp::wire::{IpAddress, IpCidr};
+use smoltcp::{
+    iface::{Interface, Routes, SocketHandle, SocketSet},
+    wire::Ipv4Address,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::{TcpSocket, UdpSocket};
+
 use tokio::sync::{Mutex, Notify};
-pub(crate) enum ClientEndpoint {
+pub(crate) enum ClientEndpoint<'buf> {
     Tcp {
-        trans_id: TransportationId,
+        trans_id: TransportId,
         smoltcp_socket_handle: SocketHandle,
         smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
         smoltcp_interface: Arc<Mutex<Interface>>,
@@ -32,7 +36,7 @@ pub(crate) enum ClientEndpoint {
         client_file_write: Arc<Mutex<File>>,
     },
     Udp {
-        trans_id: TransportationId,
+        trans_id: TransportId,
         smoltcp_socket_handle: SocketHandle,
         smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
         smoltcp_interface: Arc<Mutex<Interface>>,
@@ -43,11 +47,24 @@ pub(crate) enum ClientEndpoint {
     },
 }
 
-impl ClientEndpoint {
-    pub(crate) async fn new(trans_id: TransportationId) -> Result<Self> {}
+impl<'buf> ClientEndpoint<'buf> {
+    pub(crate) async fn new(trans_id: TransportId) -> Result<ClientEndpoint<'buf>> {
+        let (smoltcp_interface, smoltcp_device) = prepare_smoltcp_iface_and_device(trans_id)?;
+        let smoltcp_socket_set = SocketSet::new(vec![]);
+        let remote_ip_endpoint = IpEndpoint::from(trans_id.destination);
+
+        match trans_id.control_protocol {
+            ControlProtocol::Tcp => {
+                let smoltcp_socket = create_smoltcp_tcp_socket(trans_id, remote_ip_endpoint)?;
+            }
+            ControlProtocol::Udp => {}
+        }
+
+        todo!()
+    }
 }
 
-pub(crate) fn prepare_smoltcp_iface_and_device(trans_id: TransportationId) -> Result<(Interface, SmoltcpDevice)> {
+pub(crate) fn prepare_smoltcp_iface_and_device(trans_id: TransportId) -> Result<(Interface, SmoltcpDevice)> {
     let mut routes = Routes::new();
     let default_gateway_ipv4 = Ipv4Address::new(0, 0, 0, 1);
     routes.add_default_ipv4_route(default_gateway_ipv4).unwrap();
@@ -72,32 +89,23 @@ pub(crate) fn prepare_smoltcp_iface_and_device(trans_id: TransportationId) -> Re
     Ok((interface, vpn_device))
 }
 
-pub(crate) fn create_smoltcp_tcp_socket<'a>(trans_id: TransportationId, endpoint: IpEndpoint) -> Option<SmoltcpTcpSocket<'a>> {
+pub(crate) fn create_smoltcp_tcp_socket<'a>(trans_id: TransportId, endpoint: IpEndpoint) -> Result<SmoltcpTcpSocket<'a>> {
     let mut socket = SmoltcpTcpSocket::new(
         SmoltcpTcpSocketBuffer::new(vec![0; 1024 * 1024]),
         SmoltcpTcpSocketBuffer::new(vec![0; 1024 * 1024]),
     );
-
-    if socket.listen(endpoint).is_err() {
-        error!(
-            ">>>> Transportation {trans_id} failed to listen on smoltcp tcp socket, endpoint=[{}]",
-            endpoint
-        );
-        return None;
-    }
+    socket.listen(endpoint).map_err(|e| anyhow!("{e:?}"))?;
     socket.set_ack_delay(None);
-    Some(socket)
+    Ok(socket)
 }
 
-pub(crate) fn create_smoltcp_udp_socket<'a>(trans_id: TransportationId, endpoint: IpEndpoint) -> Option<SmoltcpUdpSocket<'a>> {
+pub(crate) fn create_smoltcp_udp_socket<'a>(trans_id: TransportId, endpoint: IpEndpoint) -> Option<SmoltcpUdpSocket<'a>> {
     let mut socket = SmoltcpUdpSocket::new(
         SmoltcpUdpSocketBuffer::new(
-            // vec![UdpPacketMetadata::EMPTY, UdpPacketMetadata::EMPTY],
             vec![SmoltcpUdpPacketMetadata::EMPTY; 1024 * 1024],
             vec![0; 1024 * 1024],
         ),
         SmoltcpUdpSocketBuffer::new(
-            // vec![UdpPacketMetadata::EMPTY, UdpPacketMetadata::EMPTY],
             vec![SmoltcpUdpPacketMetadata::EMPTY; 1024 * 1024],
             vec![0; 1024 * 1024],
         ),

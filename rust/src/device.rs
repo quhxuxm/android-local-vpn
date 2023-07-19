@@ -7,17 +7,17 @@ use smoltcp::{
 
 use std::collections::VecDeque;
 
-use crate::transportation::TransportationId;
+use crate::transport::TransportId;
 
 #[derive(Debug)]
 pub(crate) struct SmoltcpDevice {
-    trans_id: TransportationId,
+    trans_id: TransportId,
     rx_queue: VecDeque<Vec<u8>>,
     tx_queue: VecDeque<Vec<u8>>,
 }
 
 impl SmoltcpDevice {
-    pub(crate) fn new(trans_id: TransportationId) -> SmoltcpDevice {
+    pub(crate) fn new(trans_id: TransportId) -> SmoltcpDevice {
         SmoltcpDevice {
             trans_id,
             rx_queue: VecDeque::new(),
@@ -68,7 +68,7 @@ impl Device for SmoltcpDevice {
 }
 
 pub(crate) struct RxToken {
-    trans_id: TransportationId,
+    trans_id: TransportId,
     buffer: Vec<u8>,
 }
 
@@ -88,7 +88,7 @@ impl phy::RxToken for RxToken {
 }
 
 pub(crate) struct TxToken<'a> {
-    trans_id: TransportationId,
+    trans_id: TransportId,
     queue: &'a mut VecDeque<Vec<u8>>,
 }
 

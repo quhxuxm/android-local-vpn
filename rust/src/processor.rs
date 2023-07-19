@@ -1,5 +1,5 @@
-use super::transportation::Transportation;
-use super::transportation::TransportationId;
+use super::transport::Transport;
+use super::transport::TransportId;
 use log::{debug, error};
 
 use tokio::sync::{oneshot::Receiver, Mutex};
@@ -63,8 +63,8 @@ where
         Ok(())
     }
 
-    async fn get_or_create_transportation(&mut self, data: &[u8]) -> Option<Arc<Transportation<'buf>>> {
-        let trans_id = TransportationId::new(data)?;
+    async fn get_or_create_transportation(&mut self, data: &[u8]) -> Option<Arc<Transport<'buf>>> {
+        let trans_id = TransportId::new(data)?;
         let mut transportations = self.transportations.lock().await;
 
         match transportations.entry(trans_id) {
@@ -74,12 +74,10 @@ where
             }
             Entry::Vacant(entry) => {
                 debug!(">>>> Transportation {trans_id} not exist in repository create a new one.");
-                  let client_file_write = Arc::clone(&self.client_file_write);
-                tokio::spawn(async move{
+                let client_file_write = Arc::clone(&self.client_file_write);
+                tokio::spawn(async move {});
 
-                });
-              
-                let transportation = Transportation::new(trans_id, client_file_write).await?;
+                let transportation = Transport::new(trans_id, client_file_write).await?;
                 transportation.send_to_smoltcp(data).await;
                 let transportation = Arc::new(transportation);
                 entry.insert(Arc::clone(&transportation));

@@ -7,12 +7,12 @@ use anyhow::Result;
 
 use smoltcp::iface::{Config, Interface, Routes};
 
-use crate::transportation::TransportationId;
+use crate::transport::TransportId;
 use smoltcp::socket::tcp::{Socket as SmoltcpTcpSocket, SocketBuffer as SmoltcpTcpSocketBuffer};
 use smoltcp::socket::udp::{PacketBuffer as SmoltcpUdpSocketBuffer, PacketMetadata as SmoltcpUdpPacketMetadata, Socket as SmoltcpUdpSocket};
 use smoltcp::wire::{IpAddress, IpCidr, IpEndpoint, Ipv4Address};
 
-pub(crate) fn prepare_smoltcp_iface_and_device(trans_id: TransportationId) -> Result<(Interface, SmoltcpDevice)> {
+pub(crate) fn prepare_smoltcp_iface_and_device(trans_id: TransportId) -> Result<(Interface, SmoltcpDevice)> {
     let mut routes = Routes::new();
     let default_gateway_ipv4 = Ipv4Address::new(0, 0, 0, 1);
     routes.add_default_ipv4_route(default_gateway_ipv4).unwrap();
@@ -37,7 +37,7 @@ pub(crate) fn prepare_smoltcp_iface_and_device(trans_id: TransportationId) -> Re
     Ok((interface, vpn_device))
 }
 
-pub(crate) fn create_smoltcp_tcp_socket<'a>(trans_id: TransportationId, endpoint: IpEndpoint) -> Option<SmoltcpTcpSocket<'a>> {
+pub(crate) fn create_smoltcp_tcp_socket<'a>(trans_id: TransportId, endpoint: IpEndpoint) -> Option<SmoltcpTcpSocket<'a>> {
     let mut socket = SmoltcpTcpSocket::new(
         SmoltcpTcpSocketBuffer::new(vec![0; 1024 * 1024]),
         SmoltcpTcpSocketBuffer::new(vec![0; 1024 * 1024]),
@@ -54,7 +54,7 @@ pub(crate) fn create_smoltcp_tcp_socket<'a>(trans_id: TransportationId, endpoint
     Some(socket)
 }
 
-pub(crate) fn create_smoltcp_udp_socket<'a>(trans_id: TransportationId, endpoint: IpEndpoint) -> Option<SmoltcpUdpSocket<'a>> {
+pub(crate) fn create_smoltcp_udp_socket<'a>(trans_id: TransportId, endpoint: IpEndpoint) -> Option<SmoltcpUdpSocket<'a>> {
     let mut socket = SmoltcpUdpSocket::new(
         SmoltcpUdpSocketBuffer::new(
             // vec![UdpPacketMetadata::EMPTY, UdpPacketMetadata::EMPTY],
