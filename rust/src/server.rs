@@ -13,7 +13,7 @@ use tokio::{
     runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
     sync::{
         mpsc::error::TryRecvError,
-        oneshot::{channel, Sender},
+        mpsc::{channel, Sender},
         Mutex,
     },
     task::JoinHandle,
@@ -23,20 +23,20 @@ use anyhow::Result;
 use anyhow::{anyhow, Error as AnyhowError};
 
 #[derive(Debug)]
-pub struct PpaassVpnServer<'buf> {
+pub(crate) struct PpaassVpnServer {
     file_descriptor: i32,
     stop_sender: Option<Sender<bool>>,
-    _runtime: Option<TokioRuntime>,
+    runtime: Option<TokioRuntime>,
     processor_handle: Option<JoinHandle<Result<()>>>,
     transports: Arc<Mutex<HashMap<TransportId, Arc<Transport>>>>,
 }
 
-impl PpaassVpnServer<'_> {
-    pub fn new(file_descriptor: i32) -> Self {
+impl PpaassVpnServer {
+    pub(crate) fn new(file_descriptor: i32) -> Self {
         Self {
             file_descriptor,
             stop_sender: None,
-            _runtime: None,
+            runtime: None,
             processor_handle: None,
             transports: Default::default(),
         }
@@ -51,16 +51,17 @@ impl PpaassVpnServer<'_> {
         Ok(runtime)
     }
 
-    pub fn start(&mut self) -> Result<()> {
+    pub(crate) fn start(&mut self) -> Result<()> {
         debug!("Ppaass vpn server starting ...");
         let runtime = Self::init_runtime()?;
         let file_descriptor = self.file_descriptor;
         let client_file = unsafe { File::from_raw_fd(file_descriptor) };
         let client_file_read = Arc::new(Mutex::new(client_file));
         let client_file_write = client_file_read.clone();
-        let (stop_sender, stop_receiver) = channel::<bool>();
-        self._runtime = Some(runtime);
+        let (stop_sender, mut stop_receiver) = channel::<bool>(1);
+
         self.stop_sender = Some(stop_sender);
+        let transports = Arc::clone(&self.transports);
         let processor_handle = runtime.spawn(async move {
             let mut client_file_read_buffer = [0u8; 65536];
             loop {
@@ -92,31 +93,43 @@ impl PpaassVpnServer<'_> {
                         continue;
                     }
                 };
-                let mut transports = self.transports.lock().await;
+                let mut transports = transports.lock().await;
                 match transports.entry(transport_id) {
                     Entry::Occupied(entry) => {
                         entry.get().feed_client_data(client_data).await;
                     }
                     Entry::Vacant(entry) => {
-                        let transport = entry.insert(Arc::new(Transport::new(transport_id, client_file_write)));
-                        tokio::spawn(transport.start());
+                        let transport_in_server = entry.insert(Arc::new(Transport::new(
+                            transport_id,
+                            Arc::clone(&client_file_write),
+                        )));
+                        let transport = Arc::clone(transport_in_server);
+                        tokio::spawn(async move {
+                            transport.start().await;
+                        });
+                        transport_in_server.feed_client_data(client_data).await;
                     }
                 }
             }
             Ok::<(), AnyhowError>(())
         });
+        self.runtime = Some(runtime);
         self.processor_handle = Some(processor_handle);
         debug!("Ppaass vpn server started");
         Ok(())
     }
 
-    pub fn stop(&mut self) -> Result<()> {
+    pub(crate) fn stop(&mut self) -> Result<()> {
         debug!("Stop ppaass vpn server");
-        self._runtime.take();
-        let stop_sender = self.stop_sender.take().unwrap();
-        stop_sender
-            .send(true)
-            .map_err(|_| anyhow!("Fail to send stop request to ppaass vpn server."))?;
+        if let Some(runtime) = self.runtime.take() {
+            if let Some(stop_sender) = self.stop_sender.take() {
+                runtime.spawn(async move {
+                    if let Err(e) = stop_sender.send(true).await {
+                        error!("Fail to send stop command to ppaass server because of error: {e:?}")
+                    };
+                });
+            }
+        }
         let processor_handle = self
             .processor_handle
             .take()

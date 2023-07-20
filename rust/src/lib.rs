@@ -1,6 +1,4 @@
 mod device;
-mod endpoint;
-mod processor;
 mod types;
 mod util;
 
