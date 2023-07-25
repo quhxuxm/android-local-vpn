@@ -1,6 +1,6 @@
 use log::error;
 
-use crate::{device::SmoltcpDevice, protect_socket};
+use crate::device::SmoltcpDevice;
 
 use anyhow::anyhow;
 use anyhow::Result;

@@ -105,7 +105,9 @@ impl PpaassVpnServer {
                         )));
                         let transport = Arc::clone(transport_in_server);
                         tokio::spawn(async move {
-                            transport.start().await;
+                            if let Err(e) = transport.start().await {
+                                error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
+                            };
                         });
                         transport_in_server.feed_client_data(client_data).await;
                     }
