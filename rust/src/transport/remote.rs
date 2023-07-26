@@ -6,7 +6,7 @@ use super::{client::ClientEndpoint, value::InternetProtocol, TransportId};
 use anyhow::{anyhow, Result};
 use log::{debug, error};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::{TcpSocket, TcpStream, UdpSocket},
     sync::{Mutex, Notify},
 };

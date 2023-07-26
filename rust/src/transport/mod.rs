@@ -3,7 +3,7 @@ mod common;
 mod remote;
 mod value;
 
-use std::{fs::File, io::Write, sync::Arc};
+use std::sync::Arc;
 
 use crate::transport::remote::RemoteEndpoint;
 
@@ -12,6 +12,7 @@ use self::client::ClientEndpoint;
 use anyhow::Result;
 use log::{debug, error};
 
+use crate::values::ClientFileTxPacket;
 use tokio::sync::{
     mpsc::{channel, Receiver, Sender},
     Mutex, Notify,
@@ -23,17 +24,17 @@ pub(crate) use self::value::TransportId;
 #[derive(Debug)]
 pub(crate) struct Transport {
     transport_id: TransportId,
-    client_file_write: Arc<Mutex<File>>,
+    client_file_tx_sender: Sender<ClientFileTxPacket>,
     client_data_sender: Sender<Vec<u8>>,
     client_data_receiver: Mutex<Option<Receiver<Vec<u8>>>>,
 }
 
 impl Transport {
-    pub(crate) fn new(transport_id: TransportId, client_file_write: Arc<Mutex<File>>) -> Self {
+    pub(crate) fn new(transport_id: TransportId, client_file_tx_sender: Sender<ClientFileTxPacket>) -> Self {
         let (client_data_sender, client_data_receiver) = channel::<Vec<u8>>(1024);
         Self {
             transport_id,
-            client_file_write,
+            client_file_tx_sender,
             client_data_sender,
             client_data_receiver: Mutex::new(Some(client_data_receiver)),
         }
@@ -42,46 +43,29 @@ impl Transport {
     pub(crate) async fn start(&self) -> Result<()> {
         let transport_id = self.transport_id;
         if let Some(mut client_data_receiver) = self.client_data_receiver.lock().await.take() {
-            let (client_endpoint, client_endpoint_output_tx, client_endpoint_recv_buffer_notify) = match self.transport_id.control_protocol {
-                ControlProtocol::Tcp => ClientEndpoint::new_tcp(self.transport_id)?,
-                ControlProtocol::Udp => ClientEndpoint::new_udp(self.transport_id)?,
+            let (client_endpoint, client_endpoint_recv_buffer_notify) = match self.transport_id.control_protocol {
+                ControlProtocol::Tcp => ClientEndpoint::new_tcp(self.transport_id, self.client_file_tx_sender.clone())?,
+                ControlProtocol::Udp => ClientEndpoint::new_udp(self.transport_id, self.client_file_tx_sender.clone())?,
             };
-            debug!("Transport {transport_id} success create client endpoint");
+            debug!(">>>> Transport {transport_id} success create client endpoint.");
             let (remote_endpoint, remote_endpoint_recv_buffer_notify) = match self.transport_id.control_protocol {
                 ControlProtocol::Tcp => RemoteEndpoint::new_tcp(self.transport_id).await?,
                 ControlProtocol::Udp => RemoteEndpoint::new_udp(self.transport_id).await?,
             };
+            debug!(">>>> Transport {transport_id} success create remote endpoint.");
             let remote_endpoint = Arc::new(remote_endpoint);
-            debug!("Transport {transport_id} success create remote endpoint");
-            self.spawn_client_output_task(client_endpoint_output_tx);
-            debug!("Transport {transport_id} spawn client output task");
             let client_endpoint = Arc::new(client_endpoint);
-            {
-                let client_endpoint = Arc::clone(&client_endpoint);
-                let remote_endpoint = Arc::clone(&remote_endpoint);
-                self.spawn_client_endpoint_recv_buffer_consume_task(
-                    client_endpoint,
-                    client_endpoint_recv_buffer_notify,
-                    remote_endpoint,
-                );
-            }
-            debug!("Transport {transport_id} spawn consume client receive buffer task");
-            {
-                let client_endpoint = Arc::clone(&client_endpoint);
-                let remote_endpoint = Arc::clone(&remote_endpoint);
-                self.spawn_read_remote_task(client_endpoint, remote_endpoint)
-            }
-            debug!("Transport {transport_id} spawn read remote task");
-            {
-                let client_endpoint = Arc::clone(&client_endpoint);
-                let remote_endpoint = Arc::clone(&remote_endpoint);
-                self.spawn_remote_endpoint_recv_buffer_consume_task(
-                    client_endpoint,
-                    remote_endpoint_recv_buffer_notify,
-                    remote_endpoint,
-                );
-            }
-            debug!("Transport {transport_id} spawn consume remote receive buffer task");
+            self.spawn_client_endpoint_recv_buffer_consume_task(
+                Arc::clone(&client_endpoint),
+                client_endpoint_recv_buffer_notify,
+                Arc::clone(&remote_endpoint),
+            );
+            self.spawn_read_remote_task(Arc::clone(&client_endpoint), Arc::clone(&remote_endpoint));
+            self.spawn_remote_endpoint_recv_buffer_consume_task(
+                Arc::clone(&client_endpoint),
+                remote_endpoint_recv_buffer_notify,
+                Arc::clone(&remote_endpoint),
+            );
             loop {
                 if let Some(client_data) = client_data_receiver.recv().await {
                     client_endpoint.receive_from_client(client_data).await;
@@ -100,6 +84,7 @@ impl Transport {
         }
     }
 
+    /// Spawn a task to read remote data
     fn spawn_read_remote_task<'buf>(&self, client_endpoint: Arc<ClientEndpoint<'buf>>, remote_endpoint: Arc<RemoteEndpoint>)
     where
         'buf: 'static,
@@ -118,21 +103,7 @@ impl Transport {
         });
     }
 
-    fn spawn_client_output_task(&self, mut client_endpoint_output_tx: Receiver<Vec<u8>>) {
-        // Spwn a task for output data to client
-        let transport_id = self.transport_id;
-        let client_file_write = Arc::clone(&self.client_file_write);
-        tokio::spawn(async move {
-            while let Some(data) = client_endpoint_output_tx.recv().await {
-                let mut client_file_write = client_file_write.lock().await;
-                if let Err(e) = client_file_write.write_all(&data) {
-                    error!("<<<< Transport {transport_id} fail to write data to client because of error: {e:?}");
-                    break;
-                };
-            }
-        });
-    }
-
+    /// Spawn a task to consume the client endpoint receive data buffer
     fn spawn_client_endpoint_recv_buffer_consume_task<'buf>(
         &self,
         client_endpoint: Arc<ClientEndpoint<'buf>>,
@@ -141,7 +112,7 @@ impl Transport {
     ) where
         'buf: 'static,
     {
-        // Spwn a task for output data to client
+        // Spawn a task for output data to client
         let transport_id = self.transport_id;
 
         tokio::spawn(async move {
@@ -164,6 +135,7 @@ impl Transport {
         });
     }
 
+    /// Spawn a task to consume the remote endpoint receive data buffer
     fn spawn_remote_endpoint_recv_buffer_consume_task<'buf>(
         &self,
         client_endpoint: Arc<ClientEndpoint<'buf>>,
@@ -172,7 +144,7 @@ impl Transport {
     ) where
         'buf: 'static,
     {
-        // Spwn a task for output data to client
+        // Spawn a task for output data to client
         let transport_id = self.transport_id;
 
         tokio::spawn(async move {

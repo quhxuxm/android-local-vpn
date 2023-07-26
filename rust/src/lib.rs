@@ -1,6 +1,6 @@
 mod device;
-mod types;
 mod util;
+mod values;
 
 mod server;
 mod transport;

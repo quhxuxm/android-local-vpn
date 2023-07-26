@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::{
     collections::{hash_map::Entry, HashMap},
     fs::File,
@@ -7,7 +8,7 @@ use std::{
 };
 
 use crate::transport::{Transport, TransportId};
-use log::{debug, error};
+use log::{debug, error, info};
 
 use tokio::{
     runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
@@ -19,8 +20,10 @@ use tokio::{
     task::JoinHandle,
 };
 
+use crate::values::ClientFileTxPacket;
 use anyhow::Result;
 use anyhow::{anyhow, Error as AnyhowError};
+use tokio::sync::mpsc::Receiver;
 
 #[derive(Debug)]
 pub(crate) struct PpaassVpnServer {
@@ -58,67 +61,95 @@ impl PpaassVpnServer {
         let client_file = unsafe { File::from_raw_fd(file_descriptor) };
         let client_file_read = Arc::new(Mutex::new(client_file));
         let client_file_write = client_file_read.clone();
-        let (stop_sender, mut stop_receiver) = channel::<bool>(1);
+        let (stop_sender, stop_receiver) = channel::<bool>(1);
 
         self.stop_sender = Some(stop_sender);
         let transports = Arc::clone(&self.transports);
         let processor_handle = runtime.spawn(async move {
-            let mut client_file_read_buffer = [0u8; 65536];
-            loop {
-                match stop_receiver.try_recv() {
-                    Ok(true) => break,
-                    Err(TryRecvError::Disconnected) => break,
-                    _ => {}
+            let (client_file_tx_sender, mut client_file_tx_receiver) = channel::<ClientFileTxPacket>(1024);
+            info!("Spawn client file write task.");
+            tokio::spawn(async move {
+                while let Some(ClientFileTxPacket { transport_id, data }) = client_file_tx_receiver.recv().await {
+                    let mut client_file_write = client_file_write.lock().await;
+                    if let Err(e) = client_file_write.write_all(&data) {
+                        error!("<<<< Transport {transport_id} fail to write data to client because of error: {e:?}");
+                    };
                 }
-                let client_data = match {
-                    let mut client_file_read = client_file_read.lock().await;
-                    client_file_read.read(&mut client_file_read_buffer)
-                } {
-                    Ok(0) => {
-                        break;
-                    }
-                    Ok(size) => &client_file_read_buffer[..size],
-                    Err(e) => {
-                        if e.kind() == ErrorKind::WouldBlock {
-                            continue;
-                        }
-                        break;
-                    }
-                };
-
-                let transport_id = match TransportId::new(client_data) {
-                    Ok(transport_id) => transport_id,
-                    Err(e) => {
-                        error!(">>>> Fail to parse transport id because of error: {e:?}");
-                        continue;
-                    }
-                };
-                let mut transports = transports.lock().await;
-                match transports.entry(transport_id) {
-                    Entry::Occupied(entry) => {
-                        entry.get().feed_client_data(client_data).await;
-                    }
-                    Entry::Vacant(entry) => {
-                        let transport_in_server = entry.insert(Arc::new(Transport::new(
-                            transport_id,
-                            Arc::clone(&client_file_write),
-                        )));
-                        let transport = Arc::clone(transport_in_server);
-                        tokio::spawn(async move {
-                            if let Err(e) = transport.start().await {
-                                error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
-                            };
-                        });
-                        transport_in_server.feed_client_data(client_data).await;
-                    }
-                }
-            }
+            });
+            info!("Begin to handle client file data.");
+            Self::start_handle_client_data(
+                client_file_read,
+                stop_receiver,
+                transports,
+                client_file_tx_sender,
+            )
+            .await;
             Ok::<(), AnyhowError>(())
         });
         self.runtime = Some(runtime);
         self.processor_handle = Some(processor_handle);
         debug!("Ppaass vpn server started");
         Ok(())
+    }
+
+    async fn start_handle_client_data(
+        client_file_read: Arc<Mutex<File>>,
+        mut stop_receiver: Receiver<bool>,
+        transports: Arc<Mutex<HashMap<TransportId, Arc<Transport>>>>,
+        client_file_tx_sender: Sender<ClientFileTxPacket>,
+    ) {
+        let mut client_file_read_buffer = [0u8; 65536];
+        loop {
+            match stop_receiver.try_recv() {
+                Ok(true) => break,
+                Err(TryRecvError::Disconnected) => break,
+                _ => {}
+            }
+            let client_data = match {
+                let mut client_file_read = client_file_read.lock().await;
+                client_file_read.read(&mut client_file_read_buffer)
+            } {
+                Ok(0) => {
+                    break;
+                }
+                Ok(size) => &client_file_read_buffer[..size],
+                Err(e) => {
+                    if e.kind() == ErrorKind::WouldBlock {
+                        continue;
+                    }
+                    break;
+                }
+            };
+
+            let transport_id = match TransportId::new(client_data) {
+                Ok(transport_id) => transport_id,
+                Err(e) => {
+                    error!(">>>> Fail to parse transport id because of error: {e:?}");
+                    continue;
+                }
+            };
+            let mut transports = transports.lock().await;
+            match transports.entry(transport_id) {
+                Entry::Occupied(entry) => {
+                    debug!(">>>> Found existing transport {transport_id}.");
+                    entry.get().feed_client_data(client_data).await;
+                }
+                Entry::Vacant(entry) => {
+                    debug!(">>>> Create new transport {transport_id}.");
+                    let transport = entry.insert(Arc::new(Transport::new(
+                        transport_id,
+                        client_file_tx_sender.clone(),
+                    )));
+                    let transport_clone = Arc::clone(transport);
+                    tokio::spawn(async move {
+                        if let Err(e) = transport_clone.start().await {
+                            error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
+                        };
+                    });
+                    transport.feed_client_data(client_data).await;
+                }
+            }
+        }
     }
 
     pub(crate) fn stop(&mut self) -> Result<()> {
