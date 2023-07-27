@@ -284,10 +284,18 @@ impl<'buf> ClientEndpoint<'buf> {
                     while smoltcp_tcp_socket.may_recv() {
                         let mut data = [0u8; 65536];
                         let data = match smoltcp_tcp_socket.recv_slice(&mut data) {
-                            Ok(0) => break,
+                            Ok(0) => {
+                                if !recv_buffer.lock().await.is_empty() {
+                                    recv_buffer_notify.notify_waiters();
+                                }
+                                break;
+                            }
                             Ok(size) => &data[..size],
                             Err(e) => {
                                 error!(">>>> Transport {transport_id} fail to receive tcp data from smoltcp because of error: {e:?}");
+                                if !recv_buffer.lock().await.is_empty() {
+                                    recv_buffer_notify.notify_waiters();
+                                }
                                 break;
                             }
                         };
@@ -321,16 +329,24 @@ impl<'buf> ClientEndpoint<'buf> {
                     while let Some(output) = smoltcp_device.pop_tx() {
                         let client_file_tx_packet = ClientFileTxPacket::new(*transport_id, output);
                         if let Err(e) = client_file_tx_sender.send(client_file_tx_packet).await {
-                            error!("<<<< Transport {transport_id} fail to transfer smoltcp udp data for outupt because of error: {e:?}")
+                            error!("<<<< Transport {transport_id} fail to transfer smoltcp udp data for output because of error: {e:?}")
                         };
                     }
                     while smoltcp_udp_socket.can_recv() {
                         let mut data = [0u8; 65536];
                         let data = match smoltcp_udp_socket.recv_slice(&mut data) {
-                            Ok((0, _)) => break,
+                            Ok((0, _)) => {
+                                if !recv_buffer.lock().await.is_empty() {
+                                    recv_buffer_notify.notify_waiters();
+                                }
+                                break;
+                            }
                             Ok((size, _)) => &data[..size],
                             Err(e) => {
                                 error!(">>>> Transport {transport_id} fail to receive udp data from smoltcp because of error: {e:?}");
+                                if !recv_buffer.lock().await.is_empty() {
+                                    recv_buffer_notify.notify_waiters();
+                                }
                                 break;
                             }
                         };
