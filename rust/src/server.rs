@@ -1,15 +1,13 @@
-use std::io::Write;
 use std::time::Duration;
 use std::{
     collections::{hash_map::Entry, HashMap},
-    fs::File,
     io::{ErrorKind, Read},
     os::fd::FromRawFd,
     sync::Arc,
 };
 
 use crate::transport::{Transport, TransportId};
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 
 use tokio::{
     runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
@@ -24,7 +22,10 @@ use tokio::{
 use crate::values::ClientFileTxPacket;
 use anyhow::Result;
 use anyhow::{anyhow, Error as AnyhowError};
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf};
 use tokio::sync::mpsc::Receiver;
+use tokio::time::sleep;
 
 #[derive(Debug)]
 pub(crate) struct PpaassVpnServer {
@@ -46,9 +47,9 @@ impl PpaassVpnServer {
         }
     }
 
-    fn init_runtime() -> Result<TokioRuntime> {
+    fn init_async_runtime() -> Result<TokioRuntime> {
         let mut runtime_builder = TokioRuntimeBuilder::new_multi_thread();
-        runtime_builder.worker_threads(128);
+        runtime_builder.worker_threads(64);
         runtime_builder.enable_all();
         runtime_builder.thread_name("PPAASS");
         let runtime = runtime_builder.build()?;
@@ -57,13 +58,10 @@ impl PpaassVpnServer {
 
     pub(crate) fn start(&mut self) -> Result<()> {
         debug!("Ppaass vpn server starting ...");
-        let runtime = Self::init_runtime()?;
+        let runtime = Self::init_async_runtime()?;
         let file_descriptor = self.file_descriptor;
-        let client_file = unsafe { File::from_raw_fd(file_descriptor) };
-        let client_file_read = Arc::new(Mutex::new(client_file));
-        let client_file_write = client_file_read.clone();
+        let (client_file_read, mut client_file_write) = tokio::io::split(unsafe { File::from_raw_fd(file_descriptor) });
         let (stop_sender, stop_receiver) = channel::<bool>(1);
-
         self.stop_sender = Some(stop_sender);
         let transports = Arc::clone(&self.transports);
         let processor_handle = runtime.spawn(async move {
@@ -71,8 +69,7 @@ impl PpaassVpnServer {
             info!("Spawn client file write task.");
             tokio::spawn(async move {
                 while let Some(ClientFileTxPacket { transport_id, data }) = client_file_tx_receiver.recv().await {
-                    let mut client_file_write = client_file_write.lock().await;
-                    if let Err(e) = client_file_write.write_all(&data) {
+                    if let Err(e) = client_file_write.write_all(&data).await {
                         error!("<<<< Transport {transport_id} fail to write data to client because of error: {e:?}");
                     };
                 }
@@ -89,37 +86,37 @@ impl PpaassVpnServer {
         });
         self.runtime = Some(runtime);
         self.processor_handle = Some(processor_handle);
-        debug!("Ppaass vpn server started");
+        info!("Ppaass vpn server started");
         Ok(())
     }
 
     async fn start_handle_client_data(
-        client_file_read: Arc<Mutex<File>>,
+        mut client_file_read: ReadHalf<File>,
         mut stop_receiver: Receiver<bool>,
         transports: Arc<Mutex<HashMap<TransportId, Arc<Transport>>>>,
         client_file_tx_sender: Sender<ClientFileTxPacket>,
     ) {
-        let mut client_file_read_buffer = [0u8; 65536];
         loop {
             match stop_receiver.try_recv() {
                 Ok(true) => break,
+                Ok(false) => error!("Receive a unexpected stop flag."),
                 Err(TryRecvError::Disconnected) => break,
-                _ => {}
+                Err(TryRecvError::Empty) => {
+                    trace!("No stop flag.")
+                }
             }
-            let client_file_read_result = client_file_read
-                .lock()
-                .await
-                .read(&mut client_file_read_buffer);
-            let client_data = match client_file_read_result {
+            let mut client_file_read_buffer = [0u8; 65536];
+            let client_data = match client_file_read.read(&mut client_file_read_buffer).await {
                 Ok(0) => {
+                    info!("Nothing to read from client file break the loop.");
                     break;
                 }
                 Ok(size) => &client_file_read_buffer[..size],
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
                 Err(e) => {
-                    if e.kind() == ErrorKind::WouldBlock {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                        continue;
-                    }
                     error!("Fail to read client file data because of error: {e:?}");
                     break;
                 }

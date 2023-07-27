@@ -3,6 +3,7 @@ use std::{collections::VecDeque, future::Future, io::ErrorKind, os::fd::AsRawFd,
 use crate::protect_socket;
 
 use super::{client::ClientEndpoint, value::InternetProtocol, TransportId};
+use crate::transport::ControlProtocol;
 use anyhow::{anyhow, Result};
 use log::{debug, error};
 use tokio::{
@@ -27,7 +28,14 @@ pub(crate) enum RemoteEndpoint {
 }
 
 impl RemoteEndpoint {
-    pub(crate) async fn new_tcp(transport_id: TransportId) -> Result<(Self, Arc<Notify>)> {
+    pub(crate) async fn new(transport_id: TransportId) -> Result<(Self, Arc<Notify>)> {
+        match transport_id.control_protocol {
+            ControlProtocol::Tcp => Self::new_tcp(transport_id).await,
+            ControlProtocol::Udp => Self::new_udp(transport_id).await,
+        }
+    }
+
+    async fn new_tcp(transport_id: TransportId) -> Result<(Self, Arc<Notify>)> {
         let tcp_socket = match transport_id.internet_protocol {
             InternetProtocol::Ipv4 => TcpSocket::new_v4()?,
             InternetProtocol::Ipv6 => TcpSocket::new_v6()?,
@@ -47,7 +55,7 @@ impl RemoteEndpoint {
         ))
     }
 
-    pub(crate) async fn new_udp(transport_id: TransportId) -> Result<(Self, Arc<Notify>)> {
+    async fn new_udp(transport_id: TransportId) -> Result<(Self, Arc<Notify>)> {
         let remote_udp_socket = UdpSocket::bind("0.0.0.0:0").await?;
         let raw_socket_fd = remote_udp_socket.as_raw_fd();
         protect_socket(raw_socket_fd)?;
@@ -66,7 +74,7 @@ impl RemoteEndpoint {
 
     pub(crate) async fn read_from_remote(&self) -> Result<bool> {
         match self {
-            RemoteEndpoint::Tcp {
+            Self::Tcp {
                 transport_id,
                 remote_tcp_stream,
                 recv_buffer,
@@ -100,7 +108,7 @@ impl RemoteEndpoint {
                     }
                 }
             }
-            RemoteEndpoint::Udp {
+            Self::Udp {
                 transport_id,
                 remote_udp_socket,
                 recv_buffer,
@@ -130,7 +138,7 @@ impl RemoteEndpoint {
 
     pub(crate) async fn write_to_remote(&self, data: Vec<u8>) -> Result<usize> {
         match self {
-            RemoteEndpoint::Tcp {
+            Self::Tcp {
                 transport_id,
                 remote_tcp_stream,
                 ..
@@ -143,7 +151,7 @@ impl RemoteEndpoint {
                 remote_tcp_stream.flush().await?;
                 write_result
             }
-            RemoteEndpoint::Udp {
+            Self::Udp {
                 transport_id,
                 remote_udp_socket,
                 ..
@@ -160,7 +168,7 @@ impl RemoteEndpoint {
         Fut: Future<Output = Result<usize>>,
     {
         match self {
-            RemoteEndpoint::Tcp {
+            Self::Tcp {
                 transport_id,
                 recv_buffer,
                 ..
@@ -175,7 +183,7 @@ impl RemoteEndpoint {
                 recv_buffer.drain(..consume_size);
                 Ok(())
             }
-            RemoteEndpoint::Udp {
+            Self::Udp {
                 transport_id,
                 recv_buffer,
                 ..
@@ -194,7 +202,7 @@ impl RemoteEndpoint {
 
     pub(crate) async fn close(&self) {
         match self {
-            RemoteEndpoint::Tcp {
+            Self::Tcp {
                 transport_id,
                 remote_tcp_stream,
                 recv_buffer_notify,
@@ -206,7 +214,7 @@ impl RemoteEndpoint {
                 };
                 recv_buffer_notify.notify_waiters();
             }
-            RemoteEndpoint::Udp {
+            Self::Udp {
                 recv_buffer_notify, ..
             } => {
                 recv_buffer_notify.notify_waiters();

@@ -58,15 +58,9 @@ impl Transport {
             ));
         }
         if let Some(mut client_data_receiver) = self.client_data_receiver.lock().await.take() {
-            let (client_endpoint, client_endpoint_recv_buffer_notify) = match self.transport_id.control_protocol {
-                ControlProtocol::Tcp => ClientEndpoint::new_tcp(self.transport_id, self.client_file_tx_sender.clone())?,
-                ControlProtocol::Udp => ClientEndpoint::new_udp(self.transport_id, self.client_file_tx_sender.clone())?,
-            };
+            let (client_endpoint, client_endpoint_recv_buffer_notify) = ClientEndpoint::new(self.transport_id, self.client_file_tx_sender.clone())?;
             debug!(">>>> Transport {transport_id} success create client endpoint.");
-            let (remote_endpoint, remote_endpoint_recv_buffer_notify) = match self.transport_id.control_protocol {
-                ControlProtocol::Tcp => RemoteEndpoint::new_tcp(self.transport_id).await?,
-                ControlProtocol::Udp => RemoteEndpoint::new_udp(self.transport_id).await?,
-            };
+            let (remote_endpoint, remote_endpoint_recv_buffer_notify) = RemoteEndpoint::new(transport_id).await?;
             debug!(">>>> Transport {transport_id} success create remote endpoint.");
             let remote_endpoint = Arc::new(remote_endpoint);
             let client_endpoint = Arc::new(client_endpoint);

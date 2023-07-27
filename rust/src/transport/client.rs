@@ -10,6 +10,7 @@ use smoltcp::{
 use tokio::sync::{mpsc::Sender, Mutex, Notify};
 
 use crate::device::SmoltcpDevice;
+use crate::transport::ControlProtocol;
 use crate::values::ClientFileTxPacket;
 
 use super::{
@@ -42,7 +43,14 @@ pub(crate) enum ClientEndpoint<'buf> {
 }
 
 impl<'buf> ClientEndpoint<'buf> {
-    pub(crate) fn new_tcp(transport_id: TransportId, client_file_tx_sender: Sender<ClientFileTxPacket>) -> Result<(ClientEndpoint<'buf>, Arc<Notify>)> {
+    pub(crate) fn new(transport_id: TransportId, client_file_tx_sender: Sender<ClientFileTxPacket>) -> Result<(ClientEndpoint<'buf>, Arc<Notify>)> {
+        match transport_id.control_protocol {
+            ControlProtocol::Tcp => Self::new_tcp(transport_id, client_file_tx_sender),
+            ControlProtocol::Udp => Self::new_udp(transport_id, client_file_tx_sender),
+        }
+    }
+
+    fn new_tcp(transport_id: TransportId, client_file_tx_sender: Sender<ClientFileTxPacket>) -> Result<(ClientEndpoint<'buf>, Arc<Notify>)> {
         let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
         let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1024));
         let smoltcp_tcp_socket = create_smoltcp_tcp_socket(transport_id, transport_id.destination.into())?;
@@ -63,7 +71,7 @@ impl<'buf> ClientEndpoint<'buf> {
         ))
     }
 
-    pub(crate) fn new_udp(transport_id: TransportId, client_file_tx_sender: Sender<ClientFileTxPacket>) -> Result<(ClientEndpoint<'buf>, Arc<Notify>)> {
+    fn new_udp(transport_id: TransportId, client_file_tx_sender: Sender<ClientFileTxPacket>) -> Result<(ClientEndpoint<'buf>, Arc<Notify>)> {
         let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
         let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1024));
         let smoltcp_udp_socket = create_smoltcp_udp_socket(transport_id, transport_id.destination.into())?;
