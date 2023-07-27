@@ -72,10 +72,13 @@ impl RemoteEndpoint {
                 recv_buffer,
                 recv_buffer_notify,
             } => {
-                let mut remote_tcp_stream = remote_tcp_stream.lock().await;
+                let remote_tcp_stream = remote_tcp_stream.lock().await;
                 let mut data = [0u8; 65536];
                 match remote_tcp_stream.try_read(&mut data) {
-                    Ok(0) => Ok(true),
+                    Ok(0) => {
+                        recv_buffer_notify.notify_waiters();
+                        Ok(true)
+                    }
                     Ok(size) => {
                         let mut recv_buffer = recv_buffer.lock().await;
                         let remote_data = &data[..size];
@@ -104,7 +107,10 @@ impl RemoteEndpoint {
             } => {
                 let mut data = [0u8; 65536];
                 match remote_udp_socket.recv(&mut data).await? {
-                    0 => Ok(true),
+                    0 => {
+                        recv_buffer_notify.notify_waiters();
+                        Ok(true)
+                    }
                     size => {
                         let mut recv_buffer = recv_buffer.lock().await;
                         let remote_data = &data[..size];

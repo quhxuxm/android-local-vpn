@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::time::Duration;
 use std::{
     collections::{hash_map::Entry, HashMap},
     fs::File,
@@ -105,18 +106,21 @@ impl PpaassVpnServer {
                 Err(TryRecvError::Disconnected) => break,
                 _ => {}
             }
-            let client_data = match {
-                let mut client_file_read = client_file_read.lock().await;
-                client_file_read.read(&mut client_file_read_buffer)
-            } {
+            let client_file_read_result = client_file_read
+                .lock()
+                .await
+                .read(&mut client_file_read_buffer);
+            let client_data = match client_file_read_result {
                 Ok(0) => {
                     break;
                 }
                 Ok(size) => &client_file_read_buffer[..size],
                 Err(e) => {
                     if e.kind() == ErrorKind::WouldBlock {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
                         continue;
                     }
+                    error!("Fail to read client file data because of error: {e:?}");
                     break;
                 }
             };
@@ -143,12 +147,11 @@ impl PpaassVpnServer {
                         Arc::clone(&transports),
                     )));
                     let transport_clone = Arc::clone(transport);
-                    let transports_clone = Arc::clone(&transports);
+
                     tokio::spawn(async move {
                         if let Err(e) = transport_clone.start().await {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
-                            let mut transports_lock = transports_clone.lock().await;
-                            transports_lock.remove(&transport_id);
+                            transport_clone.close().await;
                         };
                     });
                     transport.feed_client_data(client_data).await;

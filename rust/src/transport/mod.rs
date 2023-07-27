@@ -10,7 +10,7 @@ use crate::transport::remote::RemoteEndpoint;
 
 use self::client::ClientEndpoint;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use log::{debug, error};
 
 use crate::values::ClientFileTxPacket;
@@ -25,6 +25,7 @@ pub(crate) use self::value::TransportId;
 
 #[derive(Debug)]
 pub(crate) struct Transport {
+    closed: Arc<Mutex<bool>>,
     transport_id: TransportId,
     client_file_tx_sender: Sender<ClientFileTxPacket>,
     client_data_sender: Sender<Vec<u8>>,
@@ -45,11 +46,17 @@ impl Transport {
             client_data_sender,
             client_data_receiver: Mutex::new(Some(client_data_receiver)),
             transports,
+            closed: Arc::new(Mutex::new(false)),
         }
     }
 
     pub(crate) async fn start(&self) -> Result<()> {
         let transport_id = self.transport_id;
+        if *self.closed.lock().await {
+            return Err(anyhow!(
+                ">>>> Transport {transport_id} can not start because of it closed already."
+            ));
+        }
         if let Some(mut client_data_receiver) = self.client_data_receiver.lock().await.take() {
             let (client_endpoint, client_endpoint_recv_buffer_notify) = match self.transport_id.control_protocol {
                 ControlProtocol::Tcp => ClientEndpoint::new_tcp(self.transport_id, self.client_file_tx_sender.clone())?,
@@ -84,12 +91,23 @@ impl Transport {
     }
 
     pub(crate) async fn feed_client_data(&self, data: &[u8]) {
+        if *self.closed.lock().await {
+            return;
+        }
         if let Err(e) = self.client_data_sender.send(data.to_vec()).await {
             error!(
                 ">>>> Transport {} fail to feed client data because of error: {e:?}",
                 self.transport_id
             );
+            self.close().await;
         }
+    }
+
+    pub(crate) async fn close(&self) {
+        let mut closed = self.closed.lock().await;
+        *closed = true;
+        let mut transports = self.transports.lock().await;
+        transports.remove(&self.transport_id);
     }
 
     /// Spawn a task to read remote data
@@ -98,15 +116,12 @@ impl Transport {
         'buf: 'static,
     {
         let transport_id = self.transport_id;
-        let transports = Arc::clone(&self.transports);
         tokio::spawn(async move {
             loop {
                 let remote_closed = remote_endpoint.read_from_remote().await?;
                 if remote_closed {
                     debug!("<<<< Transport {transport_id} remote endpoint closed.");
                     client_endpoint.close().await;
-                    let mut transports = transports.lock().await;
-                    transports.remove(&transport_id);
                     break;
                 }
             }
@@ -125,7 +140,6 @@ impl Transport {
     {
         // Spawn a task for output data to client
         let transport_id = self.transport_id;
-
         tokio::spawn(async move {
             async fn consume_fn(transport_id: TransportId, data: Vec<u8>, remote: Arc<RemoteEndpoint>) -> Result<usize> {
                 debug!(
@@ -157,7 +171,6 @@ impl Transport {
     {
         // Spawn a task for output data to client
         let transport_id = self.transport_id;
-
         tokio::spawn(async move {
             async fn consume_fn(transport_id: TransportId, data: Vec<u8>, client: Arc<ClientEndpoint<'_>>) -> Result<usize> {
                 debug!(
