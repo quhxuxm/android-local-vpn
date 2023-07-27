@@ -128,8 +128,9 @@ impl PpaassVpnServer {
                     continue;
                 }
             };
-            let mut transports = transports.lock().await;
-            match transports.entry(transport_id) {
+
+            let mut transports_lock = transports.lock().await;
+            match transports_lock.entry(transport_id) {
                 Entry::Occupied(entry) => {
                     debug!(">>>> Found existing transport {transport_id}.");
                     entry.get().feed_client_data(client_data).await;
@@ -139,11 +140,15 @@ impl PpaassVpnServer {
                     let transport = entry.insert(Arc::new(Transport::new(
                         transport_id,
                         client_file_tx_sender.clone(),
+                        Arc::clone(&transports),
                     )));
                     let transport_clone = Arc::clone(transport);
+                    let transports_clone = Arc::clone(&transports);
                     tokio::spawn(async move {
                         if let Err(e) = transport_clone.start().await {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
+                            let mut transports_lock = transports_clone.lock().await;
+                            transports_lock.remove(&transport_id);
                         };
                     });
                     transport.feed_client_data(client_data).await;

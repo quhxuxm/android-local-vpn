@@ -3,6 +3,7 @@ mod common;
 mod remote;
 mod value;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::transport::remote::RemoteEndpoint;
@@ -13,6 +14,7 @@ use anyhow::Result;
 use log::{debug, error};
 
 use crate::values::ClientFileTxPacket;
+use anyhow::Error as AnyhowError;
 use tokio::sync::{
     mpsc::{channel, Receiver, Sender},
     Mutex, Notify,
@@ -27,16 +29,22 @@ pub(crate) struct Transport {
     client_file_tx_sender: Sender<ClientFileTxPacket>,
     client_data_sender: Sender<Vec<u8>>,
     client_data_receiver: Mutex<Option<Receiver<Vec<u8>>>>,
+    transports: Arc<Mutex<HashMap<TransportId, Arc<Transport>>>>,
 }
 
 impl Transport {
-    pub(crate) fn new(transport_id: TransportId, client_file_tx_sender: Sender<ClientFileTxPacket>) -> Self {
+    pub(crate) fn new(
+        transport_id: TransportId,
+        client_file_tx_sender: Sender<ClientFileTxPacket>,
+        transports: Arc<Mutex<HashMap<TransportId, Arc<Transport>>>>,
+    ) -> Self {
         let (client_data_sender, client_data_receiver) = channel::<Vec<u8>>(1024);
         Self {
             transport_id,
             client_file_tx_sender,
             client_data_sender,
             client_data_receiver: Mutex::new(Some(client_data_receiver)),
+            transports,
         }
     }
 
@@ -90,16 +98,19 @@ impl Transport {
         'buf: 'static,
     {
         let transport_id = self.transport_id;
+        let transports = Arc::clone(&self.transports);
         tokio::spawn(async move {
             loop {
                 let remote_closed = remote_endpoint.read_from_remote().await?;
                 if remote_closed {
                     debug!("<<<< Transport {transport_id} remote endpoint closed.");
                     client_endpoint.close().await;
+                    let mut transports = transports.lock().await;
+                    transports.remove(&transport_id);
                     break;
                 }
             }
-            Ok::<(), anyhow::Error>(())
+            Ok::<(), AnyhowError>(())
         });
     }
 
