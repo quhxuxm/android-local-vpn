@@ -48,7 +48,7 @@ impl RemoteEndpoint {
     }
 
     pub(crate) async fn new_udp(transport_id: TransportId) -> Result<(Self, Arc<Notify>)> {
-        let remote_udp_socket = UdpSocket::bind(transport_id.source).await?;
+        let remote_udp_socket = UdpSocket::bind("0.0.0.0:0").await?;
         let raw_socket_fd = remote_udp_socket.as_raw_fd();
         protect_socket(raw_socket_fd)?;
         remote_udp_socket.connect(transport_id.destination).await?;
@@ -77,6 +77,7 @@ impl RemoteEndpoint {
                 match remote_tcp_stream.try_read(&mut data) {
                     Ok(0) => {
                         recv_buffer_notify.notify_waiters();
+                        self.close().await;
                         Ok(true)
                     }
                     Ok(size) => {
@@ -187,6 +188,28 @@ impl RemoteEndpoint {
                 }
                 recv_buffer.drain(..consume_size);
                 Ok(())
+            }
+        }
+    }
+
+    pub(crate) async fn close(&self) {
+        match self {
+            RemoteEndpoint::Tcp {
+                transport_id,
+                remote_tcp_stream,
+                recv_buffer_notify,
+                ..
+            } => {
+                let mut remote_tcp_stream = remote_tcp_stream.lock().await;
+                if let Err(e) = remote_tcp_stream.shutdown().await {
+                    error!(">>>> Transport {transport_id} fail to close remote endpoint because of error: {e:?}")
+                };
+                recv_buffer_notify.notify_waiters();
+            }
+            RemoteEndpoint::Udp {
+                recv_buffer_notify, ..
+            } => {
+                recv_buffer_notify.notify_waiters();
             }
         }
     }
