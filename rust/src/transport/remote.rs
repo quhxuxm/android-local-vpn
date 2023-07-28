@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, future::Future, io::ErrorKind, os::fd::AsRawFd, sync::Arc};
+use std::{collections::VecDeque, future::Future, os::fd::AsRawFd, sync::Arc};
 
 use anyhow::{anyhow, Result};
 use log::{debug, error};
@@ -6,7 +6,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
-        TcpSocket, TcpStream, UdpSocket,
+        TcpSocket, UdpSocket,
     },
     sync::{Mutex, Notify},
 };
