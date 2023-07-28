@@ -5,19 +5,18 @@ mod values;
 mod server;
 mod transport;
 
-use crate::server::PpaassVpnServer;
+use crate::{server::PpaassVpnServer, util::AgentRsaCryptoFetcher};
 use android_logger::Config;
 use anyhow::{anyhow, Result};
 use jni::{
-    objects::{GlobalRef, JValue},
-    sys::jbyteArray,
+    objects::{GlobalRef, JByteArray, JValue},
     JNIEnv, JavaVM,
 };
 use jni::{
     objects::{JClass, JObject},
     sys::jint,
 };
-use log::{error, trace, LevelFilter};
+use log::{debug, error, trace, LevelFilter};
 
 use std::{cell::OnceCell, process};
 
@@ -48,19 +47,32 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
     _class: JClass<'static>,
     vpn_tun_device_fd: jint,
     vpn_service: JObject<'static>,
-    agent_private_key: jbyteArray,
-    proxy_public_key: jbyteArray,
+    agent_private_key: JByteArray,
+    proxy_public_key: JByteArray,
 ) {
     android_logger::init_once(
         Config::default()
             .with_tag("PPAASS-VPN-RUST")
             .with_max_level(LevelFilter::Error),
     );
-
     std::panic::set_hook(Box::new(|panic_info| {
         error!("*** PANIC [{:?}]", panic_info);
     }));
-
+    let agent_private_key = jni_env
+        .convert_byte_array(agent_private_key)
+        .expect("Fail to read agent private key bytes");
+    debug!(
+        "Agent private key: {}",
+        pretty_hex::pretty_hex(&agent_private_key)
+    );
+    let proxy_public_key = jni_env
+        .convert_byte_array(proxy_public_key)
+        .expect("Fail to read proxy public key bytes");
+    debug!(
+        "Proxy public key: {}",
+        pretty_hex::pretty_hex(&proxy_public_key)
+    );
+    let agent_crypto_fetcher = AgentRsaCryptoFetcher::new(agent_private_key, proxy_public_key).expect("Fail to create agent rsa crypto fetcher");
     let java_vm = jni_env
         .get_java_vm()
         .expect("Fail to get jvm from jni enviorment.");
@@ -74,12 +86,12 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
                 .expect("Fail to generate java vpn service object globale reference"),
         )
         .expect("Fail to save java vpn service object to global reference");
-    trace!(
+    debug!(
         "onStartVpn, pid={}, fd={}",
         process::id(),
         vpn_tun_device_fd
     );
-    let vpn_server = PpaassVpnServer::new(vpn_tun_device_fd);
+    let vpn_server = PpaassVpnServer::new(vpn_tun_device_fd, agent_crypto_fetcher);
     VPN_SERVER
         .set(vpn_server)
         .expect("Fail to generate ppaass vpn server.");

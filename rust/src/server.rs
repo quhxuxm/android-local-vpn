@@ -22,8 +22,11 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::transport::{Transport, TransportId};
 use crate::values::ClientFileTxPacket;
+use crate::{
+    transport::{Transport, TransportId},
+    util::AgentRsaCryptoFetcher,
+};
 
 #[derive(Debug)]
 pub(crate) struct PpaassVpnServer {
@@ -32,16 +35,18 @@ pub(crate) struct PpaassVpnServer {
     runtime: Option<TokioRuntime>,
     processor_handle: Option<JoinHandle<Result<()>>>,
     transports: Arc<Mutex<HashMap<TransportId, Arc<Transport>>>>,
+    agent_crypto_fetcher: Arc<AgentRsaCryptoFetcher>,
 }
 
 impl PpaassVpnServer {
-    pub(crate) fn new(file_descriptor: i32) -> Self {
+    pub(crate) fn new(file_descriptor: i32, agent_crypto_fetcher: AgentRsaCryptoFetcher) -> Self {
         Self {
             file_descriptor,
             stop_sender: None,
             runtime: None,
             processor_handle: None,
             transports: Default::default(),
+            agent_crypto_fetcher: Arc::new(agent_crypto_fetcher),
         }
     }
 
