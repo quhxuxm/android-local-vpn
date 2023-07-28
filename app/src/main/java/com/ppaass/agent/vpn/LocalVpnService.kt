@@ -93,6 +93,7 @@ internal class LocalVpnService : VpnService() {
         }
     }
 
+    @RequiresApi(VERSION_CODES.TIRAMISU)
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             INTENT_ACTION_START_VPN -> {
