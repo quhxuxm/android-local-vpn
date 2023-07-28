@@ -1,9 +1,5 @@
 use std::{collections::VecDeque, future::Future, io::ErrorKind, os::fd::AsRawFd, sync::Arc};
 
-use crate::protect_socket;
-
-use super::{client::ClientEndpoint, value::InternetProtocol, TransportId};
-use crate::transport::ControlProtocol;
 use anyhow::{anyhow, Result};
 use log::{debug, error};
 use tokio::{
@@ -12,18 +8,25 @@ use tokio::{
     sync::{Mutex, Notify},
 };
 
+use crate::protect_socket;
+use crate::transport::ControlProtocol;
+
+use super::{client::ClientEndpoint, TransportId, value::InternetProtocol};
+
 pub(crate) enum RemoteEndpoint {
     Tcp {
         transport_id: TransportId,
         remote_tcp_stream: Mutex<TcpStream>,
         recv_buffer: Arc<Mutex<VecDeque<u8>>>,
         recv_buffer_notify: Arc<Notify>,
+        closed: Mutex<bool>,
     },
     Udp {
         transport_id: TransportId,
         remote_udp_socket: UdpSocket,
         recv_buffer: Arc<Mutex<VecDeque<Vec<u8>>>>,
         recv_buffer_notify: Arc<Notify>,
+        closed: Mutex<bool>,
     },
 }
 
@@ -50,6 +53,7 @@ impl RemoteEndpoint {
                 remote_tcp_stream: Mutex::new(remote_tcp_stream),
                 recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
                 recv_buffer_notify: Arc::clone(&recv_buffer_notify),
+                closed: Mutex::new(false),
             },
             recv_buffer_notify,
         ))
@@ -67,6 +71,7 @@ impl RemoteEndpoint {
                 remote_udp_socket,
                 recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
                 recv_buffer_notify: Arc::clone(&recv_buffer_notify),
+                closed: Mutex::new(false),
             },
             recv_buffer_notify,
         ))
@@ -79,13 +84,13 @@ impl RemoteEndpoint {
                 remote_tcp_stream,
                 recv_buffer,
                 recv_buffer_notify,
+                ..
             } => {
                 let remote_tcp_stream = remote_tcp_stream.lock().await;
                 let mut data = [0u8; 65536];
                 match remote_tcp_stream.try_read(&mut data) {
                     Ok(0) => {
                         recv_buffer_notify.notify_waiters();
-                        self.close().await;
                         Ok(true)
                     }
                     Ok(size) => {
@@ -113,6 +118,7 @@ impl RemoteEndpoint {
                 remote_udp_socket,
                 recv_buffer,
                 recv_buffer_notify,
+                ..
             } => {
                 let mut data = [0u8; 65536];
                 match remote_udp_socket.recv(&mut data).await? {
@@ -155,47 +161,59 @@ impl RemoteEndpoint {
                 transport_id,
                 remote_udp_socket,
                 ..
-            } => remote_udp_socket.send(&data).await.map_err(|e| {
-                error!(">>>> Transport {transport_id} fail to write tcp data to remote because of error:{e:?}");
-                anyhow!("{e:?}")
-            }),
+            } => {
+                remote_udp_socket.send(&data).await.map_err(|e| {
+                    error!(">>>> Transport {transport_id} fail to write tcp data to remote because of error:{e:?}");
+                    anyhow!("{e:?}")
+                })
+            }
         }
     }
 
-    pub(crate) async fn consume_recv_buffer<'buf, F, Fut>(&self, remote: Arc<ClientEndpoint<'buf>>, mut consume_fn: F) -> Result<()>
-    where
-        F: FnMut(TransportId, Vec<u8>, Arc<ClientEndpoint<'buf>>) -> Fut,
-        Fut: Future<Output = Result<usize>>,
+    pub(crate) async fn consume_recv_buffer<'buf, F, Fut>(&self, remote: Arc<ClientEndpoint<'buf>>, mut consume_fn: F) -> Result<bool>
+        where
+            F: FnMut(TransportId, Vec<u8>, Arc<ClientEndpoint<'buf>>) -> Fut,
+            Fut: Future<Output=Result<usize>>,
     {
         match self {
             Self::Tcp {
                 transport_id,
                 recv_buffer,
+                closed,
                 ..
             } => {
                 let mut recv_buffer = recv_buffer.lock().await;
+                if recv_buffer.len() == 0 {
+                    let closed = closed.lock().await;
+                    return Ok(*closed);
+                }
                 let consume_size = consume_fn(
                     *transport_id,
                     recv_buffer.make_contiguous().to_vec(),
                     remote,
                 )
-                .await?;
+                    .await?;
                 recv_buffer.drain(..consume_size);
-                Ok(())
+                Ok(false)
             }
             Self::Udp {
                 transport_id,
                 recv_buffer,
+                closed,
                 ..
             } => {
                 let mut consume_size = 0;
                 let mut recv_buffer = recv_buffer.lock().await;
+                if recv_buffer.len() == 0 {
+                    let closed = closed.lock().await;
+                    return Ok(*closed);
+                }
                 for udp_data in recv_buffer.iter() {
                     consume_fn(*transport_id, udp_data.to_vec(), Arc::clone(&remote)).await?;
                     consume_size += 1;
                 }
                 recv_buffer.drain(..consume_size);
-                Ok(())
+                Ok(false)
             }
         }
     }
@@ -206,6 +224,7 @@ impl RemoteEndpoint {
                 transport_id,
                 remote_tcp_stream,
                 recv_buffer_notify,
+                closed,
                 ..
             } => {
                 let mut remote_tcp_stream = remote_tcp_stream.lock().await;
@@ -213,11 +232,15 @@ impl RemoteEndpoint {
                     error!(">>>> Transport {transport_id} fail to close remote endpoint because of error: {e:?}")
                 };
                 recv_buffer_notify.notify_waiters();
+                let mut closed = closed.lock().await;
+                *closed = true;
             }
             Self::Udp {
-                recv_buffer_notify, ..
+                recv_buffer_notify, closed, ..
             } => {
                 recv_buffer_notify.notify_waiters();
+                let mut closed = closed.lock().await;
+                *closed = true;
             }
         }
     }

@@ -29,6 +29,7 @@ pub(crate) enum ClientEndpoint<'buf> {
         recv_buffer: Arc<Mutex<VecDeque<u8>>>,
         recv_buffer_notify: Arc<Notify>,
         client_file_tx_sender: Sender<ClientFileTxPacket>,
+        closed: Mutex<bool>,
     },
     Udp {
         transport_id: TransportId,
@@ -39,6 +40,7 @@ pub(crate) enum ClientEndpoint<'buf> {
         recv_buffer: Arc<Mutex<VecDeque<Vec<u8>>>>,
         recv_buffer_notify: Arc<Notify>,
         client_file_tx_sender: Sender<ClientFileTxPacket>,
+        closed: Mutex<bool>,
     },
 }
 
@@ -53,7 +55,7 @@ impl<'buf> ClientEndpoint<'buf> {
     fn new_tcp(transport_id: TransportId, client_file_tx_sender: Sender<ClientFileTxPacket>) -> Result<(ClientEndpoint<'buf>, Arc<Notify>)> {
         let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
         let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1024));
-        let smoltcp_tcp_socket = create_smoltcp_tcp_socket(transport_id, )?;
+        let smoltcp_tcp_socket = create_smoltcp_tcp_socket(transport_id)?;
         let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_tcp_socket);
         let recv_buffer_notify = Arc::new(Notify::new());
         Ok((
@@ -66,6 +68,7 @@ impl<'buf> ClientEndpoint<'buf> {
                 recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
                 recv_buffer_notify: Arc::clone(&recv_buffer_notify),
                 client_file_tx_sender,
+                closed: Mutex::new(false),
             },
             recv_buffer_notify,
         ))
@@ -87,12 +90,13 @@ impl<'buf> ClientEndpoint<'buf> {
                 recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
                 recv_buffer_notify: Arc::clone(&recv_buffer_notify),
                 client_file_tx_sender,
+                closed: Mutex::new(false),
             },
             recv_buffer_notify,
         ))
     }
 
-    pub(crate) async fn consume_recv_buffer<F, Fut>(&self, remote: Arc<RemoteEndpoint>, mut consume_fn: F) -> Result<()>
+    pub(crate) async fn consume_recv_buffer<F, Fut>(&self, remote: Arc<RemoteEndpoint>, mut consume_fn: F) -> Result<bool>
         where
             F: FnMut(TransportId, Vec<u8>, Arc<RemoteEndpoint>) -> Fut,
             Fut: Future<Output=Result<usize>>,
@@ -101,31 +105,40 @@ impl<'buf> ClientEndpoint<'buf> {
             Self::Tcp {
                 transport_id,
                 recv_buffer,
+                closed,
                 ..
             } => {
                 let mut recv_buffer = recv_buffer.lock().await;
+                if recv_buffer.len() == 0 {
+                    let closed = closed.lock().await;
+                    return Ok(*closed);
+                }
+                let recv_buffer_data = recv_buffer.make_contiguous().to_vec();
                 let consume_size = consume_fn(
-                    *transport_id,
-                    recv_buffer.make_contiguous().to_vec(),
+                    *transport_id, recv_buffer_data,
                     remote,
-                )
-                    .await?;
+                ).await?;
                 recv_buffer.drain(..consume_size);
-                Ok(())
+                Ok(false)
             }
             Self::Udp {
                 transport_id,
                 recv_buffer,
+                closed,
                 ..
             } => {
                 let mut consume_size = 0;
                 let mut recv_buffer = recv_buffer.lock().await;
+                if recv_buffer.len() == 0 {
+                    let closed = closed.lock().await;
+                    return Ok(*closed);
+                }
                 for udp_data in recv_buffer.iter() {
                     consume_fn(*transport_id, udp_data.to_vec(), Arc::clone(&remote)).await?;
                     consume_size += 1;
                 }
                 recv_buffer.drain(..consume_size);
-                Ok(())
+                Ok(false)
             }
         }
     }
@@ -139,6 +152,7 @@ impl<'buf> ClientEndpoint<'buf> {
                 smoltcp_iface,
                 smoltcp_device,
                 client_file_tx_sender,
+                closed,
                 ..
             } => {
                 let mut smoltcp_device = smoltcp_device.lock().await;
@@ -158,6 +172,8 @@ impl<'buf> ClientEndpoint<'buf> {
                         };
                     }
                 }
+                let mut closed = closed.lock().await;
+                *closed = true;
             }
             Self::Udp {
                 transport_id,
@@ -166,6 +182,7 @@ impl<'buf> ClientEndpoint<'buf> {
                 smoltcp_iface,
                 smoltcp_device,
                 client_file_tx_sender,
+                closed,
                 ..
             } => {
                 let mut smoltcp_device = smoltcp_device.lock().await;
@@ -185,6 +202,8 @@ impl<'buf> ClientEndpoint<'buf> {
                         };
                     }
                 }
+                let mut closed = closed.lock().await;
+                *closed = true;
             }
         }
     }
@@ -277,6 +296,7 @@ impl<'buf> ClientEndpoint<'buf> {
                 client_file_tx_sender,
                 recv_buffer,
                 recv_buffer_notify,
+                ..
             } => {
                 let mut smoltcp_device = smoltcp_device.lock().await;
                 let mut smoltcp_iface = smoltcp_iface.lock().await;
@@ -320,6 +340,7 @@ impl<'buf> ClientEndpoint<'buf> {
                 client_file_tx_sender,
                 recv_buffer,
                 recv_buffer_notify,
+                ..
             } => {
                 let mut smoltcp_device = smoltcp_device.lock().await;
                 let mut smoltcp_iface = smoltcp_iface.lock().await;
