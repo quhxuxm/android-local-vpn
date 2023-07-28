@@ -3,20 +3,24 @@ use std::{collections::VecDeque, future::Future, io::ErrorKind, os::fd::AsRawFd,
 use anyhow::{anyhow, Result};
 use log::{debug, error};
 use tokio::{
-    io::AsyncWriteExt,
-    net::{TcpSocket, TcpStream, UdpSocket},
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpSocket, TcpStream, UdpSocket,
+    },
     sync::{Mutex, Notify},
 };
 
 use crate::protect_socket;
 use crate::transport::ControlProtocol;
 
-use super::{client::ClientEndpoint, TransportId, value::InternetProtocol};
+use super::{client::ClientEndpoint, value::InternetProtocol, TransportId};
 
 pub(crate) enum RemoteEndpoint {
     Tcp {
         transport_id: TransportId,
-        remote_tcp_stream: Mutex<TcpStream>,
+        remote_tcp_stream_read: Mutex<OwnedReadHalf>,
+        remote_tcp_stream_write: Mutex<OwnedWriteHalf>,
         recv_buffer: Arc<Mutex<VecDeque<u8>>>,
         recv_buffer_notify: Arc<Notify>,
         closed: Mutex<bool>,
@@ -46,11 +50,13 @@ impl RemoteEndpoint {
         let raw_socket_fd = tcp_socket.as_raw_fd();
         protect_socket(raw_socket_fd)?;
         let remote_tcp_stream = tcp_socket.connect(transport_id.destination).await?;
+        let (remote_tcp_stream_read, remote_tcp_stream_write) = remote_tcp_stream.into_split();
         let recv_buffer_notify = Arc::new(Notify::new());
         Ok((
             Self::Tcp {
                 transport_id,
-                remote_tcp_stream: Mutex::new(remote_tcp_stream),
+                remote_tcp_stream_read: Mutex::new(remote_tcp_stream_read),
+                remote_tcp_stream_write: Mutex::new(remote_tcp_stream_write),
                 recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
                 recv_buffer_notify: Arc::clone(&recv_buffer_notify),
                 closed: Mutex::new(false),
@@ -81,14 +87,14 @@ impl RemoteEndpoint {
         match self {
             Self::Tcp {
                 transport_id,
-                remote_tcp_stream,
+                remote_tcp_stream_read,
                 recv_buffer,
                 recv_buffer_notify,
                 ..
             } => {
-                let remote_tcp_stream = remote_tcp_stream.lock().await;
+                let mut remote_tcp_stream_read = remote_tcp_stream_read.lock().await;
                 let mut data = [0u8; 65536];
-                match remote_tcp_stream.try_read(&mut data) {
+                match remote_tcp_stream_read.read(&mut data).await {
                     Ok(0) => {
                         recv_buffer_notify.notify_waiters();
                         Ok(true)
@@ -105,11 +111,8 @@ impl RemoteEndpoint {
                         Ok(false)
                     }
                     Err(e) => {
-                        if e.kind() == ErrorKind::WouldBlock {
-                            Ok(false)
-                        } else {
-                            Err(anyhow!("{e:?}"))
-                        }
+                        error!("<<<< Transport {transport_id} fail to read remote tcp data because of error: {e:?}");
+                        Err(anyhow!("{e:?}"))
                     }
                 }
             }
@@ -121,12 +124,12 @@ impl RemoteEndpoint {
                 ..
             } => {
                 let mut data = [0u8; 65536];
-                match remote_udp_socket.recv(&mut data).await? {
-                    0 => {
+                match remote_udp_socket.recv(&mut data).await {
+                    Ok(0) => {
                         recv_buffer_notify.notify_waiters();
                         Ok(true)
                     }
-                    size => {
+                    Ok(size) => {
                         let mut recv_buffer = recv_buffer.lock().await;
                         let remote_data = &data[..size];
                         debug!(
@@ -135,7 +138,11 @@ impl RemoteEndpoint {
                         );
                         recv_buffer.push_back(remote_data.to_vec());
                         recv_buffer_notify.notify_waiters();
-                        Ok(true)
+                        Ok(false)
+                    }
+                    Err(e) => {
+                        error!("<<<< Transport {transport_id} fail to read remote udp data because of error: {e:?}");
+                        Err(anyhow!("{e:?}"))
                     }
                 }
             }
@@ -146,34 +153,32 @@ impl RemoteEndpoint {
         match self {
             Self::Tcp {
                 transport_id,
-                remote_tcp_stream,
+                remote_tcp_stream_write,
                 ..
             } => {
-                let mut remote_tcp_stream = remote_tcp_stream.lock().await;
-                let write_result = remote_tcp_stream.write(&data).await.map_err(|e| {
+                let mut remote_tcp_stream_write = remote_tcp_stream_write.lock().await;
+                let write_result = remote_tcp_stream_write.write(&data).await.map_err(|e| {
                     error!(">>>> Transport {transport_id} fail to write tcp data to remote because of error:{e:?}");
                     anyhow!("{e:?}")
                 });
-                remote_tcp_stream.flush().await?;
+                remote_tcp_stream_write.flush().await?;
                 write_result
             }
             Self::Udp {
                 transport_id,
                 remote_udp_socket,
                 ..
-            } => {
-                remote_udp_socket.send(&data).await.map_err(|e| {
-                    error!(">>>> Transport {transport_id} fail to write tcp data to remote because of error:{e:?}");
-                    anyhow!("{e:?}")
-                })
-            }
+            } => remote_udp_socket.send(&data).await.map_err(|e| {
+                error!(">>>> Transport {transport_id} fail to write tcp data to remote because of error:{e:?}");
+                anyhow!("{e:?}")
+            }),
         }
     }
 
     pub(crate) async fn consume_recv_buffer<'buf, F, Fut>(&self, remote: Arc<ClientEndpoint<'buf>>, mut consume_fn: F) -> Result<bool>
-        where
-            F: FnMut(TransportId, Vec<u8>, Arc<ClientEndpoint<'buf>>) -> Fut,
-            Fut: Future<Output=Result<usize>>,
+    where
+        F: FnMut(TransportId, Vec<u8>, Arc<ClientEndpoint<'buf>>) -> Fut,
+        Fut: Future<Output = Result<usize>>,
     {
         match self {
             Self::Tcp {
@@ -192,7 +197,7 @@ impl RemoteEndpoint {
                     recv_buffer.make_contiguous().to_vec(),
                     remote,
                 )
-                    .await?;
+                .await?;
                 recv_buffer.drain(..consume_size);
                 Ok(false)
             }
@@ -222,13 +227,13 @@ impl RemoteEndpoint {
         match self {
             Self::Tcp {
                 transport_id,
-                remote_tcp_stream,
+                remote_tcp_stream_write,
                 recv_buffer_notify,
                 closed,
                 ..
             } => {
-                let mut remote_tcp_stream = remote_tcp_stream.lock().await;
-                if let Err(e) = remote_tcp_stream.shutdown().await {
+                let mut remote_tcp_stream_write = remote_tcp_stream_write.lock().await;
+                if let Err(e) = remote_tcp_stream_write.shutdown().await {
                     error!(">>>> Transport {transport_id} fail to close remote endpoint because of error: {e:?}")
                 };
                 recv_buffer_notify.notify_waiters();
@@ -236,7 +241,9 @@ impl RemoteEndpoint {
                 *closed = true;
             }
             Self::Udp {
-                recv_buffer_notify, closed, ..
+                recv_buffer_notify,
+                closed,
+                ..
             } => {
                 recv_buffer_notify.notify_waiters();
                 let mut closed = closed.lock().await;

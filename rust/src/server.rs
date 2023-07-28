@@ -160,9 +160,6 @@ impl PpaassVpnServer {
                             transport_clone.close().await;
                         };
                     });
-                    if transport.is_closed().await {
-                        continue;
-                    }
                     entry.insert(Arc::clone(&transport));
                     transport.feed_client_data(client_data).await;
                 }
