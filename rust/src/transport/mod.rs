@@ -28,6 +28,7 @@ pub(crate) struct Transport {
     client_data_sender: Sender<Vec<u8>>,
     client_data_receiver: Mutex<Option<Receiver<Vec<u8>>>>,
     transports: Arc<Mutex<HashMap<TransportId, Arc<Transport>>>>,
+    closed: Arc<Mutex<bool>>,
 }
 
 impl Transport {
@@ -43,11 +44,11 @@ impl Transport {
             client_data_sender,
             client_data_receiver: Mutex::new(Some(client_data_receiver)),
             transports,
-
+            closed: Arc::new(Mutex::new(false)),
         }
     }
 
-    pub(crate) async fn start(&self) -> Result<()> {
+    pub(crate) async fn start(self: &Arc<Self>) -> Result<()> {
         let transport_id = self.transport_id;
         if let Some(mut client_data_receiver) = self.client_data_receiver.lock().await.take() {
             let (client_endpoint, client_endpoint_recv_buffer_notify) = ClientEndpoint::new(self.transport_id, self.client_file_tx_sender.clone())?;
@@ -76,13 +77,17 @@ impl Transport {
         Ok(())
     }
 
+    pub(crate) async fn is_closed(&self) -> bool {
+        let closed = self.closed.lock().await;
+        *closed
+    }
+
     pub(crate) async fn feed_client_data(&self, data: &[u8]) {
         if let Err(e) = self.client_data_sender.send(data.to_vec()).await {
             error!(
                 ">>>> Transport {} fail to feed client data because of error: {e:?}",
                 self.transport_id
             );
-            self.close().await;
         }
     }
 
@@ -90,20 +95,24 @@ impl Transport {
         self.client_data_sender.closed().await;
         let mut transports = self.transports.lock().await;
         transports.remove(&self.transport_id);
+        let mut closed = self.closed.lock().await;
+        *closed = true;
     }
 
     /// Spawn a task to read remote data
-    fn spawn_read_remote_task<'buf>(&self, client_endpoint: Arc<ClientEndpoint<'buf>>, remote_endpoint: Arc<RemoteEndpoint>)
-        where
-            'buf: 'static,
+    fn spawn_read_remote_task<'buf>(self: &Arc<Self>, client_endpoint: Arc<ClientEndpoint<'buf>>, remote_endpoint: Arc<RemoteEndpoint>)
+    where
+        'buf: 'static,
     {
         let transport_id = self.transport_id;
+        let transport_self = Arc::clone(self);
         tokio::spawn(async move {
             loop {
                 let remote_closed = remote_endpoint.read_from_remote().await?;
                 if remote_closed {
                     client_endpoint.close().await;
                     remote_endpoint.close().await;
+                    transport_self.close().await;
                     debug!(">>>> Transport {transport_id} mark client & remote endpoint closed.");
                     break;
                 }

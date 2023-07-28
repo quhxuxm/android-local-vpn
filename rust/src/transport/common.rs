@@ -10,7 +10,7 @@ use smoltcp::iface::{Config, Interface, Routes};
 use crate::transport::TransportId;
 use smoltcp::socket::tcp::{Socket as SmoltcpTcpSocket, SocketBuffer as SmoltcpTcpSocketBuffer};
 use smoltcp::socket::udp::{PacketBuffer as SmoltcpUdpSocketBuffer, PacketMetadata as SmoltcpUdpPacketMetadata, Socket as SmoltcpUdpSocket};
-use smoltcp::wire::{IpAddress, IpCidr, IpEndpoint, Ipv4Address};
+use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
 pub(crate) fn prepare_smoltcp_iface_and_device(transport_id: TransportId) -> Result<(Interface, SmoltcpDevice)> {
     let mut routes = Routes::new();
@@ -44,9 +44,7 @@ pub(crate) fn create_smoltcp_tcp_socket<'a>(transport_id: TransportId) -> Result
     );
 
     socket.listen(transport_id.destination).map_err(|e| {
-        error!(
-            ">>>> Transport {transport_id} failed to listen on smoltcp tcp socket"
-        );
+        error!(">>>> Transport {transport_id} failed to listen on smoltcp tcp socket");
         anyhow!("{e:?}")
     })?;
     socket.set_ack_delay(None);
