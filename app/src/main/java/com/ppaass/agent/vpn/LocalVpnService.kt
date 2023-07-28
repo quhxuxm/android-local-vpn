@@ -34,6 +34,8 @@ import android.os.Build.VERSION
 import android.os.Build.VERSION_CODES
 import android.os.ParcelFileDescriptor
 import android.os.Parcelable
+import androidx.annotation.RequiresApi
+import com.ppaass.agent.R
 import com.ppaass.agent.vpn.LocalVpnService.Companion.INTENT_ACTION_START_VPN
 import com.ppaass.agent.vpn.LocalVpnService.Companion.INTENT_ACTION_STOP_VPN
 import com.ppaass.agent.vpn.LocalVpnService.Companion.INTENT_EXTRA_CONFIGURATION
@@ -119,10 +121,14 @@ internal class LocalVpnService : VpnService() {
         }
     }
 
+    @RequiresApi(VERSION_CODES.TIRAMISU)
     private fun startVpn(configuration: LocalVpnConfiguration?) {
         setUpVpnInterface(configuration)
-
-        onStartVpn(vpnInterface.detachFd(), this)
+        val agentPrivateKeyStream = this.resources.openRawResource(R.raw.agentprivatekey)
+        val agentPrivateKeyStreamByteArray = agentPrivateKeyStream.readAllBytes()
+        val proxyPublicKeyStream = this.resources.openRawResource(R.raw.proxypublickey)
+        val proxyPublicKeyStreamByteArray = proxyPublicKeyStream.readAllBytes()
+        onStartVpn(vpnInterface.detachFd(), this, agentPrivateKeyStreamByteArray, proxyPublicKeyStreamByteArray)
     }
 
     private fun setUpVpnInterface(configuration: LocalVpnConfiguration?) {
@@ -147,11 +153,15 @@ internal class LocalVpnService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
-
     }
 
 
-    private external fun onStartVpn(fileDescriptor: Int, service: VpnService)
+    private external fun onStartVpn(
+        fileDescriptor: Int,
+        service: VpnService,
+        agentPrivateKey: ByteArray,
+        proxyPublicKey: ByteArray
+    )
 
     private external fun onStopVpn()
 }

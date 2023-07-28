@@ -10,6 +10,7 @@ use android_logger::Config;
 use anyhow::{anyhow, Result};
 use jni::{
     objects::{GlobalRef, JValue},
+    sys::jbyteArray,
     JNIEnv, JavaVM,
 };
 use jni::{
@@ -47,12 +48,15 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
     _class: JClass<'static>,
     vpn_tun_device_fd: jint,
     vpn_service: JObject<'static>,
+    agent_private_key: jbyteArray,
+    proxy_public_key: jbyteArray,
 ) {
     android_logger::init_once(
         Config::default()
             .with_tag("PPAASS-VPN-RUST")
             .with_max_level(LevelFilter::Error),
     );
+
     std::panic::set_hook(Box::new(|panic_info| {
         error!("*** PANIC [{:?}]", panic_info);
     }));
