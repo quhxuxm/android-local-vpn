@@ -37,16 +37,15 @@ pub(crate) fn prepare_smoltcp_iface_and_device(transport_id: TransportId) -> Res
     Ok((interface, vpn_device))
 }
 
-pub(crate) fn create_smoltcp_tcp_socket<'a>(transport_id: TransportId, endpoint: IpEndpoint) -> Result<SmoltcpTcpSocket<'a>> {
+pub(crate) fn create_smoltcp_tcp_socket<'a>(transport_id: TransportId) -> Result<SmoltcpTcpSocket<'a>> {
     let mut socket = SmoltcpTcpSocket::new(
         SmoltcpTcpSocketBuffer::new(vec![0; 1024 * 1024]),
         SmoltcpTcpSocketBuffer::new(vec![0; 1024 * 1024]),
     );
 
-    socket.listen(endpoint).map_err(|e| {
+    socket.listen(transport_id.destination).map_err(|e| {
         error!(
-            ">>>> Transport {transport_id} failed to listen on smoltcp tcp socket, endpoint=[{}]",
-            endpoint
+            ">>>> Transport {transport_id} failed to listen on smoltcp tcp socket"
         );
         anyhow!("{e:?}")
     })?;
@@ -54,7 +53,7 @@ pub(crate) fn create_smoltcp_tcp_socket<'a>(transport_id: TransportId, endpoint:
     Ok(socket)
 }
 
-pub(crate) fn create_smoltcp_udp_socket<'a>(trans_id: TransportId, endpoint: IpEndpoint) -> Result<SmoltcpUdpSocket<'a>> {
+pub(crate) fn create_smoltcp_udp_socket<'a>(trans_id: TransportId) -> Result<SmoltcpUdpSocket<'a>> {
     let mut socket = SmoltcpUdpSocket::new(
         SmoltcpUdpSocketBuffer::new(
             // vec![UdpPacketMetadata::EMPTY, UdpPacketMetadata::EMPTY],
@@ -68,11 +67,8 @@ pub(crate) fn create_smoltcp_udp_socket<'a>(trans_id: TransportId, endpoint: IpE
         ),
     );
 
-    socket.bind(endpoint).map_err(|e| {
-        error!(
-            ">>>> Transport {trans_id} failed to bind smoltcp udp socket, endpoint=[{}]",
-            endpoint
-        );
+    socket.bind(trans_id.destination).map_err(|e| {
+        error!(">>>> Transport {trans_id} failed to bind smoltcp udp socket");
         anyhow!("{e:?}")
     })?;
 

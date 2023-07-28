@@ -53,7 +53,7 @@ impl<'buf> ClientEndpoint<'buf> {
     fn new_tcp(transport_id: TransportId, client_file_tx_sender: Sender<ClientFileTxPacket>) -> Result<(ClientEndpoint<'buf>, Arc<Notify>)> {
         let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
         let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1024));
-        let smoltcp_tcp_socket = create_smoltcp_tcp_socket(transport_id, transport_id.destination.into())?;
+        let smoltcp_tcp_socket = create_smoltcp_tcp_socket(transport_id, )?;
         let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_tcp_socket);
         let recv_buffer_notify = Arc::new(Notify::new());
         Ok((
@@ -74,7 +74,7 @@ impl<'buf> ClientEndpoint<'buf> {
     fn new_udp(transport_id: TransportId, client_file_tx_sender: Sender<ClientFileTxPacket>) -> Result<(ClientEndpoint<'buf>, Arc<Notify>)> {
         let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
         let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1024));
-        let smoltcp_udp_socket = create_smoltcp_udp_socket(transport_id, transport_id.destination.into())?;
+        let smoltcp_udp_socket = create_smoltcp_udp_socket(transport_id)?;
         let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_udp_socket);
         let recv_buffer_notify = Arc::new(Notify::new());
         Ok((
@@ -93,9 +93,9 @@ impl<'buf> ClientEndpoint<'buf> {
     }
 
     pub(crate) async fn consume_recv_buffer<F, Fut>(&self, remote: Arc<RemoteEndpoint>, mut consume_fn: F) -> Result<()>
-    where
-        F: FnMut(TransportId, Vec<u8>, Arc<RemoteEndpoint>) -> Fut,
-        Fut: Future<Output = Result<usize>>,
+        where
+            F: FnMut(TransportId, Vec<u8>, Arc<RemoteEndpoint>) -> Fut,
+            Fut: Future<Output=Result<usize>>,
     {
         match self {
             Self::Tcp {
@@ -109,7 +109,7 @@ impl<'buf> ClientEndpoint<'buf> {
                     recv_buffer.make_contiguous().to_vec(),
                     remote,
                 )
-                .await?;
+                    .await?;
                 recv_buffer.drain(..consume_size);
                 Ok(())
             }
@@ -207,7 +207,10 @@ impl<'buf> ClientEndpoint<'buf> {
                 if smoltcp_socket.may_send() {
                     let send_result = smoltcp_socket
                         .send_slice(&data)
-                        .map_err(|e| anyhow!("{e:?}"))?;
+                        .map_err(|e| {
+                            error!("<<<< Transport {transport_id} fail to transfer remote tcp recv buffer data to smoltcp because of error: {e:?}");
+                            anyhow!("{e:?}")
+                        })?;
                     if smoltcp_iface.poll(
                         Instant::now(),
                         &mut *smoltcp_device,
@@ -240,7 +243,10 @@ impl<'buf> ClientEndpoint<'buf> {
                 if smoltcp_socket.can_send() {
                     smoltcp_socket
                         .send_slice(&data, transport_id.source.into())
-                        .map_err(|e| anyhow!("{e:?}"))?;
+                        .map_err(|e| {
+                            error!("<<<< Transport {transport_id} fail to transfer remote udp recv buffer data to smoltcp because of error: {e:?}");
+                            anyhow!("{e:?}")
+                        })?;
                     if smoltcp_iface.poll(
                         Instant::now(),
                         &mut *smoltcp_device,
