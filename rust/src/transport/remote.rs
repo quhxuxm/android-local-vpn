@@ -85,6 +85,10 @@ impl RemoteEndpoint {
         ))
     }
 
+    pub(crate) async fn init_proxy_connection(&self) -> Result<()> {
+        todo!()
+    }
+
     pub(crate) async fn read_from_remote(&self) -> Result<bool> {
         match self {
             Self::Tcp {

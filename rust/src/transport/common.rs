@@ -5,7 +5,11 @@ use crate::device::SmoltcpDevice;
 use anyhow::anyhow;
 use anyhow::Result;
 
-use smoltcp::iface::{Config, Interface, Routes};
+use smoltcp::{
+    iface::{Config, Interface, Routes},
+    time::Instant,
+    wire::HardwareAddress,
+};
 
 use crate::transport::TransportId;
 use smoltcp::socket::tcp::{Socket as SmoltcpTcpSocket, SocketBuffer as SmoltcpTcpSocketBuffer};
@@ -16,10 +20,10 @@ pub(crate) fn prepare_smoltcp_iface_and_device(transport_id: TransportId) -> Res
     let mut routes = Routes::new();
     let default_gateway_ipv4 = Ipv4Address::new(0, 0, 0, 1);
     routes.add_default_ipv4_route(default_gateway_ipv4).unwrap();
-    let mut interface_config = Config::default();
+    let mut interface_config = Config::new(HardwareAddress::Ip);
     interface_config.random_seed = rand::random::<u64>();
     let mut vpn_device = SmoltcpDevice::new(transport_id);
-    let mut interface = Interface::new(interface_config, &mut vpn_device);
+    let mut interface = Interface::new(interface_config, &mut vpn_device, Instant::now());
     interface.set_any_ip(true);
     interface.update_ip_addrs(|ip_addrs| {
         if let Err(e) = ip_addrs.push(IpCidr::new(IpAddress::v4(0, 0, 0, 1), 0)) {

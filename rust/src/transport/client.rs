@@ -2,7 +2,11 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 
 use anyhow::{anyhow, Result};
 use log::error;
-use smoltcp::{iface::Interface, socket::udp::Socket as SmoltcpUdpSocket, time::Instant};
+use smoltcp::{
+    iface::Interface,
+    socket::udp::{Socket as SmoltcpUdpSocket, UdpMetadata},
+    time::Instant,
+};
 use smoltcp::{
     iface::{SocketHandle, SocketSet},
     socket::tcp::Socket as SmoltcpTcpSocket,
@@ -97,9 +101,9 @@ impl<'buf> ClientEndpoint<'buf> {
     }
 
     pub(crate) async fn consume_recv_buffer<F, Fut>(&self, remote: Arc<RemoteEndpoint>, mut consume_fn: F) -> Result<bool>
-        where
-            F: FnMut(TransportId, Vec<u8>, Arc<RemoteEndpoint>) -> Fut,
-            Fut: Future<Output=Result<usize>>,
+    where
+        F: FnMut(TransportId, Vec<u8>, Arc<RemoteEndpoint>) -> Fut,
+        Fut: Future<Output = Result<usize>>,
     {
         match self {
             Self::Tcp {
@@ -114,10 +118,7 @@ impl<'buf> ClientEndpoint<'buf> {
                     return Ok(*closed);
                 }
                 let recv_buffer_data = recv_buffer.make_contiguous().to_vec();
-                let consume_size = consume_fn(
-                    *transport_id, recv_buffer_data,
-                    remote,
-                ).await?;
+                let consume_size = consume_fn(*transport_id, recv_buffer_data, remote).await?;
                 recv_buffer.drain(..consume_size);
                 Ok(false)
             }
@@ -224,12 +225,10 @@ impl<'buf> ClientEndpoint<'buf> {
                 let mut smoltcp_socket_set = smoltcp_socket_set.lock().await;
                 let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(*smoltcp_socket_handle);
                 if smoltcp_socket.may_send() {
-                    let send_result = smoltcp_socket
-                        .send_slice(&data)
-                        .map_err(|e| {
-                            error!("<<<< Transport {transport_id} fail to transfer remote tcp recv buffer data to smoltcp because of error: {e:?}");
-                            anyhow!("{e:?}")
-                        })?;
+                    let send_result = smoltcp_socket.send_slice(&data).map_err(|e| {
+                        error!("<<<< Transport {transport_id} fail to transfer remote tcp recv buffer data to smoltcp because of error: {e:?}");
+                        anyhow!("{e:?}")
+                    })?;
                     if smoltcp_iface.poll(
                         Instant::now(),
                         &mut *smoltcp_device,
@@ -260,8 +259,12 @@ impl<'buf> ClientEndpoint<'buf> {
                 let mut smoltcp_socket_set = smoltcp_socket_set.lock().await;
                 let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(*smoltcp_socket_handle);
                 if smoltcp_socket.can_send() {
+                    let udp_meta_data = UdpMetadata {
+                        endpoint: transport_id.source.into(),
+                        meta: Default::default(),
+                    };
                     smoltcp_socket
-                        .send_slice(&data, transport_id.source.into())
+                        .send_slice(&data, udp_meta_data)
                         .map_err(|e| {
                             error!("<<<< Transport {transport_id} fail to transfer remote udp recv buffer data to smoltcp because of error: {e:?}");
                             anyhow!("{e:?}")
