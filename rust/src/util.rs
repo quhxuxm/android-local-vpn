@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use anyhow::Result;
-use ppaass_common::{RsaCrypto, RsaCryptoFetcher, RsaError};
+use ppaass_common::{PpaassMessagePayloadEncryptionSelector, RsaCrypto, RsaCryptoFetcher, RsaError};
 use smoltcp::wire::{Ipv4Packet, Ipv6Packet, PrettyPrinter};
 
 pub(crate) fn log_ip_packet(data: &[u8]) -> String {
@@ -30,3 +32,7 @@ impl RsaCryptoFetcher for AgentRsaCryptoFetcher {
         Ok(Some(rsa_crypto))
     }
 }
+
+pub(crate) struct AgentPpaassMessagePayloadEncryptionSelector;
+
+impl PpaassMessagePayloadEncryptionSelector for AgentPpaassMessagePayloadEncryptionSelector {}

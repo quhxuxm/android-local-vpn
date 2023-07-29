@@ -9,8 +9,8 @@ use tokio::sync::{
     Mutex, Notify,
 };
 
-use crate::transport::remote::RemoteEndpoint;
 use crate::values::ClientFileTxPacket;
+use crate::{transport::remote::RemoteEndpoint, util::AgentRsaCryptoFetcher};
 
 use self::client::ClientEndpoint;
 pub(crate) use self::value::ControlProtocol;
@@ -48,12 +48,12 @@ impl Transport {
         }
     }
 
-    pub(crate) async fn start(self: &Arc<Self>) -> Result<()> {
+    pub(crate) async fn start(self: &Arc<Self>, agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher) -> Result<()> {
         let transport_id = self.transport_id;
         if let Some(mut client_data_receiver) = self.client_data_receiver.lock().await.take() {
             let (client_endpoint, client_endpoint_recv_buffer_notify) = ClientEndpoint::new(self.transport_id, self.client_file_tx_sender.clone())?;
             debug!(">>>> Transport {transport_id} success create client endpoint.");
-            let (remote_endpoint, remote_endpoint_recv_buffer_notify) = RemoteEndpoint::new(transport_id).await?;
+            let (remote_endpoint, remote_endpoint_recv_buffer_notify) = RemoteEndpoint::new(transport_id, agent_rsa_crypto_fetcher).await?;
             debug!(">>>> Transport {transport_id} success create remote endpoint.");
             let remote_endpoint = Arc::new(remote_endpoint);
             let client_endpoint = Arc::new(client_endpoint);
@@ -100,9 +100,10 @@ impl Transport {
     }
 
     /// Spawn a task to read remote data
-    fn spawn_read_remote_task<'buf>(self: &Arc<Self>, client_endpoint: Arc<ClientEndpoint<'buf>>, remote_endpoint: Arc<RemoteEndpoint>)
+    fn spawn_read_remote_task<'buf, 'r>(self: &Arc<Self>, client_endpoint: Arc<ClientEndpoint<'buf>>, remote_endpoint: Arc<RemoteEndpoint>)
     where
         'buf: 'static,
+        'r: 'static,
     {
         let transport_id = self.transport_id;
         let transport_self = Arc::clone(self);

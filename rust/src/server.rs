@@ -35,18 +35,16 @@ pub(crate) struct PpaassVpnServer {
     runtime: Option<TokioRuntime>,
     processor_handle: Option<JoinHandle<Result<()>>>,
     transports: Arc<Mutex<HashMap<TransportId, Arc<Transport>>>>,
-    agent_crypto_fetcher: Arc<AgentRsaCryptoFetcher>,
 }
 
 impl PpaassVpnServer {
-    pub(crate) fn new(file_descriptor: i32, agent_crypto_fetcher: AgentRsaCryptoFetcher) -> Self {
+    pub(crate) fn new(file_descriptor: i32) -> Self {
         Self {
             file_descriptor,
             stop_sender: None,
             runtime: None,
             processor_handle: None,
             transports: Default::default(),
-            agent_crypto_fetcher: Arc::new(agent_crypto_fetcher),
         }
     }
 
@@ -59,7 +57,7 @@ impl PpaassVpnServer {
         Ok(runtime)
     }
 
-    pub(crate) fn start(&mut self) -> Result<()> {
+    pub(crate) fn start(&mut self, agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher) -> Result<()> {
         debug!("Ppaass vpn server starting ...");
         let runtime = Self::init_async_runtime()?;
         let file_descriptor = self.file_descriptor;
@@ -69,6 +67,7 @@ impl PpaassVpnServer {
         let (stop_sender, stop_receiver) = channel::<bool>(1);
         self.stop_sender = Some(stop_sender);
         let transports = Arc::clone(&self.transports);
+
         let processor_handle = runtime.spawn(async move {
             let (client_file_tx_sender, mut client_file_tx_receiver) = channel::<ClientFileTxPacket>(1024);
             info!("Spawn client file write task.");
@@ -86,6 +85,7 @@ impl PpaassVpnServer {
                 stop_receiver,
                 transports,
                 client_file_tx_sender,
+                agent_rsa_crypto_fetcher,
             )
             .await;
             Ok::<(), AnyhowError>(())
@@ -101,6 +101,7 @@ impl PpaassVpnServer {
         mut stop_receiver: Receiver<bool>,
         transports: Arc<Mutex<HashMap<TransportId, Arc<Transport>>>>,
         client_file_tx_sender: Sender<ClientFileTxPacket>,
+        agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
     ) {
         let mut client_file_read_buffer = [0u8; 65536];
         loop {
@@ -159,8 +160,9 @@ impl PpaassVpnServer {
                         Arc::clone(&transports),
                     ));
                     let transport_clone = Arc::clone(&transport);
+
                     tokio::spawn(async move {
-                        if let Err(e) = transport_clone.start().await {
+                        if let Err(e) = transport_clone.start(agent_rsa_crypto_fetcher).await {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
                             transport_clone.close().await;
                         };

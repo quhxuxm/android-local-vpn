@@ -1,28 +1,35 @@
 use std::{collections::VecDeque, future::Future, os::fd::AsRawFd, sync::Arc};
 
 use anyhow::{anyhow, Result};
+use futures_util::{
+    stream::{SplitSink, SplitStream},
+    SinkExt, StreamExt,
+};
 use log::{debug, error};
+use ppaass_common::{
+    generate_uuid,
+    tcp::{TcpData, TcpInitResponse, TcpInitResponseType},
+    PpaassConnection, PpaassMessage, PpaassMessageGenerator, PpaassMessagePayloadEncryptionSelector, PpaassMessageProxyPayload, PpaassMessageProxyPayloadType,
+};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
-        TcpSocket, UdpSocket,
-    },
+    net::{TcpSocket, TcpStream, UdpSocket},
     sync::{Mutex, Notify},
 };
 
-use crate::protect_socket;
-use crate::transport::ControlProtocol;
+use crate::{protect_socket, util::AgentRsaCryptoFetcher, PROXY_ADDRESS, USER_TOKE};
+use crate::{transport::ControlProtocol, util::AgentPpaassMessagePayloadEncryptionSelector};
 
 use super::{client::ClientEndpoint, value::InternetProtocol, TransportId};
 
-const PROXY_ADDRESS: &str = "64.176.193.76:80";
+type ProxyConnectionWrite = SplitSink<PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>, PpaassMessage>;
+
+type ProxyConnectionRead = SplitStream<PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>>;
 
 pub(crate) enum RemoteEndpoint {
     Tcp {
         transport_id: TransportId,
-        remote_tcp_stream_read: Mutex<OwnedReadHalf>,
-        remote_tcp_stream_write: Mutex<OwnedWriteHalf>,
+        proxy_connection_read: Mutex<ProxyConnectionRead>,
+        proxy_connection_write: Mutex<ProxyConnectionWrite>,
         recv_buffer: Arc<Mutex<VecDeque<u8>>>,
         recv_buffer_notify: Arc<Notify>,
         closed: Mutex<bool>,
@@ -37,28 +44,29 @@ pub(crate) enum RemoteEndpoint {
 }
 
 impl RemoteEndpoint {
-    pub(crate) async fn new(transport_id: TransportId) -> Result<(Self, Arc<Notify>)> {
+    pub(crate) async fn new(transport_id: TransportId, agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher) -> Result<(RemoteEndpoint, Arc<Notify>)> {
         match transport_id.control_protocol {
-            ControlProtocol::Tcp => Self::new_tcp(transport_id).await,
-            ControlProtocol::Udp => Self::new_udp(transport_id).await,
+            ControlProtocol::Tcp => Self::new_tcp(transport_id, agent_rsa_crypto_fetcher).await,
+            ControlProtocol::Udp => Self::new_udp(transport_id, agent_rsa_crypto_fetcher).await,
         }
     }
 
-    async fn new_tcp(transport_id: TransportId) -> Result<(Self, Arc<Notify>)> {
+    async fn new_tcp(transport_id: TransportId, agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher) -> Result<(RemoteEndpoint, Arc<Notify>)> {
         let tcp_socket = match transport_id.internet_protocol {
             InternetProtocol::Ipv4 => TcpSocket::new_v4()?,
             InternetProtocol::Ipv6 => TcpSocket::new_v6()?,
         };
         let raw_socket_fd = tcp_socket.as_raw_fd();
         protect_socket(raw_socket_fd)?;
-        let remote_tcp_stream = tcp_socket.connect(transport_id.destination).await?;
-        let (remote_tcp_stream_read, remote_tcp_stream_write) = remote_tcp_stream.into_split();
+        let proxy_connection = Self::init_proxy_connection(tcp_socket, transport_id, agent_rsa_crypto_fetcher).await?;
+        // let remote_tcp_stream = tcp_socket.connect(transport_id.destination).await?;
+        let (proxy_connection_write, proxy_connection_read) = proxy_connection.split();
         let recv_buffer_notify = Arc::new(Notify::new());
         Ok((
             Self::Tcp {
                 transport_id,
-                remote_tcp_stream_read: Mutex::new(remote_tcp_stream_read),
-                remote_tcp_stream_write: Mutex::new(remote_tcp_stream_write),
+                proxy_connection_read: Mutex::new(proxy_connection_read),
+                proxy_connection_write: Mutex::new(proxy_connection_write),
                 recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
                 recv_buffer_notify: Arc::clone(&recv_buffer_notify),
                 closed: Mutex::new(false),
@@ -67,7 +75,7 @@ impl RemoteEndpoint {
         ))
     }
 
-    async fn new_udp(transport_id: TransportId) -> Result<(Self, Arc<Notify>)> {
+    async fn new_udp(transport_id: TransportId, agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher) -> Result<(RemoteEndpoint, Arc<Notify>)> {
         let remote_udp_socket = UdpSocket::bind("0.0.0.0:0").await?;
         let raw_socket_fd = remote_udp_socket.as_raw_fd();
         protect_socket(raw_socket_fd)?;
@@ -85,38 +93,80 @@ impl RemoteEndpoint {
         ))
     }
 
-    pub(crate) async fn init_proxy_connection(&self) -> Result<()> {
-        todo!()
+    pub(crate) async fn init_proxy_connection(
+        tcp_socket: TcpSocket,
+        transport_id: TransportId,
+        agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
+    ) -> Result<PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>> {
+        let proxy_tcp_stream = tcp_socket.connect(PROXY_ADDRESS.parse()?).await?;
+        let mut proxy_connection = PpaassConnection::new(
+            transport_id,
+            proxy_tcp_stream,
+            agent_rsa_crypto_fetcher,
+            true,
+            65536,
+        );
+        let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
+        let tcp_init_request = PpaassMessageGenerator::generate_tcp_init_request(
+            USER_TOKE,
+            transport_id.source.into(),
+            transport_id.destination.into(),
+            payload_encryption,
+        )?;
+        proxy_connection.send(tcp_init_request).await?;
+        let proxy_message = proxy_connection
+            .next()
+            .await
+            .ok_or(anyhow!("No data response from proxy"))??;
+        let PpaassMessage { payload, .. } = proxy_message;
+        let PpaassMessageProxyPayload { payload_type, data } = payload.as_slice().try_into()?;
+        let tcp_init_response = match payload_type {
+            PpaassMessageProxyPayloadType::TcpInit => data.as_slice().try_into()?,
+            _ => {
+                error!(">>>> Transport {transport_id} receive invalid message from proxy, payload type: {payload_type:?}");
+                return Err(anyhow!("Invalid proxy response"));
+            }
+        };
+        let TcpInitResponse { response_type, .. } = tcp_init_response;
+        match response_type {
+            TcpInitResponseType::Success => {
+                debug!(">>>> Transport {transport_id} success to initialize proxy tcp connection.");
+            }
+            TcpInitResponseType::Fail => {
+                error!(">>>> Transport {transport_id} fail to initialize proxy tcp connection.");
+                return Err(anyhow!("Fail to initialize proxy tcp connection"));
+            }
+        }
+        Ok(proxy_connection)
     }
 
     pub(crate) async fn read_from_remote(&self) -> Result<bool> {
         match self {
             Self::Tcp {
                 transport_id,
-                remote_tcp_stream_read,
+                proxy_connection_read,
                 recv_buffer,
                 recv_buffer_notify,
                 ..
             } => {
-                let mut remote_tcp_stream_read = remote_tcp_stream_read.lock().await;
-                let mut data = [0u8; 65536];
-                match remote_tcp_stream_read.read(&mut data).await {
-                    Ok(0) => {
+                let mut proxy_connection_read = proxy_connection_read.lock().await;
+                match proxy_connection_read.next().await {
+                    None => {
                         recv_buffer_notify.notify_waiters();
                         Ok(true)
                     }
-                    Ok(size) => {
+                    Some(Ok(PpaassMessage { payload, .. })) => {
+                        let TcpData { data, .. } = payload.as_slice().try_into()?;
                         let mut recv_buffer = recv_buffer.lock().await;
-                        let remote_data = &data[..size];
                         debug!(
                             "<<<< Transport {transport_id} read remote tcp data to remote receive buffer: {}",
-                            pretty_hex::pretty_hex(&remote_data)
+                            pretty_hex::pretty_hex(&data)
                         );
-                        recv_buffer.extend(remote_data);
+                        recv_buffer.extend(data);
                         recv_buffer_notify.notify_waiters();
                         Ok(false)
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
                         error!("<<<< Transport {transport_id} fail to read remote tcp data because of error: {e:?}");
                         Err(anyhow!("{e:?}"))
                     }
@@ -159,16 +209,21 @@ impl RemoteEndpoint {
         match self {
             Self::Tcp {
                 transport_id,
-                remote_tcp_stream_write,
+                proxy_connection_write,
                 ..
             } => {
-                let mut remote_tcp_stream_write = remote_tcp_stream_write.lock().await;
-                let write_result = remote_tcp_stream_write.write(&data).await.map_err(|e| {
-                    error!(">>>> Transport {transport_id} fail to write tcp data to remote because of error:{e:?}");
-                    anyhow!("{e:?}")
-                });
-                remote_tcp_stream_write.flush().await?;
-                write_result
+                let mut proxy_connection_write = proxy_connection_write.lock().await;
+                let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
+                let data_len = data.len();
+                let tcp_data = PpaassMessageGenerator::generate_tcp_data(
+                    USER_TOKE,
+                    payload_encryption,
+                    transport_id.source.into(),
+                    transport_id.destination.into(),
+                    data,
+                )?;
+                proxy_connection_write.send(tcp_data).await?;
+                Ok(data_len)
             }
             Self::Udp {
                 transport_id,
@@ -233,13 +288,13 @@ impl RemoteEndpoint {
         match self {
             Self::Tcp {
                 transport_id,
-                remote_tcp_stream_write,
+                proxy_connection_write,
                 recv_buffer_notify,
                 closed,
                 ..
             } => {
-                let mut remote_tcp_stream_write = remote_tcp_stream_write.lock().await;
-                if let Err(e) = remote_tcp_stream_write.shutdown().await {
+                let mut proxy_connection_write = proxy_connection_write.lock().await;
+                if let Err(e) = proxy_connection_write.close().await {
                     error!(">>>> Transport {transport_id} fail to close remote endpoint because of error: {e:?}")
                 };
                 recv_buffer_notify.notify_waiters();

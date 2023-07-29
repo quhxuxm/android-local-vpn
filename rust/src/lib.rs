@@ -23,7 +23,9 @@ use std::{cell::OnceCell, process};
 pub(crate) static mut JAVA_VPN_SERVICE_OBJ: OnceCell<GlobalRef> = OnceCell::new();
 pub(crate) static mut JAVA_VPN_JVM: OnceCell<JavaVM> = OnceCell::new();
 pub(crate) static mut VPN_SERVER: OnceCell<PpaassVpnServer> = OnceCell::new();
-
+pub(crate) static mut AGENT_RSA_CRYPTO_FETCHER: OnceCell<AgentRsaCryptoFetcher> = OnceCell::new();
+pub(crate) const USER_TOKE: &str = "user1";
+pub(crate) const PROXY_ADDRESS: &str = "64.176.193.76:80";
 /// # Safety
 ///
 /// This function should not be called before the horsemen are ready.
@@ -73,6 +75,10 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
         pretty_hex::pretty_hex(&proxy_public_key)
     );
     let agent_crypto_fetcher = AgentRsaCryptoFetcher::new(agent_private_key, proxy_public_key).expect("Fail to create agent rsa crypto fetcher");
+    AGENT_RSA_CRYPTO_FETCHER
+        .set(agent_crypto_fetcher)
+        .expect("Fail to set agent rsa crypto fetcher");
+
     let java_vm = jni_env
         .get_java_vm()
         .expect("Fail to get jvm from jni enviorment.");
@@ -91,14 +97,18 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
         process::id(),
         vpn_tun_device_fd
     );
-    let vpn_server = PpaassVpnServer::new(vpn_tun_device_fd, agent_crypto_fetcher);
+    let vpn_server = PpaassVpnServer::new(vpn_tun_device_fd);
     VPN_SERVER
         .set(vpn_server)
         .expect("Fail to generate ppaass vpn server.");
     VPN_SERVER
         .get_mut()
         .expect("Fail to get ppaass vpn server.")
-        .start()
+        .start(
+            AGENT_RSA_CRYPTO_FETCHER
+                .get()
+                .expect("Fail to get agent rsa crypto fetcher"),
+        )
         .unwrap();
 }
 
