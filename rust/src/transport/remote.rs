@@ -16,6 +16,8 @@ use crate::transport::ControlProtocol;
 
 use super::{client::ClientEndpoint, value::InternetProtocol, TransportId};
 
+const PROXY_ADDRESS: &str = "64.176.193.76:80";
+
 pub(crate) enum RemoteEndpoint {
     Tcp {
         transport_id: TransportId,

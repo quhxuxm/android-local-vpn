@@ -18,7 +18,7 @@ pub(crate) struct AgentRsaCryptoFetcher {
 }
 
 impl AgentRsaCryptoFetcher {
-    pub(crate) fn new(public_key: Vec<u8>, private_key: Vec<u8>) -> Result<Self> {
+    pub(crate) fn new(private_key: Vec<u8>, public_key: Vec<u8>) -> Result<Self> {
         let rsa_crypto = RsaCrypto::new(public_key.as_slice(), private_key.as_slice())?;
         Ok(Self { rsa_crypto })
     }
