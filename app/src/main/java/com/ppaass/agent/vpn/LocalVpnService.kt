@@ -136,6 +136,7 @@ internal class LocalVpnService : VpnService() {
         val vpnServiceBuilder = super.Builder().apply {
             addAddress(VPN_ADDRESS, 32)
             addRoute(VPN_ROUTE, 0)
+            addDnsServer("1.1.1.1")
         }
 
         configuration?.allowedApps?.forEach {

@@ -18,6 +18,8 @@ use tokio::{
     sync::{Mutex, Notify},
 };
 
+use dns_parser::Packet as DnsPacket;
+
 use crate::{protect_socket, util::AgentRsaCryptoFetcher, PROXY_ADDRESS, USER_TOKE};
 use crate::{transport::ControlProtocol, util::AgentPpaassMessagePayloadEncryptionSelector};
 
@@ -204,9 +206,13 @@ impl RemoteEndpoint {
                         let UdpData { data, .. } = payload.as_slice().try_into()?;
                         let mut recv_buffer = recv_buffer.lock().await;
                         debug!(
-                            "<<<< Transport {transport_id} read remote udp data to remote receive buffer: {}",
+                            "<<<< Transport {transport_id}, [UDP PROCESS] read remote udp data to remote receive buffer: {}",
                             pretty_hex::pretty_hex(&data)
                         );
+
+                        if let Ok(dns_response) = DnsPacket::parse(&data) {
+                            debug!("<<<< Transport {transport_id}, [UDP PROCESS] read dns response from remote: {dns_response:?}")
+                        };
 
                         recv_buffer.push_back(data.to_vec());
                         recv_buffer_notify.notify_waiters();
@@ -248,6 +254,14 @@ impl RemoteEndpoint {
             } => {
                 let mut proxy_connection_write = proxy_connection_write.lock().await;
                 let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
+                debug!(
+                    ">>>> Transport {transport_id}, [UDP PROCESS] send udp data to remote: {}",
+                    pretty_hex::pretty_hex(&data)
+                );
+                if let Ok(dns_request) = DnsPacket::parse(&data) {
+                    debug!(">>>> Transport {transport_id}, [UDP PROCESS] read dns request from client: {dns_request:?}")
+                };
+
                 let data_len = data.len();
                 let udp_data = PpaassMessageGenerator::generate_udp_data(
                     USER_TOKE,
