@@ -9,10 +9,12 @@ use log::{debug, error};
 use ppaass_common::{
     generate_uuid,
     tcp::{TcpData, TcpInitResponse, TcpInitResponseType},
+    udp::UdpData,
     PpaassConnection, PpaassMessage, PpaassMessageGenerator, PpaassMessagePayloadEncryptionSelector, PpaassMessageProxyPayload, PpaassMessageProxyPayloadType,
 };
+
 use tokio::{
-    net::{TcpSocket, TcpStream, UdpSocket},
+    net::{TcpSocket, TcpStream},
     sync::{Mutex, Notify},
 };
 
@@ -36,7 +38,8 @@ pub(crate) enum RemoteEndpoint {
     },
     Udp {
         transport_id: TransportId,
-        remote_udp_socket: UdpSocket,
+        proxy_connection_read: Mutex<ProxyConnectionRead>,
+        proxy_connection_write: Mutex<ProxyConnectionWrite>,
         recv_buffer: Arc<Mutex<VecDeque<Vec<u8>>>>,
         recv_buffer_notify: Arc<Notify>,
         closed: Mutex<bool>,
@@ -76,15 +79,23 @@ impl RemoteEndpoint {
     }
 
     async fn new_udp(transport_id: TransportId, agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher) -> Result<(RemoteEndpoint, Arc<Notify>)> {
-        let remote_udp_socket = UdpSocket::bind("0.0.0.0:0").await?;
-        let raw_socket_fd = remote_udp_socket.as_raw_fd();
+        let tcp_socket = match transport_id.internet_protocol {
+            InternetProtocol::Ipv4 => TcpSocket::new_v4()?,
+            InternetProtocol::Ipv6 => TcpSocket::new_v6()?,
+        };
+        let raw_socket_fd = tcp_socket.as_raw_fd();
+
         protect_socket(raw_socket_fd)?;
-        remote_udp_socket.connect(transport_id.destination).await?;
+
+        let proxy_connection = Self::init_proxy_connection(tcp_socket, transport_id, agent_rsa_crypto_fetcher).await?;
+        let (proxy_connection_write, proxy_connection_read) = proxy_connection.split();
+
         let recv_buffer_notify = Arc::new(Notify::new());
         Ok((
             Self::Udp {
                 transport_id,
-                remote_udp_socket,
+                proxy_connection_read: Mutex::new(proxy_connection_read),
+                proxy_connection_write: Mutex::new(proxy_connection_write),
                 recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
                 recv_buffer_notify: Arc::clone(&recv_buffer_notify),
                 closed: Mutex::new(false),
@@ -107,36 +118,40 @@ impl RemoteEndpoint {
             65536,
         );
         let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
-        let tcp_init_request = PpaassMessageGenerator::generate_tcp_init_request(
-            USER_TOKE,
-            transport_id.source.into(),
-            transport_id.destination.into(),
-            payload_encryption,
-        )?;
-        proxy_connection.send(tcp_init_request).await?;
-        let proxy_message = proxy_connection
-            .next()
-            .await
-            .ok_or(anyhow!("No data response from proxy"))??;
-        let PpaassMessage { payload, .. } = proxy_message;
-        let PpaassMessageProxyPayload { payload_type, data } = payload.as_slice().try_into()?;
-        let tcp_init_response = match payload_type {
-            PpaassMessageProxyPayloadType::TcpInit => data.as_slice().try_into()?,
-            _ => {
-                error!(">>>> Transport {transport_id} receive invalid message from proxy, payload type: {payload_type:?}");
-                return Err(anyhow!("Invalid proxy response"));
-            }
-        };
-        let TcpInitResponse { response_type, .. } = tcp_init_response;
-        match response_type {
-            TcpInitResponseType::Success => {
-                debug!(">>>> Transport {transport_id} success to initialize proxy tcp connection.");
-            }
-            TcpInitResponseType::Fail => {
-                error!(">>>> Transport {transport_id} fail to initialize proxy tcp connection.");
-                return Err(anyhow!("Fail to initialize proxy tcp connection"));
+
+        if let ControlProtocol::Tcp = transport_id.control_protocol {
+            let tcp_init_request = PpaassMessageGenerator::generate_tcp_init_request(
+                USER_TOKE,
+                transport_id.source.into(),
+                transport_id.destination.into(),
+                payload_encryption,
+            )?;
+            proxy_connection.send(tcp_init_request).await?;
+            let proxy_message = proxy_connection
+                .next()
+                .await
+                .ok_or(anyhow!("No data response from proxy"))??;
+            let PpaassMessage { payload, .. } = proxy_message;
+            let PpaassMessageProxyPayload { payload_type, data } = payload.as_slice().try_into()?;
+            let tcp_init_response = match payload_type {
+                PpaassMessageProxyPayloadType::TcpInit => data.as_slice().try_into()?,
+                _ => {
+                    error!(">>>> Transport {transport_id} receive invalid message from proxy, payload type: {payload_type:?}");
+                    return Err(anyhow!("Invalid proxy response"));
+                }
+            };
+            let TcpInitResponse { response_type, .. } = tcp_init_response;
+            match response_type {
+                TcpInitResponseType::Success => {
+                    debug!(">>>> Transport {transport_id} success to initialize proxy tcp connection.");
+                }
+                TcpInitResponseType::Fail => {
+                    error!(">>>> Transport {transport_id} fail to initialize proxy tcp connection.");
+                    return Err(anyhow!("Fail to initialize proxy tcp connection"));
+                }
             }
         }
+
         Ok(proxy_connection)
     }
 
@@ -174,29 +189,30 @@ impl RemoteEndpoint {
             }
             Self::Udp {
                 transport_id,
-                remote_udp_socket,
+                proxy_connection_read,
                 recv_buffer,
                 recv_buffer_notify,
                 ..
             } => {
-                let mut data = [0u8; 65536];
-                match remote_udp_socket.recv(&mut data).await {
-                    Ok(0) => {
+                let mut proxy_connection_read = proxy_connection_read.lock().await;
+                match proxy_connection_read.next().await {
+                    None => {
                         recv_buffer_notify.notify_waiters();
                         Ok(true)
                     }
-                    Ok(size) => {
+                    Some(Ok(PpaassMessage { payload, .. })) => {
+                        let UdpData { data, .. } = payload.as_slice().try_into()?;
                         let mut recv_buffer = recv_buffer.lock().await;
-                        let remote_data = &data[..size];
                         debug!(
                             "<<<< Transport {transport_id} read remote udp data to remote receive buffer: {}",
-                            pretty_hex::pretty_hex(&remote_data)
+                            pretty_hex::pretty_hex(&data)
                         );
-                        recv_buffer.push_back(remote_data.to_vec());
+
+                        recv_buffer.push_back(data.to_vec());
                         recv_buffer_notify.notify_waiters();
                         Ok(false)
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
                         error!("<<<< Transport {transport_id} fail to read remote udp data because of error: {e:?}");
                         Err(anyhow!("{e:?}"))
                     }
@@ -227,12 +243,22 @@ impl RemoteEndpoint {
             }
             Self::Udp {
                 transport_id,
-                remote_udp_socket,
+                proxy_connection_write,
                 ..
-            } => remote_udp_socket.send(&data).await.map_err(|e| {
-                error!(">>>> Transport {transport_id} fail to write tcp data to remote because of error:{e:?}");
-                anyhow!("{e:?}")
-            }),
+            } => {
+                let mut proxy_connection_write = proxy_connection_write.lock().await;
+                let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
+                let data_len = data.len();
+                let udp_data = PpaassMessageGenerator::generate_udp_data(
+                    USER_TOKE,
+                    payload_encryption,
+                    transport_id.source.into(),
+                    transport_id.destination.into(),
+                    data,
+                )?;
+                proxy_connection_write.send(udp_data).await?;
+                Ok(data_len)
+            }
         }
     }
 

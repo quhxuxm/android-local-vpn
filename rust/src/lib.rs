@@ -55,7 +55,7 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
     android_logger::init_once(
         Config::default()
             .with_tag("PPAASS-VPN-RUST")
-            .with_max_level(LevelFilter::Error),
+            .with_max_level(LevelFilter::Debug),
     );
     std::panic::set_hook(Box::new(|panic_info| {
         error!("*** PANIC [{:?}]", panic_info);

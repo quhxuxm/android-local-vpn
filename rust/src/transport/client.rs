@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use log::error;
 use smoltcp::{
     iface::Interface,
+    phy::PacketMeta,
     socket::udp::{Socket as SmoltcpUdpSocket, UdpMetadata},
     time::Instant,
 };
@@ -259,9 +260,11 @@ impl<'buf> ClientEndpoint<'buf> {
                 let mut smoltcp_socket_set = smoltcp_socket_set.lock().await;
                 let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(*smoltcp_socket_handle);
                 if smoltcp_socket.can_send() {
+                    let mut udp_packet_meta = PacketMeta::default();
+                    udp_packet_meta.id = 123;
                     let udp_meta_data = UdpMetadata {
                         endpoint: transport_id.source.into(),
-                        meta: Default::default(),
+                        meta: udp_packet_meta,
                     };
                     smoltcp_socket
                         .send_slice(&data, udp_meta_data)
