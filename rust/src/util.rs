@@ -1,5 +1,11 @@
 use anyhow::Result;
+use jni::objects::JValue;
+use log::trace;
 use ppaass_common::{PpaassMessagePayloadEncryptionSelector, RsaCrypto, RsaCryptoFetcher, RsaError};
+
+use crate::{error::AgentError, transport::TransportId};
+use crate::{JAVA_VPN_JVM, JAVA_VPN_SERVICE_OBJ};
+
 // use smoltcp::wire::{Ipv4Packet, Ipv6Packet, PrettyPrinter};
 
 // pub(crate) fn log_ip_packet(data: &[u8]) -> String {
@@ -11,6 +17,64 @@ use ppaass_common::{PpaassMessagePayloadEncryptionSelector, RsaCrypto, RsaCrypto
 //         },
 //     }
 // }
+
+pub(crate) fn protect_socket(transport_id: TransportId, socket_fd: i32) -> Result<(), AgentError> {
+    trace!("Begin to protect outbound socket: {socket_fd}");
+    let socket_fd_jni_arg = JValue::Int(socket_fd);
+    let java_vpn_service_obj = unsafe {
+        JAVA_VPN_SERVICE_OBJ
+            .get_mut()
+            .ok_or(AgentError::ProtectRemoteSocket {
+                transport_id,
+                socket_fd,
+                message: format!("Can not get vpn service java object"),
+            })?
+    }
+    .as_obj();
+    let java_vm = unsafe {
+        JAVA_VPN_JVM
+            .get_mut()
+            .ok_or(AgentError::ProtectRemoteSocket {
+                transport_id,
+                socket_fd,
+                message: format!("Can not get JVM instance."),
+            })?
+    };
+    let mut jni_env = java_vm
+        .attach_current_thread_permanently()
+        .map_err(|e| AgentError::ProtectRemoteSocket {
+            transport_id,
+            socket_fd,
+            message: format!("Can not attach current java thread because of error: {e:?}"),
+        })?;
+    let protect_result = jni_env
+        .call_method(
+            java_vpn_service_obj,
+            "protect",
+            "(I)Z",
+            &[socket_fd_jni_arg],
+        )
+        .map_err(|e| AgentError::ProtectRemoteSocket {
+            transport_id,
+            socket_fd,
+            message: format!("Fail to invoke protect socket java method because of error: {e:?}"),
+        })?;
+    let protect_success = protect_result
+        .z()
+        .map_err(|e| AgentError::ProtectRemoteSocket {
+            transport_id,
+            socket_fd,
+            message: format!("Fail to get protect socket java method result because of error: {e:?}"),
+        })?;
+    if !protect_success {
+        return Err(AgentError::ProtectRemoteSocket {
+            transport_id,
+            socket_fd,
+            message: format!("Protect socket java method return false"),
+        });
+    }
+    Ok(())
+}
 
 #[derive(Debug)]
 pub(crate) struct AgentRsaCryptoFetcher {

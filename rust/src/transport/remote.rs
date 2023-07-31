@@ -21,8 +21,11 @@ use tokio::{
 
 use dns_parser::Packet as DnsPacket;
 
-use crate::{protect_socket, util::AgentRsaCryptoFetcher, PROXY_ADDRESS, USER_TOKE};
-use crate::{transport::ControlProtocol, util::AgentPpaassMessagePayloadEncryptionSelector};
+use crate::{config::PpaassVpnServerConfig, util::AgentRsaCryptoFetcher};
+use crate::{
+    transport::ControlProtocol,
+    util::{protect_socket, AgentPpaassMessagePayloadEncryptionSelector},
+};
 
 use super::{client::ClientEndpoint, value::InternetProtocol, TransportId};
 
@@ -39,6 +42,7 @@ pub(crate) enum RemoteEndpoint {
         recv_buffer: Arc<Mutex<VecDeque<u8>>>,
         recv_buffer_notify: Arc<Notify>,
         closed: Mutex<bool>,
+        config: &'static PpaassVpnServerConfig,
     },
     Udp {
         transport_id: TransportId,
@@ -47,6 +51,7 @@ pub(crate) enum RemoteEndpoint {
         recv_buffer: Arc<Mutex<VecDeque<Vec<u8>>>>,
         recv_buffer_notify: Arc<Notify>,
         closed: Mutex<bool>,
+        config: &'static PpaassVpnServerConfig,
     },
 }
 
@@ -54,24 +59,27 @@ impl RemoteEndpoint {
     pub(crate) async fn new(
         transport_id: TransportId,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
+        config: &'static PpaassVpnServerConfig,
     ) -> Result<(RemoteEndpoint, Arc<Notify>)> {
         match transport_id.control_protocol {
-            ControlProtocol::Tcp => Self::new_tcp(transport_id, agent_rsa_crypto_fetcher).await,
-            ControlProtocol::Udp => Self::new_udp(transport_id, agent_rsa_crypto_fetcher).await,
+            ControlProtocol::Tcp => Self::new_tcp(transport_id, agent_rsa_crypto_fetcher, config).await,
+            ControlProtocol::Udp => Self::new_udp(transport_id, agent_rsa_crypto_fetcher, config).await,
         }
     }
 
     async fn new_tcp(
         transport_id: TransportId,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
+        config: &'static PpaassVpnServerConfig,
     ) -> Result<(RemoteEndpoint, Arc<Notify>)> {
         let tcp_socket = match transport_id.internet_protocol {
             InternetProtocol::Ipv4 => TcpSocket::new_v4()?,
             InternetProtocol::Ipv6 => TcpSocket::new_v6()?,
         };
         let raw_socket_fd = tcp_socket.as_raw_fd();
-        protect_socket(raw_socket_fd)?;
-        let proxy_connection = Self::init_proxy_connection(tcp_socket, transport_id, agent_rsa_crypto_fetcher).await?;
+        protect_socket(transport_id, raw_socket_fd)?;
+        let proxy_connection =
+            Self::init_proxy_connection(tcp_socket, transport_id, agent_rsa_crypto_fetcher, config).await?;
         // let remote_tcp_stream = tcp_socket.connect(transport_id.destination).await?;
         let (proxy_connection_write, proxy_connection_read) = proxy_connection.split();
         let recv_buffer_notify = Arc::new(Notify::new());
@@ -83,6 +91,7 @@ impl RemoteEndpoint {
                 recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
                 recv_buffer_notify: Arc::clone(&recv_buffer_notify),
                 closed: Mutex::new(false),
+                config,
             },
             recv_buffer_notify,
         ))
@@ -91,16 +100,16 @@ impl RemoteEndpoint {
     async fn new_udp(
         transport_id: TransportId,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
+        config: &'static PpaassVpnServerConfig,
     ) -> Result<(RemoteEndpoint, Arc<Notify>)> {
         let tcp_socket = match transport_id.internet_protocol {
             InternetProtocol::Ipv4 => TcpSocket::new_v4()?,
             InternetProtocol::Ipv6 => TcpSocket::new_v6()?,
         };
         let raw_socket_fd = tcp_socket.as_raw_fd();
-
-        protect_socket(raw_socket_fd)?;
-
-        let proxy_connection = Self::init_proxy_connection(tcp_socket, transport_id, agent_rsa_crypto_fetcher).await?;
+        protect_socket(transport_id, raw_socket_fd)?;
+        let proxy_connection =
+            Self::init_proxy_connection(tcp_socket, transport_id, agent_rsa_crypto_fetcher, config).await?;
         let (proxy_connection_write, proxy_connection_read) = proxy_connection.split();
 
         let recv_buffer_notify = Arc::new(Notify::new());
@@ -112,6 +121,7 @@ impl RemoteEndpoint {
                 recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
                 recv_buffer_notify: Arc::clone(&recv_buffer_notify),
                 closed: Mutex::new(false),
+                config,
             },
             recv_buffer_notify,
         ))
@@ -121,8 +131,10 @@ impl RemoteEndpoint {
         tcp_socket: TcpSocket,
         transport_id: TransportId,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
+        config: &'static PpaassVpnServerConfig,
     ) -> Result<PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>> {
-        let proxy_tcp_stream = tcp_socket.connect(PROXY_ADDRESS.parse()?).await?;
+        let proxy_addresses = config.get_proxy_address();
+        let proxy_tcp_stream = tcp_socket.connect(proxy_addresses.parse()?).await?;
         let mut proxy_connection = PpaassConnection::new(
             transport_id,
             proxy_tcp_stream,
@@ -130,12 +142,14 @@ impl RemoteEndpoint {
             true,
             65536,
         );
-        let payload_encryption =
-            AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
+        let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(
+            config.get_user_token(),
+            Some(generate_uuid().into_bytes()),
+        );
 
         if let ControlProtocol::Tcp = transport_id.control_protocol {
             let tcp_init_request = PpaassMessageGenerator::generate_tcp_init_request(
-                USER_TOKE,
+                config.get_user_token(),
                 transport_id.source.into(),
                 transport_id.destination.into(),
                 payload_encryption,
@@ -244,14 +258,17 @@ impl RemoteEndpoint {
             Self::Tcp {
                 transport_id,
                 proxy_connection_write,
+                config,
                 ..
             } => {
                 let mut proxy_connection_write = proxy_connection_write.lock().await;
-                let payload_encryption =
-                    AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
+                let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(
+                    config.get_user_token(),
+                    Some(generate_uuid().into_bytes()),
+                );
                 let data_len = data.len();
                 let tcp_data = PpaassMessageGenerator::generate_tcp_data(
-                    USER_TOKE,
+                    config.get_user_token(),
                     payload_encryption,
                     transport_id.source.into(),
                     transport_id.destination.into(),
@@ -263,11 +280,14 @@ impl RemoteEndpoint {
             Self::Udp {
                 transport_id,
                 proxy_connection_write,
+                config,
                 ..
             } => {
                 let mut proxy_connection_write = proxy_connection_write.lock().await;
-                let payload_encryption =
-                    AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
+                let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(
+                    config.get_user_token(),
+                    Some(generate_uuid().into_bytes()),
+                );
                 debug!(
                     ">>>> Transport {transport_id}, [UDP PROCESS] send udp data to remote: {}",
                     pretty_hex::pretty_hex(&data)
@@ -278,7 +298,7 @@ impl RemoteEndpoint {
 
                 let data_len = data.len();
                 let udp_data = PpaassMessageGenerator::generate_udp_data(
-                    USER_TOKE,
+                    config.get_user_token(),
                     payload_encryption,
                     transport_id.source.into(),
                     transport_id.destination.into(),

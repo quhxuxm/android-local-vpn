@@ -22,7 +22,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::values::ClientFileTxPacket;
+use crate::{config::PpaassVpnServerConfig, values::ClientFileTxPacket};
 use crate::{
     transport::{Transport, TransportId},
     util::AgentRsaCryptoFetcher,
@@ -30,6 +30,7 @@ use crate::{
 
 #[derive(Debug)]
 pub(crate) struct PpaassVpnServer {
+    config: &'static PpaassVpnServerConfig,
     file_descriptor: i32,
     stop_sender: Option<Sender<bool>>,
     runtime: Option<TokioRuntime>,
@@ -38,8 +39,9 @@ pub(crate) struct PpaassVpnServer {
 }
 
 impl PpaassVpnServer {
-    pub(crate) fn new(file_descriptor: i32) -> Self {
+    pub(crate) fn new(file_descriptor: i32, config: &'static PpaassVpnServerConfig) -> Self {
         Self {
+            config,
             file_descriptor,
             stop_sender: None,
             runtime: None,
@@ -67,6 +69,7 @@ impl PpaassVpnServer {
         let (stop_sender, stop_receiver) = channel::<bool>(1);
         self.stop_sender = Some(stop_sender);
         let transports = Arc::clone(&self.transports);
+        let ppaass_server_config = self.config;
 
         let processor_handle = runtime.spawn(async move {
             let (client_file_tx_sender, mut client_file_tx_receiver) = channel::<ClientFileTxPacket>(1024);
@@ -86,6 +89,7 @@ impl PpaassVpnServer {
                 transports,
                 client_file_tx_sender,
                 agent_rsa_crypto_fetcher,
+                ppaass_server_config,
             )
             .await;
             Ok::<(), AnyhowError>(())
@@ -102,6 +106,7 @@ impl PpaassVpnServer {
         transports: Arc<Mutex<HashMap<TransportId, Arc<Transport>>>>,
         client_file_tx_sender: Sender<ClientFileTxPacket>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
+        config: &'static PpaassVpnServerConfig,
     ) {
         let mut client_file_read_buffer = [0u8; 65536];
         loop {
@@ -162,7 +167,10 @@ impl PpaassVpnServer {
                     let transport_clone = Arc::clone(&transport);
 
                     tokio::spawn(async move {
-                        if let Err(e) = transport_clone.start(agent_rsa_crypto_fetcher).await {
+                        if let Err(e) = transport_clone
+                            .start(agent_rsa_crypto_fetcher, config)
+                            .await
+                        {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
                             transport_clone.close().await;
                         };
