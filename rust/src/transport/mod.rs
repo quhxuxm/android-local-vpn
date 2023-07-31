@@ -1,3 +1,7 @@
+mod client;
+mod remote;
+mod value;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -9,17 +13,16 @@ use tokio::sync::{
     Mutex, Notify,
 };
 
-use crate::{config::PpaassVpnServerConfig, error::RemoteEndpointError, values::ClientFileTxPacket};
+use crate::{
+    config::PpaassVpnServerConfig,
+    error::{AgentError, ClientEndpointError, RemoteEndpointError},
+    values::ClientFileTxPacket,
+};
 use crate::{transport::remote::RemoteEndpoint, util::AgentRsaCryptoFetcher};
 
 use self::client::ClientEndpoint;
 pub(crate) use self::value::ControlProtocol;
 pub(crate) use self::value::TransportId;
-
-mod client;
-mod common;
-mod remote;
-mod value;
 
 #[derive(Debug)]
 pub(crate) struct Transport {
@@ -52,11 +55,14 @@ impl Transport {
         self: &Arc<Self>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
-    ) -> Result<()> {
+    ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
         if let Some(mut client_data_receiver) = self.client_data_receiver.lock().await.take() {
-            let (client_endpoint, client_endpoint_recv_buffer_notify) =
-                ClientEndpoint::new(self.transport_id, self.client_file_tx_sender.clone())?;
+            let (client_endpoint, client_endpoint_recv_buffer_notify) = ClientEndpoint::new(
+                self.transport_id,
+                self.client_file_tx_sender.clone(),
+                config,
+            )?;
             debug!(">>>> Transport {transport_id} success create client endpoint.");
             let (remote_endpoint, remote_endpoint_recv_buffer_notify) =
                 RemoteEndpoint::new(transport_id, agent_rsa_crypto_fetcher, config).await?;
@@ -189,7 +195,7 @@ impl Transport {
                 transport_id: TransportId,
                 data: Vec<u8>,
                 client: Arc<ClientEndpoint<'_>>,
-            ) -> Result<usize> {
+            ) -> Result<usize, ClientEndpointError> {
                 debug!(
                     ">>>> Transport {transport_id} write data to smoltcp: {}",
                     pretty_hex::pretty_hex(&data)

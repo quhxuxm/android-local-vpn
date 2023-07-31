@@ -12,8 +12,8 @@ use tokio::{
     sync::{Mutex, Notify},
 };
 
-use crate::transport::ControlProtocol;
 use crate::{config::PpaassVpnServerConfig, error::RemoteEndpointError, util::AgentRsaCryptoFetcher};
+use crate::{error::ClientEndpointError, transport::ControlProtocol};
 
 use self::common::{
     close_remote_tcp, close_remote_udp, new_tcp, new_udp, read_from_remote_tcp, read_from_remote_udp,
@@ -120,7 +120,7 @@ impl RemoteEndpoint {
     ) -> Result<bool>
     where
         F: FnMut(TransportId, Vec<u8>, Arc<ClientEndpoint<'buf>>) -> Fut,
-        Fut: Future<Output = Result<usize>>,
+        Fut: Future<Output = Result<usize, ClientEndpointError>>,
     {
         match self {
             Self::Tcp {

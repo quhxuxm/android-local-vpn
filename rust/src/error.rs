@@ -1,13 +1,16 @@
 use crate::transport::TransportId;
 use anyhow::Error as AnyhowError;
 use ppaass_common::CommonError;
+use smoltcp::socket::tcp::ListenError;
 use std::io::Error as StdIoError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub(crate) enum AgentError {
-    #[error("Remote endpoint error happen")]
-    RemoteEndpoint(#[source] RemoteEndpointError),
+    #[error("Remote endpoint error happen:{0:?}")]
+    RemoteEndpoint(#[from] RemoteEndpointError),
+    #[error("Client endpoint error happen:{0:?}")]
+    ClientEndpoint(#[from] ClientEndpointError),
 }
 
 #[derive(Error, Debug)]
@@ -22,6 +25,16 @@ pub(crate) enum RemoteEndpointError {
     },
     #[error("Proxy common error happen: {0:?}")]
     ProxyCommon(#[from] CommonError),
+    #[error("Other error happen: {0:?}")]
+    Other(#[from] AnyhowError),
+}
+
+#[derive(Error, Debug)]
+pub(crate) enum ClientEndpointError {
+    #[error("I/O error happen: {0:?}")]
+    Io(#[from] StdIoError),
+    #[error("Smoltcp listen error happen: {0:?}")]
+    Smoltcp(#[from] ListenError),
     #[error("Other error happen: {0:?}")]
     Other(#[from] AnyhowError),
 }
