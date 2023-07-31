@@ -26,7 +26,7 @@ use tokio::sync::{mpsc::Sender, Mutex, Notify};
 
 use crate::values::ClientFileTxPacket;
 
-use super::ClientEndpoint;
+use super::{ClientEndpoint, ClientEndpointCtl, ClientEndpointCtlLockGuard};
 
 pub(crate) fn prepare_smoltcp_iface_and_device(transport_id: TransportId) -> Result<(Interface, SmoltcpDevice)> {
     let mut routes = Routes::new();
@@ -98,13 +98,16 @@ pub(crate) fn new_tcp(
     let smoltcp_tcp_socket = create_smoltcp_tcp_socket(transport_id, config)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_tcp_socket);
     let recv_buffer_notify = Arc::new(Notify::new());
+    let ctl = ClientEndpointCtl::new(
+        Arc::new(Mutex::new(smoltcp_socket_set)),
+        Arc::new(Mutex::new(smoltcp_iface)),
+        Arc::new(Mutex::new(smoltcp_device)),
+    );
     Ok((
         ClientEndpoint::Tcp {
             transport_id,
             smoltcp_socket_handle,
-            smoltcp_socket_set: Arc::new(Mutex::new(smoltcp_socket_set)),
-            smoltcp_iface: Arc::new(Mutex::new(smoltcp_iface)),
-            smoltcp_device: Arc::new(Mutex::new(smoltcp_device)),
+            ctl,
             recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(
                 config.get_client_endpoint_tcp_recv_buffer_size(),
             ))),
@@ -127,13 +130,16 @@ pub(crate) fn new_udp(
     let smoltcp_udp_socket = create_smoltcp_udp_socket(transport_id)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_udp_socket);
     let recv_buffer_notify = Arc::new(Notify::new());
+    let ctl = ClientEndpointCtl::new(
+        Arc::new(Mutex::new(smoltcp_socket_set)),
+        Arc::new(Mutex::new(smoltcp_iface)),
+        Arc::new(Mutex::new(smoltcp_device)),
+    );
     Ok((
         ClientEndpoint::Udp {
             transport_id,
             smoltcp_socket_handle,
-            smoltcp_socket_set: Arc::new(Mutex::new(smoltcp_socket_set)),
-            smoltcp_iface: Arc::new(Mutex::new(smoltcp_iface)),
-            smoltcp_device: Arc::new(Mutex::new(smoltcp_device)),
+            ctl,
             recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(
                 config.get_client_endpoint_udp_recv_buffer_size(),
             ))),
@@ -147,17 +153,17 @@ pub(crate) fn new_udp(
 }
 
 pub(crate) async fn close_client_tcp(
-    smoltcp_device: &Arc<Mutex<SmoltcpDevice>>,
-    smoltcp_iface: &Arc<Mutex<Interface>>,
-    smoltcp_socket_set: &Arc<Mutex<SocketSet<'_>>>,
+    ctl: &ClientEndpointCtl<'_>,
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_file_tx_sender: &Sender<ClientFileTxPacket>,
     closed: &Mutex<bool>,
 ) {
-    let mut smoltcp_device = smoltcp_device.lock().await;
-    let mut smoltcp_iface = smoltcp_iface.lock().await;
-    let mut smoltcp_socket_set = smoltcp_socket_set.lock().await;
+    let ClientEndpointCtlLockGuard {
+        mut smoltcp_socket_set,
+        mut smoltcp_iface,
+        mut smoltcp_device,
+    } = ctl.lock().await;
     let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
     smoltcp_socket.close();
     if smoltcp_iface.poll(
@@ -177,17 +183,17 @@ pub(crate) async fn close_client_tcp(
 }
 
 pub(crate) async fn close_client_udp(
-    smoltcp_device: &Arc<Mutex<SmoltcpDevice>>,
-    smoltcp_iface: &Arc<Mutex<Interface>>,
-    smoltcp_socket_set: &Arc<Mutex<SocketSet<'_>>>,
+    ctl: &ClientEndpointCtl<'_>,
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_file_tx_sender: &Sender<ClientFileTxPacket>,
     closed: &Mutex<bool>,
 ) {
-    let mut smoltcp_device = smoltcp_device.lock().await;
-    let mut smoltcp_iface = smoltcp_iface.lock().await;
-    let mut smoltcp_socket_set = smoltcp_socket_set.lock().await;
+    let ClientEndpointCtlLockGuard {
+        mut smoltcp_socket_set,
+        mut smoltcp_iface,
+        mut smoltcp_device,
+    } = ctl.lock().await;
     let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
     smoltcp_socket.close();
     if smoltcp_iface.poll(
@@ -207,18 +213,18 @@ pub(crate) async fn close_client_udp(
 }
 
 pub(crate) async fn send_to_client_tcp(
-    smoltcp_device: &Arc<Mutex<SmoltcpDevice>>,
-    smoltcp_iface: &Arc<Mutex<Interface>>,
-    smoltcp_socket_set: &Arc<Mutex<SocketSet<'_>>>,
-    smoltcp_socket_handle: &SocketHandle,
+    ctl: &ClientEndpointCtl<'_>,
+    smoltcp_socket_handle: SocketHandle,
     data: Vec<u8>,
-    transport_id: &TransportId,
+    transport_id: TransportId,
     client_file_tx_sender: &Sender<ClientFileTxPacket>,
-) -> std::result::Result<usize, ClientEndpointError> {
-    let mut smoltcp_device = smoltcp_device.lock().await;
-    let mut smoltcp_iface = smoltcp_iface.lock().await;
-    let mut smoltcp_socket_set = smoltcp_socket_set.lock().await;
-    let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(*smoltcp_socket_handle);
+) -> Result<usize, ClientEndpointError> {
+    let ClientEndpointCtlLockGuard {
+        mut smoltcp_socket_set,
+        mut smoltcp_iface,
+        mut smoltcp_device,
+    } = ctl.lock().await;
+    let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
     if smoltcp_socket.may_send() {
         let send_result = smoltcp_socket.send_slice(&data).map_err(|e| {
             error!("<<<< Transport {transport_id} fail to transfer remote tcp recv buffer data to smoltcp because of error: {e:?}");
@@ -230,7 +236,7 @@ pub(crate) async fn send_to_client_tcp(
             &mut smoltcp_socket_set,
         ) {
             while let Some(output) = smoltcp_device.pop_tx() {
-                let client_file_tx_packet = ClientFileTxPacket::new(*transport_id, output);
+                let client_file_tx_packet = ClientFileTxPacket::new(transport_id, output);
                 if let Err(e) = client_file_tx_sender.send(client_file_tx_packet).await {
                     error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for outupt because of error: {e:?}")
                 };
@@ -242,18 +248,18 @@ pub(crate) async fn send_to_client_tcp(
 }
 
 pub(crate) async fn send_to_client_udp(
-    smoltcp_device: &Arc<Mutex<SmoltcpDevice>>,
-    smoltcp_iface: &Arc<Mutex<Interface>>,
-    smoltcp_socket_set: &Arc<Mutex<SocketSet<'_>>>,
-    smoltcp_socket_handle: &SocketHandle,
-    transport_id: &TransportId,
+    ctl: &ClientEndpointCtl<'_>,
+    smoltcp_socket_handle: SocketHandle,
+    transport_id: TransportId,
     data: Vec<u8>,
     client_file_tx_sender: &Sender<ClientFileTxPacket>,
-) -> std::result::Result<usize, ClientEndpointError> {
-    let mut smoltcp_device = smoltcp_device.lock().await;
-    let mut smoltcp_iface = smoltcp_iface.lock().await;
-    let mut smoltcp_socket_set = smoltcp_socket_set.lock().await;
-    let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(*smoltcp_socket_handle);
+) -> Result<usize, ClientEndpointError> {
+    let ClientEndpointCtlLockGuard {
+        mut smoltcp_socket_set,
+        mut smoltcp_iface,
+        mut smoltcp_device,
+    } = ctl.lock().await;
+    let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
     if smoltcp_socket.can_send() {
         let udp_packet_meta = PacketMeta::default();
         let udp_meta_data = UdpMetadata {
@@ -272,7 +278,7 @@ pub(crate) async fn send_to_client_udp(
             &mut smoltcp_socket_set,
         ) {
             while let Some(output) = smoltcp_device.pop_tx() {
-                let client_file_tx_packet = ClientFileTxPacket::new(*transport_id, output);
+                let client_file_tx_packet = ClientFileTxPacket::new(transport_id, output);
                 if let Err(e) = client_file_tx_sender.send(client_file_tx_packet).await {
                     error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for output because of error: {e:?}")
                 };
@@ -283,26 +289,39 @@ pub(crate) async fn send_to_client_udp(
     Ok(0)
 }
 
+async fn recv_to_vpn_device_and_poll(
+    smoltcp_device: &mut SmoltcpDevice,
+    smoltcp_iface: &mut Interface,
+    smoltcp_socket_set: &mut SocketSet<'_>,
+    client_data: Vec<u8>,
+) -> bool {
+    smoltcp_device.push_rx(client_data);
+    smoltcp_iface.poll(Instant::now(), smoltcp_device, smoltcp_socket_set)
+}
+
 pub(crate) async fn recv_from_client_tcp(
-    smoltcp_device: &Arc<Mutex<SmoltcpDevice>>,
-    smoltcp_iface: &Arc<Mutex<Interface>>,
-    smoltcp_socket_set: &Arc<Mutex<SocketSet<'_>>>,
+    ctl: &ClientEndpointCtl<'_>,
     client_data: Vec<u8>,
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_file_tx_sender: &Sender<ClientFileTxPacket>,
-    recv_buffer: &Arc<Mutex<VecDeque<u8>>>,
-    recv_buffer_notify: &Arc<Notify>,
+    recv_buffer: &Mutex<VecDeque<u8>>,
+    recv_buffer_notify: &Notify,
 ) {
-    let mut smoltcp_device = smoltcp_device.lock().await;
-    let mut smoltcp_iface = smoltcp_iface.lock().await;
-    let mut smoltcp_socket_set = smoltcp_socket_set.lock().await;
-    smoltcp_device.push_rx(client_data);
-    if smoltcp_iface.poll(
-        Instant::now(),
-        &mut *smoltcp_device,
+    let ClientEndpointCtlLockGuard {
+        mut smoltcp_socket_set,
+        mut smoltcp_iface,
+        mut smoltcp_device,
+    } = ctl.lock().await;
+
+    if recv_to_vpn_device_and_poll(
+        &mut smoltcp_device,
+        &mut smoltcp_iface,
         &mut smoltcp_socket_set,
-    ) {
+        client_data,
+    )
+    .await
+    {
         let smoltcp_tcp_socket = smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
         while let Some(output) = smoltcp_device.pop_tx() {
             let client_file_tx_packet = ClientFileTxPacket::new(transport_id, output);
@@ -311,10 +330,10 @@ pub(crate) async fn recv_from_client_tcp(
             };
         }
         while smoltcp_tcp_socket.may_recv() {
-            let mut data = [0u8; 65536];
-            let data = match smoltcp_tcp_socket.recv_slice(&mut data) {
+            let mut tcp_data = [0u8; 65536];
+            let tcp_data = match smoltcp_tcp_socket.recv_slice(&mut tcp_data) {
                 Ok(0) => break,
-                Ok(size) => &data[..size],
+                Ok(size) => &tcp_data[..size],
                 Err(e) => {
                     error!(
                         ">>>> Transport {transport_id} fail to receive tcp data from smoltcp because of error: {e:?}"
@@ -322,7 +341,7 @@ pub(crate) async fn recv_from_client_tcp(
                     break;
                 }
             };
-            recv_buffer.lock().await.extend(data);
+            recv_buffer.lock().await.extend(tcp_data);
         }
         if !recv_buffer.lock().await.is_empty() {
             recv_buffer_notify.notify_waiters();
@@ -331,25 +350,27 @@ pub(crate) async fn recv_from_client_tcp(
 }
 
 pub(crate) async fn recv_from_client_udp(
-    smoltcp_device: &Arc<Mutex<SmoltcpDevice>>,
-    smoltcp_iface: &Arc<Mutex<Interface>>,
-    smoltcp_socket_set: &Arc<Mutex<SocketSet<'_>>>,
+    ctl: &ClientEndpointCtl<'_>,
     client_data: Vec<u8>,
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_file_tx_sender: &Sender<ClientFileTxPacket>,
-    recv_buffer: &Arc<Mutex<VecDeque<Vec<u8>>>>,
-    recv_buffer_notify: &Arc<Notify>,
+    recv_buffer: &Mutex<VecDeque<Vec<u8>>>,
+    recv_buffer_notify: &Notify,
 ) {
-    let mut smoltcp_device = smoltcp_device.lock().await;
-    let mut smoltcp_iface = smoltcp_iface.lock().await;
-    let mut smoltcp_socket_set = smoltcp_socket_set.lock().await;
-    smoltcp_device.push_rx(client_data);
-    if smoltcp_iface.poll(
-        Instant::now(),
-        &mut *smoltcp_device,
+    let ClientEndpointCtlLockGuard {
+        mut smoltcp_socket_set,
+        mut smoltcp_iface,
+        mut smoltcp_device,
+    } = ctl.lock().await;
+    if recv_to_vpn_device_and_poll(
+        &mut smoltcp_device,
+        &mut smoltcp_iface,
         &mut smoltcp_socket_set,
-    ) {
+        client_data,
+    )
+    .await
+    {
         let smoltcp_udp_socket = smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
         while let Some(output) = smoltcp_device.pop_tx() {
             let client_file_tx_packet = ClientFileTxPacket::new(transport_id, output);
@@ -358,10 +379,10 @@ pub(crate) async fn recv_from_client_udp(
             };
         }
         while smoltcp_udp_socket.can_recv() {
-            let mut data = [0u8; 65536];
-            let data = match smoltcp_udp_socket.recv_slice(&mut data) {
+            let mut udp_data = [0u8; 65535];
+            let udp_data = match smoltcp_udp_socket.recv_slice(&mut udp_data) {
                 Ok((0, _)) => break,
-                Ok((size, _)) => &data[..size],
+                Ok((size, _)) => &udp_data[..size],
                 Err(e) => {
                     error!(
                         ">>>> Transport {transport_id} fail to receive udp data from smoltcp because of error: {e:?}"
@@ -369,7 +390,7 @@ pub(crate) async fn recv_from_client_udp(
                     break;
                 }
             };
-            recv_buffer.lock().await.push_back(data.to_vec());
+            recv_buffer.lock().await.push_back(udp_data.to_vec());
         }
         if !recv_buffer.lock().await.is_empty() {
             recv_buffer_notify.notify_waiters();

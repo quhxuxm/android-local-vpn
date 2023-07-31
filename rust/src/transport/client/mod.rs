@@ -6,7 +6,7 @@ use anyhow::Result;
 
 use smoltcp::iface::Interface;
 use smoltcp::iface::{SocketHandle, SocketSet};
-use tokio::sync::{mpsc::Sender, Mutex, Notify};
+use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, Notify};
 
 use crate::{config::PpaassVpnServerConfig, values::ClientFileTxPacket};
 use crate::{device::SmoltcpDevice, error::RemoteEndpointError};
@@ -19,13 +19,46 @@ use self::common::{
 
 use super::{remote::RemoteEndpoint, TransportId};
 
-pub(crate) enum ClientEndpoint<'buf> {
-    Tcp {
-        transport_id: TransportId,
-        smoltcp_socket_handle: SocketHandle,
+pub(crate) struct ClientEndpointCtlLockGuard<'lock, 'buf> {
+    pub(crate) smoltcp_socket_set: MutexGuard<'lock, SocketSet<'buf>>,
+    pub(crate) smoltcp_iface: MutexGuard<'lock, Interface>,
+    pub(crate) smoltcp_device: MutexGuard<'lock, SmoltcpDevice>,
+}
+pub(crate) struct ClientEndpointCtl<'buf> {
+    smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
+    smoltcp_iface: Arc<Mutex<Interface>>,
+    smoltcp_device: Arc<Mutex<SmoltcpDevice>>,
+}
+
+impl<'buf> ClientEndpointCtl<'buf> {
+    pub(crate) fn new(
         smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
         smoltcp_iface: Arc<Mutex<Interface>>,
         smoltcp_device: Arc<Mutex<SmoltcpDevice>>,
+    ) -> Self {
+        Self {
+            smoltcp_socket_set,
+            smoltcp_iface,
+            smoltcp_device,
+        }
+    }
+    pub(crate) async fn lock<'lock>(&'lock self) -> ClientEndpointCtlLockGuard<'lock, 'buf> {
+        let smoltcp_device = self.smoltcp_device.lock().await;
+        let smoltcp_iface = self.smoltcp_iface.lock().await;
+        let smoltcp_socket_set = self.smoltcp_socket_set.lock().await;
+        ClientEndpointCtlLockGuard {
+            smoltcp_socket_set,
+            smoltcp_iface,
+            smoltcp_device,
+        }
+    }
+}
+
+pub(crate) enum ClientEndpoint<'buf> {
+    Tcp {
+        transport_id: TransportId,
+        ctl: ClientEndpointCtl<'buf>,
+        smoltcp_socket_handle: SocketHandle,
         recv_buffer: Arc<Mutex<VecDeque<u8>>>,
         recv_buffer_notify: Arc<Notify>,
         client_file_tx_sender: Sender<ClientFileTxPacket>,
@@ -35,9 +68,7 @@ pub(crate) enum ClientEndpoint<'buf> {
     Udp {
         transport_id: TransportId,
         smoltcp_socket_handle: SocketHandle,
-        smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
-        smoltcp_iface: Arc<Mutex<Interface>>,
-        smoltcp_device: Arc<Mutex<SmoltcpDevice>>,
+        ctl: ClientEndpointCtl<'buf>,
         recv_buffer: Arc<Mutex<VecDeque<Vec<u8>>>>,
         recv_buffer_notify: Arc<Notify>,
         client_file_tx_sender: Sender<ClientFileTxPacket>,
@@ -111,17 +142,13 @@ impl<'buf> ClientEndpoint<'buf> {
             Self::Tcp {
                 transport_id,
                 smoltcp_socket_handle,
-                smoltcp_socket_set,
-                smoltcp_iface,
-                smoltcp_device,
+                ctl,
                 client_file_tx_sender,
                 closed,
                 ..
             } => {
                 close_client_tcp(
-                    smoltcp_device,
-                    smoltcp_iface,
-                    smoltcp_socket_set,
+                    ctl,
                     *smoltcp_socket_handle,
                     *transport_id,
                     client_file_tx_sender,
@@ -132,17 +159,13 @@ impl<'buf> ClientEndpoint<'buf> {
             Self::Udp {
                 transport_id,
                 smoltcp_socket_handle,
-                smoltcp_socket_set,
-                smoltcp_iface,
-                smoltcp_device,
+                ctl,
                 client_file_tx_sender,
                 closed,
                 ..
             } => {
                 close_client_udp(
-                    smoltcp_device,
-                    smoltcp_iface,
-                    smoltcp_socket_set,
+                    ctl,
                     *smoltcp_socket_handle,
                     *transport_id,
                     client_file_tx_sender,
@@ -158,19 +181,15 @@ impl<'buf> ClientEndpoint<'buf> {
             Self::Tcp {
                 transport_id,
                 smoltcp_socket_handle,
-                smoltcp_socket_set,
-                smoltcp_iface,
-                smoltcp_device,
+                ctl,
                 client_file_tx_sender,
                 ..
             } => {
                 send_to_client_tcp(
-                    smoltcp_device,
-                    smoltcp_iface,
-                    smoltcp_socket_set,
-                    smoltcp_socket_handle,
+                    ctl,
+                    *smoltcp_socket_handle,
                     data,
-                    transport_id,
+                    *transport_id,
                     client_file_tx_sender,
                 )
                 .await
@@ -178,18 +197,14 @@ impl<'buf> ClientEndpoint<'buf> {
             Self::Udp {
                 transport_id,
                 smoltcp_socket_handle,
-                smoltcp_socket_set,
-                smoltcp_iface,
-                smoltcp_device,
+                ctl,
                 client_file_tx_sender,
                 ..
             } => {
                 send_to_client_udp(
-                    smoltcp_device,
-                    smoltcp_iface,
-                    smoltcp_socket_set,
-                    smoltcp_socket_handle,
-                    transport_id,
+                    ctl,
+                    *smoltcp_socket_handle,
+                    *transport_id,
                     data,
                     client_file_tx_sender,
                 )
@@ -203,18 +218,14 @@ impl<'buf> ClientEndpoint<'buf> {
             Self::Tcp {
                 transport_id,
                 smoltcp_socket_handle,
-                smoltcp_socket_set,
-                smoltcp_iface,
-                smoltcp_device,
+                ctl,
                 client_file_tx_sender,
                 recv_buffer,
                 recv_buffer_notify,
                 ..
             } => {
                 recv_from_client_tcp(
-                    smoltcp_device,
-                    smoltcp_iface,
-                    smoltcp_socket_set,
+                    ctl,
                     client_data,
                     *smoltcp_socket_handle,
                     *transport_id,
@@ -227,18 +238,14 @@ impl<'buf> ClientEndpoint<'buf> {
             Self::Udp {
                 transport_id,
                 smoltcp_socket_handle,
-                smoltcp_socket_set,
-                smoltcp_iface,
-                smoltcp_device,
+                ctl,
                 client_file_tx_sender,
                 recv_buffer,
                 recv_buffer_notify,
                 ..
             } => {
                 recv_from_client_udp(
-                    smoltcp_device,
-                    smoltcp_iface,
-                    smoltcp_socket_set,
+                    ctl,
                     client_data,
                     *smoltcp_socket_handle,
                     *transport_id,
