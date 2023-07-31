@@ -1,13 +1,27 @@
+use crate::transport::TransportId;
+use anyhow::Error as AnyhowError;
+use ppaass_common::CommonError;
+use std::io::Error as StdIoError;
 use thiserror::Error;
 
-use crate::transport::TransportId;
+#[derive(Error, Debug)]
+pub(crate) enum AgentError {
+    #[error("Remote endpoint error happen")]
+    RemoteEndpoint(#[source] RemoteEndpointError),
+}
 
 #[derive(Error, Debug)]
-pub enum AgentError {
+pub(crate) enum RemoteEndpointError {
+    #[error("I/O error happen: {0:?}")]
+    Io(#[from] StdIoError),
     #[error("Transport {transport_id} fail to protect remote socket fd [{socket_fd}] because of error: {message}")]
     ProtectRemoteSocket {
         transport_id: TransportId,
         socket_fd: i32,
         message: String,
     },
+    #[error("Proxy common error happen: {0:?}")]
+    ProxyCommon(#[from] CommonError),
+    #[error("Other error happen: {0:?}")]
+    Other(#[from] AnyhowError),
 }

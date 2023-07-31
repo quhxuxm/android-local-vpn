@@ -50,9 +50,9 @@ impl PpaassVpnServer {
         }
     }
 
-    fn init_async_runtime() -> Result<TokioRuntime> {
+    fn init_async_runtime(config: &PpaassVpnServerConfig) -> Result<TokioRuntime> {
         let mut runtime_builder = TokioRuntimeBuilder::new_multi_thread();
-        runtime_builder.worker_threads(64);
+        runtime_builder.worker_threads(config.get_thread_number());
         runtime_builder.enable_all();
         runtime_builder.thread_name("PPAASS");
         let runtime = runtime_builder.build()?;
@@ -61,7 +61,7 @@ impl PpaassVpnServer {
 
     pub(crate) fn start(&mut self, agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher) -> Result<()> {
         debug!("Ppaass vpn server starting ...");
-        let runtime = Self::init_async_runtime()?;
+        let runtime = Self::init_async_runtime(self.config)?;
         let file_descriptor = self.file_descriptor;
 
         let client_file = Arc::new(Mutex::new(unsafe { File::from_raw_fd(file_descriptor) }));

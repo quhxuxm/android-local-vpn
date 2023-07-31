@@ -14,9 +14,9 @@ use smoltcp::{
 };
 use tokio::sync::{mpsc::Sender, Mutex, Notify};
 
-use crate::device::SmoltcpDevice;
 use crate::transport::ControlProtocol;
 use crate::values::ClientFileTxPacket;
+use crate::{device::SmoltcpDevice, error::RemoteEndpointError};
 
 use super::{
     common::{create_smoltcp_tcp_socket, create_smoltcp_udp_socket, prepare_smoltcp_iface_and_device},
@@ -117,7 +117,7 @@ impl<'buf> ClientEndpoint<'buf> {
     ) -> Result<bool>
     where
         F: FnMut(TransportId, Vec<u8>, Arc<RemoteEndpoint>) -> Fut,
-        Fut: Future<Output = Result<usize>>,
+        Fut: Future<Output = Result<usize, RemoteEndpointError>>,
     {
         match self {
             Self::Tcp {

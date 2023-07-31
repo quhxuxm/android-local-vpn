@@ -3,7 +3,7 @@ use jni::objects::JValue;
 use log::trace;
 use ppaass_common::{PpaassMessagePayloadEncryptionSelector, RsaCrypto, RsaCryptoFetcher, RsaError};
 
-use crate::{error::AgentError, transport::TransportId};
+use crate::{error::RemoteEndpointError, transport::TransportId};
 use crate::{JAVA_VPN_JVM, JAVA_VPN_SERVICE_OBJ};
 
 // use smoltcp::wire::{Ipv4Packet, Ipv6Packet, PrettyPrinter};
@@ -18,35 +18,36 @@ use crate::{JAVA_VPN_JVM, JAVA_VPN_SERVICE_OBJ};
 //     }
 // }
 
-pub(crate) fn protect_socket(transport_id: TransportId, socket_fd: i32) -> Result<(), AgentError> {
+pub(crate) fn protect_socket(transport_id: TransportId, socket_fd: i32) -> Result<(), RemoteEndpointError> {
     trace!("Begin to protect outbound socket: {socket_fd}");
     let socket_fd_jni_arg = JValue::Int(socket_fd);
     let java_vpn_service_obj = unsafe {
         JAVA_VPN_SERVICE_OBJ
             .get_mut()
-            .ok_or(AgentError::ProtectRemoteSocket {
+            .ok_or(RemoteEndpointError::ProtectRemoteSocket {
                 transport_id,
                 socket_fd,
-                message: format!("Can not get vpn service java object"),
+                message: "Can not get vpn service java object".to_string(),
             })?
     }
     .as_obj();
     let java_vm = unsafe {
         JAVA_VPN_JVM
             .get_mut()
-            .ok_or(AgentError::ProtectRemoteSocket {
+            .ok_or(RemoteEndpointError::ProtectRemoteSocket {
                 transport_id,
                 socket_fd,
-                message: format!("Can not get JVM instance."),
+                message: "Can not get JVM instance.".to_string(),
             })?
     };
-    let mut jni_env = java_vm
-        .attach_current_thread_permanently()
-        .map_err(|e| AgentError::ProtectRemoteSocket {
-            transport_id,
-            socket_fd,
-            message: format!("Can not attach current java thread because of error: {e:?}"),
-        })?;
+    let mut jni_env =
+        java_vm
+            .attach_current_thread_permanently()
+            .map_err(|e| RemoteEndpointError::ProtectRemoteSocket {
+                transport_id,
+                socket_fd,
+                message: format!("Can not attach current java thread because of error: {e:?}"),
+            })?;
     let protect_result = jni_env
         .call_method(
             java_vpn_service_obj,
@@ -54,23 +55,23 @@ pub(crate) fn protect_socket(transport_id: TransportId, socket_fd: i32) -> Resul
             "(I)Z",
             &[socket_fd_jni_arg],
         )
-        .map_err(|e| AgentError::ProtectRemoteSocket {
+        .map_err(|e| RemoteEndpointError::ProtectRemoteSocket {
             transport_id,
             socket_fd,
             message: format!("Fail to invoke protect socket java method because of error: {e:?}"),
         })?;
     let protect_success = protect_result
         .z()
-        .map_err(|e| AgentError::ProtectRemoteSocket {
+        .map_err(|e| RemoteEndpointError::ProtectRemoteSocket {
             transport_id,
             socket_fd,
             message: format!("Fail to get protect socket java method result because of error: {e:?}"),
         })?;
     if !protect_success {
-        return Err(AgentError::ProtectRemoteSocket {
+        return Err(RemoteEndpointError::ProtectRemoteSocket {
             transport_id,
             socket_fd,
-            message: format!("Protect socket java method return false"),
+            message: "Protect socket java method return false".to_string(),
         });
     }
     Ok(())

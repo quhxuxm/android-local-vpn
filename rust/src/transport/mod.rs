@@ -9,7 +9,7 @@ use tokio::sync::{
     Mutex, Notify,
 };
 
-use crate::{config::PpaassVpnServerConfig, values::ClientFileTxPacket};
+use crate::{config::PpaassVpnServerConfig, error::RemoteEndpointError, values::ClientFileTxPacket};
 use crate::{transport::remote::RemoteEndpoint, util::AgentRsaCryptoFetcher};
 
 use self::client::ClientEndpoint;
@@ -147,7 +147,7 @@ impl Transport {
                 transport_id: TransportId,
                 data: Vec<u8>,
                 remote: Arc<RemoteEndpoint>,
-            ) -> Result<usize> {
+            ) -> Result<usize, RemoteEndpointError> {
                 debug!(
                     ">>>> Transport {transport_id} write data to remote: {}",
                     pretty_hex::pretty_hex(&data)
