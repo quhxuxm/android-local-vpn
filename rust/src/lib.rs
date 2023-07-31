@@ -74,7 +74,8 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
         "Proxy public key: {}",
         pretty_hex::pretty_hex(&proxy_public_key)
     );
-    let agent_crypto_fetcher = AgentRsaCryptoFetcher::new(agent_private_key, proxy_public_key).expect("Fail to create agent rsa crypto fetcher");
+    let agent_crypto_fetcher = AgentRsaCryptoFetcher::new(agent_private_key, proxy_public_key)
+        .expect("Fail to create agent rsa crypto fetcher");
     AGENT_RSA_CRYPTO_FETCHER
         .set(agent_crypto_fetcher)
         .expect("Fail to set agent rsa crypto fetcher");

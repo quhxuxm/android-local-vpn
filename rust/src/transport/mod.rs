@@ -48,12 +48,17 @@ impl Transport {
         }
     }
 
-    pub(crate) async fn start(self: &Arc<Self>, agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher) -> Result<()> {
+    pub(crate) async fn start(
+        self: &Arc<Self>,
+        agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
+    ) -> Result<()> {
         let transport_id = self.transport_id;
         if let Some(mut client_data_receiver) = self.client_data_receiver.lock().await.take() {
-            let (client_endpoint, client_endpoint_recv_buffer_notify) = ClientEndpoint::new(self.transport_id, self.client_file_tx_sender.clone())?;
+            let (client_endpoint, client_endpoint_recv_buffer_notify) =
+                ClientEndpoint::new(self.transport_id, self.client_file_tx_sender.clone())?;
             debug!(">>>> Transport {transport_id} success create client endpoint.");
-            let (remote_endpoint, remote_endpoint_recv_buffer_notify) = RemoteEndpoint::new(transport_id, agent_rsa_crypto_fetcher).await?;
+            let (remote_endpoint, remote_endpoint_recv_buffer_notify) =
+                RemoteEndpoint::new(transport_id, agent_rsa_crypto_fetcher).await?;
             debug!(">>>> Transport {transport_id} success create remote endpoint.");
             let remote_endpoint = Arc::new(remote_endpoint);
             let client_endpoint = Arc::new(client_endpoint);
@@ -100,8 +105,11 @@ impl Transport {
     }
 
     /// Spawn a task to read remote data
-    fn spawn_read_remote_task<'buf, 'r>(self: &Arc<Self>, client_endpoint: Arc<ClientEndpoint<'buf>>, remote_endpoint: Arc<RemoteEndpoint>)
-    where
+    fn spawn_read_remote_task<'buf, 'r>(
+        self: &Arc<Self>,
+        client_endpoint: Arc<ClientEndpoint<'buf>>,
+        remote_endpoint: Arc<RemoteEndpoint>,
+    ) where
         'buf: 'static,
         'r: 'static,
     {
@@ -134,7 +142,11 @@ impl Transport {
         // Spawn a task for output data to client
         let transport_id = self.transport_id;
         tokio::spawn(async move {
-            async fn consume_fn(transport_id: TransportId, data: Vec<u8>, remote: Arc<RemoteEndpoint>) -> Result<usize> {
+            async fn consume_fn(
+                transport_id: TransportId,
+                data: Vec<u8>,
+                remote: Arc<RemoteEndpoint>,
+            ) -> Result<usize> {
                 debug!(
                     ">>>> Transport {transport_id} write data to remote: {}",
                     pretty_hex::pretty_hex(&data)
@@ -172,7 +184,11 @@ impl Transport {
         // Spawn a task for output data to client
         let transport_id = self.transport_id;
         tokio::spawn(async move {
-            async fn consume_fn(transport_id: TransportId, data: Vec<u8>, client: Arc<ClientEndpoint<'_>>) -> Result<usize> {
+            async fn consume_fn(
+                transport_id: TransportId,
+                data: Vec<u8>,
+                client: Arc<ClientEndpoint<'_>>,
+            ) -> Result<usize> {
                 debug!(
                     ">>>> Transport {transport_id} write data to smoltcp: {}",
                     pretty_hex::pretty_hex(&data)

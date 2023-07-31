@@ -10,7 +10,8 @@ use ppaass_common::{
     generate_uuid,
     tcp::{TcpData, TcpInitResponse, TcpInitResponseType},
     udp::UdpData,
-    PpaassConnection, PpaassMessage, PpaassMessageGenerator, PpaassMessagePayloadEncryptionSelector, PpaassMessageProxyPayload, PpaassMessageProxyPayloadType,
+    PpaassConnection, PpaassMessage, PpaassMessageGenerator, PpaassMessagePayloadEncryptionSelector,
+    PpaassMessageProxyPayload, PpaassMessageProxyPayloadType,
 };
 
 use tokio::{
@@ -25,7 +26,8 @@ use crate::{transport::ControlProtocol, util::AgentPpaassMessagePayloadEncryptio
 
 use super::{client::ClientEndpoint, value::InternetProtocol, TransportId};
 
-type ProxyConnectionWrite = SplitSink<PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>, PpaassMessage>;
+type ProxyConnectionWrite =
+    SplitSink<PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>, PpaassMessage>;
 
 type ProxyConnectionRead = SplitStream<PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>>;
 
@@ -49,14 +51,20 @@ pub(crate) enum RemoteEndpoint {
 }
 
 impl RemoteEndpoint {
-    pub(crate) async fn new(transport_id: TransportId, agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher) -> Result<(RemoteEndpoint, Arc<Notify>)> {
+    pub(crate) async fn new(
+        transport_id: TransportId,
+        agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
+    ) -> Result<(RemoteEndpoint, Arc<Notify>)> {
         match transport_id.control_protocol {
             ControlProtocol::Tcp => Self::new_tcp(transport_id, agent_rsa_crypto_fetcher).await,
             ControlProtocol::Udp => Self::new_udp(transport_id, agent_rsa_crypto_fetcher).await,
         }
     }
 
-    async fn new_tcp(transport_id: TransportId, agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher) -> Result<(RemoteEndpoint, Arc<Notify>)> {
+    async fn new_tcp(
+        transport_id: TransportId,
+        agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
+    ) -> Result<(RemoteEndpoint, Arc<Notify>)> {
         let tcp_socket = match transport_id.internet_protocol {
             InternetProtocol::Ipv4 => TcpSocket::new_v4()?,
             InternetProtocol::Ipv6 => TcpSocket::new_v6()?,
@@ -80,7 +88,10 @@ impl RemoteEndpoint {
         ))
     }
 
-    async fn new_udp(transport_id: TransportId, agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher) -> Result<(RemoteEndpoint, Arc<Notify>)> {
+    async fn new_udp(
+        transport_id: TransportId,
+        agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
+    ) -> Result<(RemoteEndpoint, Arc<Notify>)> {
         let tcp_socket = match transport_id.internet_protocol {
             InternetProtocol::Ipv4 => TcpSocket::new_v4()?,
             InternetProtocol::Ipv6 => TcpSocket::new_v6()?,
@@ -119,7 +130,8 @@ impl RemoteEndpoint {
             true,
             65536,
         );
-        let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
+        let payload_encryption =
+            AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
 
         if let ControlProtocol::Tcp = transport_id.control_protocol {
             let tcp_init_request = PpaassMessageGenerator::generate_tcp_init_request(
@@ -235,7 +247,8 @@ impl RemoteEndpoint {
                 ..
             } => {
                 let mut proxy_connection_write = proxy_connection_write.lock().await;
-                let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
+                let payload_encryption =
+                    AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
                 let data_len = data.len();
                 let tcp_data = PpaassMessageGenerator::generate_tcp_data(
                     USER_TOKE,
@@ -253,7 +266,8 @@ impl RemoteEndpoint {
                 ..
             } => {
                 let mut proxy_connection_write = proxy_connection_write.lock().await;
-                let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
+                let payload_encryption =
+                    AgentPpaassMessagePayloadEncryptionSelector::select(USER_TOKE, Some(generate_uuid().into_bytes()));
                 debug!(
                     ">>>> Transport {transport_id}, [UDP PROCESS] send udp data to remote: {}",
                     pretty_hex::pretty_hex(&data)
@@ -276,7 +290,11 @@ impl RemoteEndpoint {
         }
     }
 
-    pub(crate) async fn consume_recv_buffer<'buf, F, Fut>(&self, remote: Arc<ClientEndpoint<'buf>>, mut consume_fn: F) -> Result<bool>
+    pub(crate) async fn consume_recv_buffer<'buf, F, Fut>(
+        &self,
+        remote: Arc<ClientEndpoint<'buf>>,
+        mut consume_fn: F,
+    ) -> Result<bool>
     where
         F: FnMut(TransportId, Vec<u8>, Arc<ClientEndpoint<'buf>>) -> Fut,
         Fut: Future<Output = Result<usize>>,
