@@ -2,10 +2,10 @@ mod client;
 mod remote;
 mod value;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fs::File, sync::Arc};
 
 use anyhow::Result;
-use log::{debug, error};
+use log::{debug, error, info};
 use tokio::sync::{
     mpsc::{channel as mpsc_channel, Receiver as MpscReceiver, Sender as MpscSender},
     Mutex, Notify,
@@ -14,7 +14,6 @@ use tokio::sync::{
 use crate::{
     config::PpaassVpnServerConfig,
     error::{AgentError, ClientEndpointError, RemoteEndpointError},
-    values::ClientFileTxPacket,
 };
 use crate::{transport::remote::RemoteEndpoint, util::AgentRsaCryptoFetcher};
 
@@ -25,22 +24,18 @@ pub(crate) use self::value::TransportId;
 #[derive(Debug)]
 pub(crate) struct Transport {
     transport_id: TransportId,
-    client_file_tx_sender: MpscSender<ClientFileTxPacket>,
+    client_file_write: Arc<Mutex<File>>,
     client_data_receiver: MpscReceiver<Vec<u8>>,
     closed: Arc<Mutex<bool>>,
 }
 
 impl Transport {
-    pub(crate) fn new(
-        transport_id: TransportId,
-        client_file_tx_sender: MpscSender<ClientFileTxPacket>,
-    ) -> (Self, MpscSender<Vec<u8>>) {
+    pub(crate) fn new(transport_id: TransportId, client_file_write: Arc<Mutex<File>>) -> (Self, MpscSender<Vec<u8>>) {
         let (client_data_sender, client_data_receiver) = mpsc_channel::<Vec<u8>>(1024);
-
         (
             Self {
                 transport_id,
-                client_file_tx_sender,
+                client_file_write,
                 client_data_receiver,
                 closed: Arc::new(Mutex::new(false)),
             },
@@ -55,14 +50,35 @@ impl Transport {
         transports: Arc<Mutex<HashMap<TransportId, MpscSender<Vec<u8>>>>>,
     ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
-        let (client_endpoint, client_endpoint_recv_buffer_notify) = ClientEndpoint::new(
+        let (client_endpoint, client_endpoint_recv_buffer_notify) = match ClientEndpoint::new(
             self.transport_id,
-            self.client_file_tx_sender.clone(),
+            Arc::clone(&self.client_file_write),
             config,
-        )?;
+        ) {
+            Ok(client_endpoint_result) => client_endpoint_result,
+            Err(e) => {
+                let mut transports = transports.lock().await;
+                transports.remove(&transport_id);
+                info!(">>>> Transport {transport_id} removed from vpn server(fail to create client endpoint), current connection number in vpn server: {}", transports.len());
+                return Err(e.into());
+            }
+        };
         debug!(">>>> Transport {transport_id} success create client endpoint.");
-        let (remote_endpoint, remote_endpoint_recv_buffer_notify) =
-            RemoteEndpoint::new(transport_id, agent_rsa_crypto_fetcher, config).await?;
+        let (remote_endpoint, remote_endpoint_recv_buffer_notify) = match RemoteEndpoint::new(
+            transport_id,
+            agent_rsa_crypto_fetcher,
+            config,
+        )
+        .await
+        {
+            Ok(remote_endpoint_result) => remote_endpoint_result,
+            Err(e) => {
+                let mut transports = transports.lock().await;
+                transports.remove(&transport_id);
+                info!(">>>> Transport {transport_id} removed from vpn server(fail to create remote endpoint), current connection number in vpn server: {}", transports.len());
+                return Err(e.into());
+            }
+        };
         debug!(">>>> Transport {transport_id} success create remote endpoint.");
         let client_endpoint = Arc::new(client_endpoint);
         let remote_endpoint = Arc::new(remote_endpoint);
@@ -93,6 +109,9 @@ impl Transport {
         while let Some(client_data) = self.client_data_receiver.recv().await {
             client_endpoint.receive_from_client(client_data).await;
         }
+        let mut transports = transports.lock().await;
+        transports.remove(&transport_id);
+        info!(">>>> Transport {transport_id} removed from vpn server(normal quite), current connection number in vpn server: {}", transports.len());
         Ok::<(), AgentError>(())
     }
 
@@ -118,8 +137,6 @@ impl Transport {
                     Ok(false) => continue,
                     Ok(true) => {
                         debug!(">>>> Transport {transport_id} mark client & remote endpoint closed.");
-                        remote_endpoint.close().await;
-                        client_endpoint.close().await;
                         {
                             let mut transports = transports.lock().await;
                             transports.remove(&transport_id);
@@ -128,13 +145,12 @@ impl Transport {
                             let mut closed = closed.lock().await;
                             *closed = true;
                         }
+                        remote_endpoint.close().await;
+                        client_endpoint.close().await;
                         break;
                     }
                     Err(e) => {
                         debug!(">>>> Transport {transport_id} error happen on remote connection close client & remote endpoint, error: {e:?}");
-
-                        remote_endpoint.close().await;
-                        client_endpoint.close().await;
                         {
                             let mut transports = transports.lock().await;
                             transports.remove(&transport_id);
@@ -143,6 +159,8 @@ impl Transport {
                             let mut closed = closed.lock().await;
                             *closed = true;
                         }
+                        remote_endpoint.close().await;
+                        client_endpoint.close().await;
                         break;
                     }
                 };
@@ -195,8 +213,7 @@ impl Transport {
                     }
                     Err(e) => {
                         error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer because of error: {e:?}");
-                        remote_endpoint.close().await;
-                        client_endpoint.close().await;
+
                         {
                             let mut transports = transports.lock().await;
                             transports.remove(&transport_id);
@@ -205,6 +222,8 @@ impl Transport {
                             let mut closed = closed.lock().await;
                             *closed = true;
                         }
+                        remote_endpoint.close().await;
+                        client_endpoint.close().await;
                         break;
                     }
                 };

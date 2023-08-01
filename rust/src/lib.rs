@@ -4,7 +4,6 @@ mod error;
 mod server;
 mod transport;
 mod util;
-mod values;
 
 use crate::{config::PpaassVpnServerConfig, server::PpaassVpnServer, util::AgentRsaCryptoFetcher};
 use android_logger::Config as AndroidLoggerConfig;

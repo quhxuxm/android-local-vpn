@@ -1,5 +1,5 @@
 use log::error;
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, fs::File, io::Write, sync::Arc};
 
 use crate::{config::PpaassVpnServerConfig, device::SmoltcpDevice, error::ClientEndpointError};
 
@@ -22,9 +22,7 @@ use smoltcp::socket::udp::{
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
 use smoltcp::iface::SocketSet;
-use tokio::sync::{mpsc::Sender, Mutex, Notify};
-
-use crate::values::ClientFileTxPacket;
+use tokio::sync::{Mutex, Notify};
 
 use super::{ClientEndpoint, ClientEndpointCtl, ClientEndpointCtlLockGuard};
 
@@ -89,7 +87,7 @@ pub(crate) fn create_smoltcp_udp_socket<'a>(trans_id: TransportId) -> Result<Smo
 
 pub(crate) fn new_tcp(
     transport_id: TransportId,
-    client_file_tx_sender: Sender<ClientFileTxPacket>,
+    client_file_write: Arc<Mutex<File>>,
     config: &'static PpaassVpnServerConfig,
 ) -> Result<(ClientEndpoint<'_>, Arc<Notify>), ClientEndpointError> {
     let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
@@ -112,7 +110,7 @@ pub(crate) fn new_tcp(
                 config.get_client_endpoint_tcp_recv_buffer_size(),
             ))),
             recv_buffer_notify: Arc::clone(&recv_buffer_notify),
-            client_file_tx_sender,
+            client_file_write,
             _config: config,
         },
         recv_buffer_notify,
@@ -121,7 +119,7 @@ pub(crate) fn new_tcp(
 
 pub(crate) fn new_udp(
     transport_id: TransportId,
-    client_file_tx_sender: Sender<ClientFileTxPacket>,
+    client_file_write: Arc<Mutex<File>>,
     config: &'static PpaassVpnServerConfig,
 ) -> Result<(ClientEndpoint<'_>, Arc<Notify>), ClientEndpointError> {
     let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
@@ -144,7 +142,7 @@ pub(crate) fn new_udp(
                 config.get_client_endpoint_udp_recv_buffer_size(),
             ))),
             recv_buffer_notify: Arc::clone(&recv_buffer_notify),
-            client_file_tx_sender,
+            client_file_write,
             _config: config,
         },
         recv_buffer_notify,
@@ -155,7 +153,7 @@ pub(crate) async fn close_client_tcp(
     ctl: &ClientEndpointCtl<'_>,
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
-    client_file_tx_sender: &Sender<ClientFileTxPacket>,
+    client_file_write: Arc<Mutex<File>>,
 ) {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
@@ -170,9 +168,10 @@ pub(crate) async fn close_client_tcp(
         &mut smoltcp_socket_set,
     ) {
         while let Some(output) = smoltcp_device.pop_tx() {
-            let client_file_tx_packet = ClientFileTxPacket::new(transport_id, output);
-            if let Err(e) = client_file_tx_sender.send(client_file_tx_packet).await {
-                error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for output because of error: {e:?}")
+            let mut client_file_write = client_file_write.lock().await;
+            if let Err(e) = client_file_write.write_all(&output) {
+                error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for output because of error: {e:?}");
+                break;
             };
         }
     }
@@ -181,7 +180,7 @@ pub(crate) async fn close_client_tcp(
 pub(crate) async fn close_client_udp(
     ctl: &ClientEndpointCtl<'_>,
     transport_id: TransportId,
-    client_file_tx_sender: &Sender<ClientFileTxPacket>,
+    client_file_write: Arc<Mutex<File>>,
 ) {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
@@ -195,9 +194,10 @@ pub(crate) async fn close_client_udp(
         &mut smoltcp_socket_set,
     ) {
         while let Some(output) = smoltcp_device.pop_tx() {
-            let client_file_tx_packet = ClientFileTxPacket::new(transport_id, output);
-            if let Err(e) = client_file_tx_sender.send(client_file_tx_packet).await {
-                error!("<<<< Transport {transport_id} fail to transfer smoltcp udp data for output because of error: {e:?}")
+            let mut client_file_write = client_file_write.lock().await;
+            if let Err(e) = client_file_write.write_all(&output) {
+                error!("<<<< Transport {transport_id} fail to transfer smoltcp udp data for output because of error: {e:?}");
+                break;
             };
         }
     }
@@ -208,7 +208,7 @@ pub(crate) async fn send_to_client_tcp(
     smoltcp_socket_handle: SocketHandle,
     data: Vec<u8>,
     transport_id: TransportId,
-    client_file_tx_sender: &Sender<ClientFileTxPacket>,
+    client_file_write: Arc<Mutex<File>>,
 ) -> Result<usize, ClientEndpointError> {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
@@ -227,9 +227,10 @@ pub(crate) async fn send_to_client_tcp(
             &mut smoltcp_socket_set,
         ) {
             while let Some(output) = smoltcp_device.pop_tx() {
-                let client_file_tx_packet = ClientFileTxPacket::new(transport_id, output);
-                if let Err(e) = client_file_tx_sender.send(client_file_tx_packet).await {
-                    error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for outupt because of error: {e:?}")
+                let mut client_file_write = client_file_write.lock().await;
+                if let Err(e) = client_file_write.write_all(&output) {
+                    error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for outupt because of error: {e:?}");
+                    break;
                 };
             }
         }
@@ -243,7 +244,7 @@ pub(crate) async fn send_to_client_udp(
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     data: Vec<u8>,
-    client_file_tx_sender: &Sender<ClientFileTxPacket>,
+    client_file_write: Arc<Mutex<File>>,
 ) -> Result<usize, ClientEndpointError> {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
@@ -271,9 +272,10 @@ pub(crate) async fn send_to_client_udp(
             &mut smoltcp_socket_set,
         ) {
             while let Some(output) = smoltcp_device.pop_tx() {
-                let client_file_tx_packet = ClientFileTxPacket::new(transport_id, output);
-                if let Err(e) = client_file_tx_sender.send(client_file_tx_packet).await {
-                    error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for output because of error: {e:?}")
+                let mut client_file_write = client_file_write.lock().await;
+                if let Err(e) = client_file_write.write_all(&output) {
+                    error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for output because of error: {e:?}");
+                    break;
                 };
             }
         }
@@ -297,7 +299,7 @@ pub(crate) async fn recv_from_client_tcp(
     client_data: Vec<u8>,
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
-    client_file_tx_sender: &Sender<ClientFileTxPacket>,
+    client_file_write: Arc<Mutex<File>>,
     recv_buffer: &Mutex<VecDeque<u8>>,
     recv_buffer_notify: &Notify,
 ) {
@@ -317,9 +319,10 @@ pub(crate) async fn recv_from_client_tcp(
     {
         let smoltcp_tcp_socket = smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
         while let Some(output) = smoltcp_device.pop_tx() {
-            let client_file_tx_packet = ClientFileTxPacket::new(transport_id, output);
-            if let Err(e) = client_file_tx_sender.send(client_file_tx_packet).await {
-                error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for output because of error: {e:?}")
+            let mut client_file_write = client_file_write.lock().await;
+            if let Err(e) = client_file_write.write_all(&output) {
+                error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for output because of error: {e:?}");
+                break;
             };
         }
         while smoltcp_tcp_socket.may_recv() {
@@ -347,7 +350,7 @@ pub(crate) async fn recv_from_client_udp(
     client_data: Vec<u8>,
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
-    client_file_tx_sender: &Sender<ClientFileTxPacket>,
+    client_file_write: Arc<Mutex<File>>,
     recv_buffer: &Mutex<VecDeque<Vec<u8>>>,
     recv_buffer_notify: &Notify,
 ) {
@@ -366,9 +369,10 @@ pub(crate) async fn recv_from_client_udp(
     {
         let smoltcp_udp_socket = smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
         while let Some(output) = smoltcp_device.pop_tx() {
-            let client_file_tx_packet = ClientFileTxPacket::new(transport_id, output);
-            if let Err(e) = client_file_tx_sender.send(client_file_tx_packet).await {
-                error!("<<<< Transport {transport_id} fail to transfer smoltcp udp data for output because of error: {e:?}")
+            let mut client_file_write = client_file_write.lock().await;
+            if let Err(e) = client_file_write.write_all(&output) {
+                error!("<<<< Transport {transport_id} fail to transfer smoltcp udp data for output because of error: {e:?}");
+                break;
             };
         }
         while smoltcp_udp_socket.can_recv() {

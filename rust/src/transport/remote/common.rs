@@ -292,15 +292,11 @@ pub(crate) async fn close_remote_tcp(
     proxy_connection_write: &Mutex<
         SplitSink<PpaassConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>, PpaassMessage>,
     >,
-    recv_buffer_notify: &Notify,
 ) {
     let mut proxy_connection_write = proxy_connection_write.lock().await;
     if let Err(e) = proxy_connection_write.close().await {
         error!(">>>> Transport {transport_id} fail to close remote endpoint because of error: {e:?}")
     };
-    recv_buffer_notify.notify_waiters();
 }
 
-pub(crate) async fn close_remote_udp(recv_buffer_notify: &Notify) {
-    recv_buffer_notify.notify_waiters();
-}
+pub(crate) async fn close_remote_udp() {}

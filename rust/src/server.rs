@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::Write;
+
 use std::{
     collections::{hash_map::Entry, HashMap},
     io::{ErrorKind, Read},
@@ -22,7 +22,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::{config::PpaassVpnServerConfig, values::ClientFileTxPacket};
+use crate::config::PpaassVpnServerConfig;
 use crate::{
     transport::{Transport, TransportId},
     util::AgentRsaCryptoFetcher,
@@ -72,22 +72,12 @@ impl PpaassVpnServer {
         let ppaass_server_config = self.config;
 
         let processor_handle = runtime.spawn(async move {
-            let (client_file_tx_sender, mut client_file_tx_receiver) = channel::<ClientFileTxPacket>(1024);
-            info!("Spawn client file write task.");
-            tokio::spawn(async move {
-                while let Some(ClientFileTxPacket { transport_id, data }) = client_file_tx_receiver.recv().await {
-                    let mut client_file_write = client_file_write.lock().await;
-                    if let Err(e) = client_file_write.write_all(&data) {
-                        error!("<<<< Transport {transport_id} fail to write data to client because of error: {e:?}");
-                    };
-                }
-            });
             info!("Begin to handle client file data.");
             Self::start_handle_client_data(
                 client_file_read,
                 stop_receiver,
                 transports,
-                client_file_tx_sender,
+                client_file_write,
                 agent_rsa_crypto_fetcher,
                 ppaass_server_config,
             )
@@ -104,7 +94,7 @@ impl PpaassVpnServer {
         client_file_read: Arc<Mutex<File>>,
         mut stop_receiver: Receiver<bool>,
         transports: Arc<Mutex<HashMap<TransportId, Sender<Vec<u8>>>>>,
-        client_file_tx_sender: Sender<ClientFileTxPacket>,
+        client_file_write: Arc<Mutex<File>>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
     ) {
@@ -170,7 +160,7 @@ impl PpaassVpnServer {
                         ">>>> Create new transport {transport_id}, current connection number in vpn server: {connection_number}"
                     );
                     let (transport, transport_client_data_sender) =
-                        Transport::new(transport_id, client_file_tx_sender.clone());
+                        Transport::new(transport_id, Arc::clone(&client_file_write));
                     let transports = Arc::clone(&transports);
                     tokio::spawn(async move {
                         if let Err(e) = transport
@@ -179,11 +169,6 @@ impl PpaassVpnServer {
                         {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
                         };
-                        let mut transports = transports.lock().await;
-                        if let Some(transport_client_data_sender) = transports.remove(&transport_id) {
-                            transport_client_data_sender.closed().await;
-                        }
-                        info!(">>>> Transport {transport_id} removed from vpn server(normal quite), current connection number in vpn server: {}", transports.len());
                     });
                     if transport_client_data_sender
                         .send(client_data.to_vec())
