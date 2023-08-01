@@ -292,7 +292,7 @@ pub(crate) async fn close_remote_tcp(
     proxy_connection_write: &Mutex<
         SplitSink<PpaassConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>, PpaassMessage>,
     >,
-    recv_buffer_notify: &Arc<Notify>,
+    recv_buffer_notify: &Notify,
 ) {
     let mut proxy_connection_write = proxy_connection_write.lock().await;
     if let Err(e) = proxy_connection_write.close().await {
@@ -301,6 +301,6 @@ pub(crate) async fn close_remote_tcp(
     recv_buffer_notify.notify_waiters();
 }
 
-pub(crate) async fn close_remote_udp(recv_buffer_notify: &Arc<Notify>) {
+pub(crate) async fn close_remote_udp(recv_buffer_notify: &Notify) {
     recv_buffer_notify.notify_waiters();
 }
