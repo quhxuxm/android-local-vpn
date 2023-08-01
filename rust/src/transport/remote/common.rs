@@ -87,7 +87,7 @@ pub(crate) async fn read_from_remote_udp(
     transport_id: TransportId,
     proxy_connection_read: &Mutex<SplitStream<PpaassConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>>>,
     recv_buffer_notify: &Notify,
-    recv_buffer: &Arc<Mutex<VecDeque<Vec<u8>>>>,
+    recv_buffer: &Mutex<VecDeque<Vec<u8>>>,
 ) -> Result<bool, RemoteEndpointError> {
     let mut proxy_connection_read = proxy_connection_read.lock().await;
     match proxy_connection_read.next().await {
@@ -180,7 +180,6 @@ pub(crate) async fn new_tcp(
             proxy_connection_write: Mutex::new(proxy_connection_write),
             recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
             recv_buffer_notify: Arc::clone(&recv_buffer_notify),
-            closed: Mutex::new(false),
             config,
         },
         recv_buffer_notify,
@@ -210,7 +209,6 @@ pub(crate) async fn new_udp(
             proxy_connection_write: Mutex::new(proxy_connection_write),
             recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
             recv_buffer_notify: Arc::clone(&recv_buffer_notify),
-            closed: Mutex::new(false),
             config,
         },
         recv_buffer_notify,
@@ -295,19 +293,14 @@ pub(crate) async fn close_remote_tcp(
         SplitSink<PpaassConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>, PpaassMessage>,
     >,
     recv_buffer_notify: &Arc<Notify>,
-    closed: &Mutex<bool>,
 ) {
     let mut proxy_connection_write = proxy_connection_write.lock().await;
     if let Err(e) = proxy_connection_write.close().await {
         error!(">>>> Transport {transport_id} fail to close remote endpoint because of error: {e:?}")
     };
     recv_buffer_notify.notify_waiters();
-    let mut closed = closed.lock().await;
-    *closed = true;
 }
 
-pub(crate) async fn close_remote_udp(recv_buffer_notify: &Arc<Notify>, closed: &Mutex<bool>) {
+pub(crate) async fn close_remote_udp(recv_buffer_notify: &Arc<Notify>) {
     recv_buffer_notify.notify_waiters();
-    let mut closed = closed.lock().await;
-    *closed = true;
 }

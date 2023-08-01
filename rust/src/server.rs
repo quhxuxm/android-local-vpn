@@ -35,7 +35,7 @@ pub(crate) struct PpaassVpnServer {
     stop_sender: Option<Sender<bool>>,
     runtime: Option<TokioRuntime>,
     processor_handle: Option<JoinHandle<Result<()>>>,
-    transports: Arc<Mutex<HashMap<TransportId, Arc<Transport>>>>,
+    transports: Arc<Mutex<HashMap<TransportId, Sender<Vec<u8>>>>>,
 }
 
 impl PpaassVpnServer {
@@ -103,7 +103,7 @@ impl PpaassVpnServer {
     async fn start_handle_client_data(
         client_file_read: Arc<Mutex<File>>,
         mut stop_receiver: Receiver<bool>,
-        transports: Arc<Mutex<HashMap<TransportId, Arc<Transport>>>>,
+        transports: Arc<Mutex<HashMap<TransportId, Sender<Vec<u8>>>>>,
         client_file_tx_sender: Sender<ClientFileTxPacket>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
@@ -150,33 +150,37 @@ impl PpaassVpnServer {
             match transports_lock.entry(transport_id) {
                 Entry::Occupied(entry) => {
                     debug!(">>>> Found existing transport {transport_id}.");
-                    let transport = entry.get();
-                    if transport.is_closed().await {
+                    let transport_client_data_sender = entry.get();
+                    if transport_client_data_sender
+                        .send(client_data.to_vec())
+                        .await
+                        .is_err()
+                    {
+                        error!("Transport {transport_id} closed already, can not send client data to transport");
                         entry.remove();
-                        continue;
-                    }
-                    transport.feed_client_data(client_data).await;
+                    };
                 }
                 Entry::Vacant(entry) => {
                     debug!(">>>> Create new transport {transport_id}.");
-                    let transport = Arc::new(Transport::new(
-                        transport_id,
-                        client_file_tx_sender.clone(),
-                        Arc::clone(&transports),
-                    ));
-                    let transport_clone = Arc::clone(&transport);
-
+                    let (transport, transport_client_data_sender) =
+                        Transport::new(transport_id, client_file_tx_sender.clone());
+                    let transports = Arc::clone(&transports);
                     tokio::spawn(async move {
-                        if let Err(e) = transport_clone
-                            .start(agent_rsa_crypto_fetcher, config)
-                            .await
-                        {
+                        if let Err(e) = transport.exec(agent_rsa_crypto_fetcher, config).await {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
-                            transport_clone.close().await;
                         };
+                        let mut transports = transports.lock().await;
+                        transports.remove(&transport_id);
                     });
-                    entry.insert(Arc::clone(&transport));
-                    transport.feed_client_data(client_data).await;
+                    if transport_client_data_sender
+                        .send(client_data.to_vec())
+                        .await
+                        .is_err()
+                    {
+                        error!("Transport {transport_id} closed already, can not send client data to transport");
+                        continue;
+                    };
+                    entry.insert(transport_client_data_sender);
                 }
             }
         }

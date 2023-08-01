@@ -27,6 +27,7 @@ type ProxyConnectionWrite =
 
 type ProxyConnectionRead = SplitStream<PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>>;
 
+#[derive(Debug)]
 pub(crate) enum RemoteEndpoint {
     Tcp {
         transport_id: TransportId,
@@ -34,7 +35,6 @@ pub(crate) enum RemoteEndpoint {
         proxy_connection_write: Mutex<ProxyConnectionWrite>,
         recv_buffer: Arc<Mutex<VecDeque<u8>>>,
         recv_buffer_notify: Arc<Notify>,
-        closed: Mutex<bool>,
         config: &'static PpaassVpnServerConfig,
     },
     Udp {
@@ -43,7 +43,6 @@ pub(crate) enum RemoteEndpoint {
         proxy_connection_write: Mutex<ProxyConnectionWrite>,
         recv_buffer: Arc<Mutex<VecDeque<Vec<u8>>>>,
         recv_buffer_notify: Arc<Notify>,
-        closed: Mutex<bool>,
         config: &'static PpaassVpnServerConfig,
     },
 }
@@ -117,7 +116,7 @@ impl RemoteEndpoint {
         &self,
         remote: Arc<ClientEndpoint<'buf>>,
         mut consume_fn: F,
-    ) -> Result<bool>
+    ) -> Result<()>
     where
         F: FnMut(TransportId, Vec<u8>, Arc<ClientEndpoint<'buf>>) -> Fut,
         Fut: Future<Output = Result<usize, ClientEndpointError>>,
@@ -126,13 +125,11 @@ impl RemoteEndpoint {
             Self::Tcp {
                 transport_id,
                 recv_buffer,
-                closed,
                 ..
             } => {
                 let mut recv_buffer = recv_buffer.lock().await;
                 if recv_buffer.len() == 0 {
-                    let closed = closed.lock().await;
-                    return Ok(*closed);
+                    return Ok(());
                 }
                 let consume_size = consume_fn(
                     *transport_id,
@@ -141,26 +138,24 @@ impl RemoteEndpoint {
                 )
                 .await?;
                 recv_buffer.drain(..consume_size);
-                Ok(false)
+                Ok(())
             }
             Self::Udp {
                 transport_id,
                 recv_buffer,
-                closed,
                 ..
             } => {
                 let mut consume_size = 0;
                 let mut recv_buffer = recv_buffer.lock().await;
                 if recv_buffer.len() == 0 {
-                    let closed = closed.lock().await;
-                    return Ok(*closed);
+                    return Ok(());
                 }
                 for udp_data in recv_buffer.iter() {
                     consume_fn(*transport_id, udp_data.to_vec(), Arc::clone(&remote)).await?;
                     consume_size += 1;
                 }
                 recv_buffer.drain(..consume_size);
-                Ok(false)
+                Ok(())
             }
         }
     }
@@ -171,23 +166,14 @@ impl RemoteEndpoint {
                 transport_id,
                 proxy_connection_write,
                 recv_buffer_notify,
-                closed,
                 ..
             } => {
-                close_remote_tcp(
-                    *transport_id,
-                    proxy_connection_write,
-                    recv_buffer_notify,
-                    closed,
-                )
-                .await;
+                close_remote_tcp(*transport_id, proxy_connection_write, recv_buffer_notify).await;
             }
             Self::Udp {
-                recv_buffer_notify,
-                closed,
-                ..
+                recv_buffer_notify, ..
             } => {
-                close_remote_udp(recv_buffer_notify, closed).await;
+                close_remote_udp(recv_buffer_notify).await;
             }
         }
     }

@@ -1,6 +1,11 @@
 mod common;
 
-use std::{collections::VecDeque, future::Future, sync::Arc};
+use std::{
+    collections::VecDeque,
+    fmt::{Debug, Formatter},
+    future::Future,
+    sync::Arc,
+};
 
 use anyhow::Result;
 
@@ -18,25 +23,38 @@ use self::common::{
 };
 
 use super::{remote::RemoteEndpoint, TransportId};
+use std::fmt::Result as FormatResult;
 
 pub(crate) struct ClientEndpointCtlLockGuard<'lock, 'buf> {
     pub(crate) smoltcp_socket_set: MutexGuard<'lock, SocketSet<'buf>>,
     pub(crate) smoltcp_iface: MutexGuard<'lock, Interface>,
     pub(crate) smoltcp_device: MutexGuard<'lock, SmoltcpDevice>,
 }
+
 pub(crate) struct ClientEndpointCtl<'buf> {
+    transport_id: TransportId,
     smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
     smoltcp_iface: Arc<Mutex<Interface>>,
     smoltcp_device: Arc<Mutex<SmoltcpDevice>>,
 }
 
+impl Debug for ClientEndpointCtl<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FormatResult {
+        f.debug_struct("ClientEndpointCtl")
+            .field("transport_id", &self.transport_id)
+            .finish()
+    }
+}
+
 impl<'buf> ClientEndpointCtl<'buf> {
     pub(crate) fn new(
+        transport_id: TransportId,
         smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
         smoltcp_iface: Arc<Mutex<Interface>>,
         smoltcp_device: Arc<Mutex<SmoltcpDevice>>,
     ) -> Self {
         Self {
+            transport_id,
             smoltcp_socket_set,
             smoltcp_iface,
             smoltcp_device,
@@ -54,6 +72,7 @@ impl<'buf> ClientEndpointCtl<'buf> {
     }
 }
 
+#[derive(Debug)]
 pub(crate) enum ClientEndpoint<'buf> {
     Tcp {
         transport_id: TransportId,
@@ -62,7 +81,6 @@ pub(crate) enum ClientEndpoint<'buf> {
         recv_buffer: Arc<Mutex<VecDeque<u8>>>,
         recv_buffer_notify: Arc<Notify>,
         client_file_tx_sender: Sender<ClientFileTxPacket>,
-        closed: Mutex<bool>,
         _config: &'static PpaassVpnServerConfig,
     },
     Udp {
@@ -72,7 +90,6 @@ pub(crate) enum ClientEndpoint<'buf> {
         recv_buffer: Arc<Mutex<VecDeque<Vec<u8>>>>,
         recv_buffer_notify: Arc<Notify>,
         client_file_tx_sender: Sender<ClientFileTxPacket>,
-        closed: Mutex<bool>,
         _config: &'static PpaassVpnServerConfig,
     },
 }
@@ -89,11 +106,7 @@ impl<'buf> ClientEndpoint<'buf> {
         }
     }
 
-    pub(crate) async fn consume_recv_buffer<F, Fut>(
-        &self,
-        remote: Arc<RemoteEndpoint>,
-        mut consume_fn: F,
-    ) -> Result<bool>
+    pub(crate) async fn consume_recv_buffer<F, Fut>(&self, remote: Arc<RemoteEndpoint>, mut consume_fn: F) -> Result<()>
     where
         F: FnMut(TransportId, Vec<u8>, Arc<RemoteEndpoint>) -> Fut,
         Fut: Future<Output = Result<usize, RemoteEndpointError>>,
@@ -102,76 +115,33 @@ impl<'buf> ClientEndpoint<'buf> {
             Self::Tcp {
                 transport_id,
                 recv_buffer,
-                closed,
                 ..
             } => {
                 let mut recv_buffer = recv_buffer.lock().await;
                 if recv_buffer.len() == 0 {
-                    let closed = closed.lock().await;
-                    return Ok(*closed);
+                    return Ok(());
                 }
                 let recv_buffer_data = recv_buffer.make_contiguous().to_vec();
                 let consume_size = consume_fn(*transport_id, recv_buffer_data, remote).await?;
                 recv_buffer.drain(..consume_size);
-                Ok(false)
+                Ok(())
             }
             Self::Udp {
                 transport_id,
                 recv_buffer,
-                closed,
                 ..
             } => {
                 let mut consume_size = 0;
                 let mut recv_buffer = recv_buffer.lock().await;
                 if recv_buffer.len() == 0 {
-                    let closed = closed.lock().await;
-                    return Ok(*closed);
+                    return Ok(());
                 }
                 for udp_data in recv_buffer.iter() {
                     consume_fn(*transport_id, udp_data.to_vec(), Arc::clone(&remote)).await?;
                     consume_size += 1;
                 }
                 recv_buffer.drain(..consume_size);
-                Ok(false)
-            }
-        }
-    }
-
-    pub(crate) async fn close(&self) {
-        match self {
-            Self::Tcp {
-                transport_id,
-                smoltcp_socket_handle,
-                ctl,
-                client_file_tx_sender,
-                closed,
-                ..
-            } => {
-                close_client_tcp(
-                    ctl,
-                    *smoltcp_socket_handle,
-                    *transport_id,
-                    client_file_tx_sender,
-                    closed,
-                )
-                .await;
-            }
-            Self::Udp {
-                transport_id,
-                smoltcp_socket_handle,
-                ctl,
-                client_file_tx_sender,
-                closed,
-                ..
-            } => {
-                close_client_udp(
-                    ctl,
-                    *smoltcp_socket_handle,
-                    *transport_id,
-                    client_file_tx_sender,
-                    closed,
-                )
-                .await;
+                Ok(())
             }
         }
     }
@@ -256,5 +226,40 @@ impl<'buf> ClientEndpoint<'buf> {
                 .await;
             }
         };
+    }
+
+    pub(crate) async fn close(&self) {
+        match self {
+            Self::Tcp {
+                transport_id,
+                smoltcp_socket_handle,
+                ctl,
+                client_file_tx_sender,
+                ..
+            } => {
+                close_client_tcp(
+                    ctl,
+                    *smoltcp_socket_handle,
+                    *transport_id,
+                    client_file_tx_sender,
+                )
+                .await;
+            }
+            Self::Udp {
+                transport_id,
+                smoltcp_socket_handle,
+                ctl,
+                client_file_tx_sender,
+                ..
+            } => {
+                close_client_udp(
+                    ctl,
+                    *smoltcp_socket_handle,
+                    *transport_id,
+                    client_file_tx_sender,
+                )
+                .await;
+            }
+        }
     }
 }

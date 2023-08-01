@@ -81,8 +81,9 @@ internal class LocalVpnService : VpnService() {
     private lateinit var vpnInterface: ParcelFileDescriptor
 
     companion object {
-        private const val VPN_ADDRESS = "10.0.0.2"
+        private const val VPN_ADDRESS = "110.110.110.110"
         private const val VPN_ROUTE = "0.0.0.0"
+        private const val DNS_ADDRESS="8.8.8.8"
 
         internal const val INTENT_ACTION_START_VPN = "LocalVpnServiceStartVpn"
         internal const val INTENT_ACTION_STOP_VPN = "LocalVpnServiceStopVpn"
@@ -136,7 +137,7 @@ internal class LocalVpnService : VpnService() {
         val vpnServiceBuilder = super.Builder().apply {
             addAddress(VPN_ADDRESS, 32)
             addRoute(VPN_ROUTE, 0)
-            addDnsServer("1.1.1.1")
+            addDnsServer(DNS_ADDRESS)
         }
 
         configuration?.allowedApps?.forEach {

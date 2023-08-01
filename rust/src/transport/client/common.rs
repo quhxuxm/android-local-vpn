@@ -79,7 +79,6 @@ pub(crate) fn create_smoltcp_udp_socket<'a>(trans_id: TransportId) -> Result<Smo
             vec![0; 1024 * 1024],
         ),
     );
-
     socket.bind(trans_id.destination).map_err(|e| {
         error!(">>>> Transport {trans_id} failed to bind smoltcp udp socket");
         anyhow!("{e:?}")
@@ -99,6 +98,7 @@ pub(crate) fn new_tcp(
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_tcp_socket);
     let recv_buffer_notify = Arc::new(Notify::new());
     let ctl = ClientEndpointCtl::new(
+        transport_id,
         Arc::new(Mutex::new(smoltcp_socket_set)),
         Arc::new(Mutex::new(smoltcp_iface)),
         Arc::new(Mutex::new(smoltcp_device)),
@@ -113,7 +113,6 @@ pub(crate) fn new_tcp(
             ))),
             recv_buffer_notify: Arc::clone(&recv_buffer_notify),
             client_file_tx_sender,
-            closed: Mutex::new(false),
             _config: config,
         },
         recv_buffer_notify,
@@ -131,6 +130,7 @@ pub(crate) fn new_udp(
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_udp_socket);
     let recv_buffer_notify = Arc::new(Notify::new());
     let ctl = ClientEndpointCtl::new(
+        transport_id,
         Arc::new(Mutex::new(smoltcp_socket_set)),
         Arc::new(Mutex::new(smoltcp_iface)),
         Arc::new(Mutex::new(smoltcp_device)),
@@ -145,7 +145,6 @@ pub(crate) fn new_udp(
             ))),
             recv_buffer_notify: Arc::clone(&recv_buffer_notify),
             client_file_tx_sender,
-            closed: Mutex::new(false),
             _config: config,
         },
         recv_buffer_notify,
@@ -157,7 +156,6 @@ pub(crate) async fn close_client_tcp(
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_file_tx_sender: &Sender<ClientFileTxPacket>,
-    closed: &Mutex<bool>,
 ) {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
@@ -178,8 +176,6 @@ pub(crate) async fn close_client_tcp(
             };
         }
     }
-    let mut closed = closed.lock().await;
-    *closed = true;
 }
 
 pub(crate) async fn close_client_udp(
@@ -187,7 +183,6 @@ pub(crate) async fn close_client_udp(
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_file_tx_sender: &Sender<ClientFileTxPacket>,
-    closed: &Mutex<bool>,
 ) {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
@@ -208,8 +203,7 @@ pub(crate) async fn close_client_udp(
             };
         }
     }
-    let mut closed = closed.lock().await;
-    *closed = true;
+    smoltcp_socket_set.remove(smoltcp_socket_handle);
 }
 
 pub(crate) async fn send_to_client_tcp(
@@ -261,7 +255,9 @@ pub(crate) async fn send_to_client_udp(
     } = ctl.lock().await;
     let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
     if smoltcp_socket.can_send() {
-        let udp_packet_meta = PacketMeta::default();
+        let mut udp_packet_meta = PacketMeta::default();
+        udp_packet_meta.id = rand::random::<u32>();
+
         let udp_meta_data = UdpMetadata {
             endpoint: transport_id.source.into(),
             meta: udp_packet_meta,
@@ -269,7 +265,7 @@ pub(crate) async fn send_to_client_udp(
         smoltcp_socket
             .send_slice(&data, udp_meta_data)
             .map_err(|e| {
-                error!("<<<< Transport {transport_id} fail to transfer remote udp recv buffer data to smoltcp because of error: {e:?}");
+                error!("<<<< Transport {transport_id} fail to transfer remote udp recv buffer data to smoltcp with endpoint [{:?}] because of error: {e:?}", smoltcp_socket.endpoint());
                 anyhow!("{e:?}")
             })?;
         if smoltcp_iface.poll(
