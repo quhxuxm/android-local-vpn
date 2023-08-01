@@ -180,7 +180,6 @@ pub(crate) async fn close_client_tcp(
 
 pub(crate) async fn close_client_udp(
     ctl: &ClientEndpointCtl<'_>,
-    smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_file_tx_sender: &Sender<ClientFileTxPacket>,
 ) {
@@ -189,8 +188,7 @@ pub(crate) async fn close_client_udp(
         mut smoltcp_iface,
         mut smoltcp_device,
     } = ctl.lock().await;
-    let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
-    smoltcp_socket.close();
+
     if smoltcp_iface.poll(
         Instant::now(),
         &mut *smoltcp_device,
@@ -203,7 +201,6 @@ pub(crate) async fn close_client_udp(
             };
         }
     }
-    smoltcp_socket_set.remove(smoltcp_socket_handle);
 }
 
 pub(crate) async fn send_to_client_tcp(

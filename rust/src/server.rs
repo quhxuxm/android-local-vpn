@@ -147,6 +147,7 @@ impl PpaassVpnServer {
             };
 
             let mut transports_lock = transports.lock().await;
+            let connection_number = transports_lock.len();
             match transports_lock.entry(transport_id) {
                 Entry::Occupied(entry) => {
                     debug!(">>>> Found existing transport {transport_id}.");
@@ -157,20 +158,32 @@ impl PpaassVpnServer {
                         .is_err()
                     {
                         error!("Transport {transport_id} closed already, can not send client data to transport");
-                        entry.remove();
+
+                        let transport_client_data_sender = entry.remove();
+                        transport_client_data_sender.closed().await;
+
+                        info!("Transport {transport_id} removed from vpn server(error quite), current connection number in vpn server: {}", transports_lock.len());
                     };
                 }
                 Entry::Vacant(entry) => {
-                    debug!(">>>> Create new transport {transport_id}.");
+                    info!(
+                        ">>>> Create new transport {transport_id}, current connection number in vpn server: {connection_number}"
+                    );
                     let (transport, transport_client_data_sender) =
                         Transport::new(transport_id, client_file_tx_sender.clone());
                     let transports = Arc::clone(&transports);
                     tokio::spawn(async move {
-                        if let Err(e) = transport.exec(agent_rsa_crypto_fetcher, config).await {
+                        if let Err(e) = transport
+                            .exec(agent_rsa_crypto_fetcher, config, Arc::clone(&transports))
+                            .await
+                        {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
                         };
                         let mut transports = transports.lock().await;
-                        transports.remove(&transport_id);
+                        if let Some(transport_client_data_sender) = transports.remove(&transport_id) {
+                            transport_client_data_sender.closed().await;
+                        }
+                        info!(">>>> Transport {transport_id} removed from vpn server(normal quite), current connection number in vpn server: {}", transports.len());
                     });
                     if transport_client_data_sender
                         .send(client_data.to_vec())
@@ -184,6 +197,7 @@ impl PpaassVpnServer {
                 }
             }
         }
+        error!("****** Server quite because of unknown reason ****** ");
     }
 
     pub(crate) fn stop(&mut self) -> Result<()> {

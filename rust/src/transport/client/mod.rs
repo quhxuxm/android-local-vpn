@@ -247,18 +247,11 @@ impl<'buf> ClientEndpoint<'buf> {
             }
             Self::Udp {
                 transport_id,
-                smoltcp_socket_handle,
                 ctl,
                 client_file_tx_sender,
                 ..
             } => {
-                close_client_udp(
-                    ctl,
-                    *smoltcp_socket_handle,
-                    *transport_id,
-                    client_file_tx_sender,
-                )
-                .await;
+                close_client_udp(ctl, *transport_id, client_file_tx_sender).await;
             }
         }
     }

@@ -2,16 +2,13 @@ mod client;
 mod remote;
 mod value;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Result;
 use log::{debug, error};
 use tokio::sync::{
-    broadcast::{
-        channel as broadcast_channel, error::TryRecvError, Receiver as BroadcastReceiver, Sender as BroadcastSender,
-    },
     mpsc::{channel as mpsc_channel, Receiver as MpscReceiver, Sender as MpscSender},
-    Notify,
+    Mutex, Notify,
 };
 
 use crate::{
@@ -30,7 +27,7 @@ pub(crate) struct Transport {
     transport_id: TransportId,
     client_file_tx_sender: MpscSender<ClientFileTxPacket>,
     client_data_receiver: MpscReceiver<Vec<u8>>,
-    client_data_sender: MpscSender<Vec<u8>>,
+    closed: Arc<Mutex<bool>>,
 }
 
 impl Transport {
@@ -45,7 +42,7 @@ impl Transport {
                 transport_id,
                 client_file_tx_sender,
                 client_data_receiver,
-                client_data_sender: client_data_sender.clone(),
+                closed: Arc::new(Mutex::new(false)),
             },
             client_data_sender,
         )
@@ -55,9 +52,9 @@ impl Transport {
         mut self,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
+        transports: Arc<Mutex<HashMap<TransportId, MpscSender<Vec<u8>>>>>,
     ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
-        let (close_notify_sender, close_notify_receiver) = broadcast_channel::<bool>(1);
         let (client_endpoint, client_endpoint_recv_buffer_notify) = ClientEndpoint::new(
             self.transport_id,
             self.client_file_tx_sender.clone(),
@@ -75,27 +72,28 @@ impl Transport {
             Arc::clone(&remote_endpoint),
             Arc::clone(&client_endpoint),
             client_endpoint_recv_buffer_notify,
-            close_notify_sender.subscribe(),
+            Arc::clone(&transports),
+            Arc::clone(&self.closed),
         );
         Self::spawn_consume_remote_recv_buf_task(
             transport_id,
             Arc::clone(&client_endpoint),
             Arc::clone(&remote_endpoint),
             remote_endpoint_recv_buffer_notify,
-            close_notify_receiver,
+            Arc::clone(&transports),
+            Arc::clone(&self.closed),
         );
         Self::spawn_read_remote_task(
             transport_id,
             Arc::clone(&remote_endpoint),
             Arc::clone(&client_endpoint),
-            self.client_data_sender,
-            close_notify_sender,
+            Arc::clone(&transports),
+            Arc::clone(&self.closed),
         );
-        loop {
-            if let Some(client_data) = self.client_data_receiver.recv().await {
-                client_endpoint.receive_from_client(client_data).await;
-            };
+        while let Some(client_data) = self.client_data_receiver.recv().await {
+            client_endpoint.receive_from_client(client_data).await;
         }
+        Ok::<(), AgentError>(())
     }
 
     /// Spawn a task to read remote data
@@ -103,24 +101,51 @@ impl Transport {
         transport_id: TransportId,
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
-        client_data_sender: MpscSender<Vec<u8>>,
-        close_notify_sender: BroadcastSender<bool>,
+        transports: Arc<Mutex<HashMap<TransportId, MpscSender<Vec<u8>>>>>,
+        closed: Arc<Mutex<bool>>,
     ) where
         'b: 'static,
     {
         tokio::spawn(async move {
             loop {
-                let remote_closed = remote_endpoint.read_from_remote().await?;
-                if remote_closed {
-                    debug!(">>>> Transport {transport_id} mark client & remote endpoint closed.");
-                    client_data_sender.closed().await;
-                    remote_endpoint.close().await;
-                    client_endpoint.close().await;
-                    if let Err(e) = close_notify_sender.send(true) {
-                        error!(">>>> Transport {transport_id} fail to send close notify because of error: {e:?}");
-                    };
-                    break;
+                {
+                    let closed = closed.lock().await;
+                    if *closed {
+                        break;
+                    }
                 }
+                match remote_endpoint.read_from_remote().await {
+                    Ok(false) => continue,
+                    Ok(true) => {
+                        debug!(">>>> Transport {transport_id} mark client & remote endpoint closed.");
+                        remote_endpoint.close().await;
+                        client_endpoint.close().await;
+                        {
+                            let mut transports = transports.lock().await;
+                            transports.remove(&transport_id);
+                        }
+                        {
+                            let mut closed = closed.lock().await;
+                            *closed = true;
+                        }
+                        break;
+                    }
+                    Err(e) => {
+                        debug!(">>>> Transport {transport_id} error happen on remote connection close client & remote endpoint, error: {e:?}");
+
+                        remote_endpoint.close().await;
+                        client_endpoint.close().await;
+                        {
+                            let mut transports = transports.lock().await;
+                            transports.remove(&transport_id);
+                        }
+                        {
+                            let mut closed = closed.lock().await;
+                            *closed = true;
+                        }
+                        break;
+                    }
+                };
             }
             Ok::<(), RemoteEndpointError>(())
         });
@@ -132,7 +157,8 @@ impl Transport {
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
         client_endpoint_recv_buffer_notify: Arc<Notify>,
-        mut close_notify_receiver: BroadcastReceiver<bool>,
+        transports: Arc<Mutex<HashMap<TransportId, MpscSender<Vec<u8>>>>>,
+        closed: Arc<Mutex<bool>>,
     ) where
         'b: 'static,
     {
@@ -150,21 +176,35 @@ impl Transport {
                 remote.write_to_remote(data).await
             }
             loop {
+                {
+                    let closed = closed.lock().await;
+                    if *closed {
+                        break;
+                    }
+                }
                 client_endpoint_recv_buffer_notify.notified().await;
                 match client_endpoint
                     .consume_recv_buffer(Arc::clone(&remote_endpoint), consume_fn)
                     .await
                 {
-                    Ok(()) => match close_notify_receiver.try_recv() {
-                        Err(TryRecvError::Empty) => {
-                            continue;
-                        }
-                        _ => {
+                    Ok(()) => {
+                        let closed = closed.lock().await;
+                        if *closed {
                             break;
                         }
-                    },
+                    }
                     Err(e) => {
                         error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer because of error: {e:?}");
+                        remote_endpoint.close().await;
+                        client_endpoint.close().await;
+                        {
+                            let mut transports = transports.lock().await;
+                            transports.remove(&transport_id);
+                        }
+                        {
+                            let mut closed = closed.lock().await;
+                            *closed = true;
+                        }
                         break;
                     }
                 };
@@ -178,7 +218,8 @@ impl Transport {
         client_endpoint: Arc<ClientEndpoint<'b>>,
         remote_endpoint: Arc<RemoteEndpoint>,
         remote_endpoint_recv_buffer_notify: Arc<Notify>,
-        mut close_notify_receiver: BroadcastReceiver<bool>,
+        transports: Arc<Mutex<HashMap<TransportId, MpscSender<Vec<u8>>>>>,
+        closed: Arc<Mutex<bool>>,
     ) where
         'b: 'static,
     {
@@ -196,22 +237,35 @@ impl Transport {
                 client.send_to_smoltcp(data).await
             }
             loop {
+                {
+                    let closed = closed.lock().await;
+                    if *closed {
+                        break;
+                    }
+                }
                 remote_endpoint_recv_buffer_notify.notified().await;
                 match remote_endpoint
                     .consume_recv_buffer(Arc::clone(&client_endpoint), consume_fn)
                     .await
                 {
-                    Ok(()) => match close_notify_receiver.try_recv() {
-                        Err(TryRecvError::Empty) => {
-                            continue;
-                        }
-                        _ => {
+                    Ok(()) => {
+                        let closed = closed.lock().await;
+                        if *closed {
                             break;
                         }
-                    },
+                    }
                     Err(e) => {
                         error!(">>>> Transport {transport_id} fail to consume remote endpoint receive buffer because of error: {e:?}");
-                        break;
+                        remote_endpoint.close().await;
+                        client_endpoint.close().await;
+                        {
+                            let mut transports = transports.lock().await;
+                            transports.remove(&transport_id);
+                        }
+                        {
+                            let mut closed = closed.lock().await;
+                            *closed = true;
+                        }
                     }
                 };
             }
