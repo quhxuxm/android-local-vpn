@@ -127,38 +127,23 @@ impl Transport {
     {
         tokio::spawn(async move {
             loop {
-                {
-                    let closed = closed.read().await;
-                    if *closed {
-                        break;
-                    }
+                if *closed.read().await {
+                    break;
                 }
                 match remote_endpoint.read_from_remote().await {
                     Ok(false) => continue,
                     Ok(true) => {
                         debug!(">>>> Transport {transport_id} mark client & remote endpoint closed.");
-                        {
-                            let mut transports = transports.lock().await;
-                            transports.remove(&transport_id);
-                        }
-                        {
-                            let mut closed = closed.write().await;
-                            *closed = true;
-                        }
+                        transports.lock().await.remove(&transport_id);
+                        *closed.write().await = true;
                         remote_endpoint.close().await;
                         client_endpoint.close().await;
                         break;
                     }
                     Err(e) => {
                         debug!(">>>> Transport {transport_id} error happen on remote connection close client & remote endpoint, error: {e:?}");
-                        {
-                            let mut transports = transports.lock().await;
-                            transports.remove(&transport_id);
-                        }
-                        {
-                            let mut closed = closed.write().await;
-                            *closed = true;
-                        }
+                        transports.lock().await.remove(&transport_id);
+                        *closed.write().await = true;
                         remote_endpoint.close().await;
                         client_endpoint.close().await;
                         break;
@@ -194,11 +179,8 @@ impl Transport {
                 remote.write_to_remote(data).await
             }
             loop {
-                {
-                    let closed = closed.read().await;
-                    if *closed {
-                        break;
-                    }
+                if *closed.read().await {
+                    break;
                 }
                 client_endpoint_recv_buffer_notify.notified().await;
                 match client_endpoint
@@ -206,22 +188,12 @@ impl Transport {
                     .await
                 {
                     Ok(()) => {
-                        let closed = closed.read().await;
-                        if *closed {
-                            break;
-                        }
+                        debug!(">>>> Transport {transport_id} consume client endpoint receive buffer success.")
                     }
                     Err(e) => {
                         error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer because of error: {e:?}");
-
-                        {
-                            let mut transports = transports.lock().await;
-                            transports.remove(&transport_id);
-                        }
-                        {
-                            let mut closed = closed.write().await;
-                            *closed = true;
-                        }
+                        transports.lock().await.remove(&transport_id);
+                        *closed.write().await = true;
                         remote_endpoint.close().await;
                         client_endpoint.close().await;
                         break;
@@ -256,11 +228,8 @@ impl Transport {
                 client.send_to_smoltcp(data).await
             }
             loop {
-                {
-                    let closed = closed.read().await;
-                    if *closed {
-                        break;
-                    }
+                if *closed.read().await {
+                    break;
                 }
                 remote_endpoint_recv_buffer_notify.notified().await;
                 match remote_endpoint
@@ -268,23 +237,14 @@ impl Transport {
                     .await
                 {
                     Ok(()) => {
-                        let closed = closed.read().await;
-                        if *closed {
-                            break;
-                        }
+                        debug!(">>>> Transport {transport_id} consume remote endpoint receive buffer success.")
                     }
                     Err(e) => {
                         error!(">>>> Transport {transport_id} fail to consume remote endpoint receive buffer because of error: {e:?}");
+                        transports.lock().await.remove(&transport_id);
+                        *closed.write().await = true;
                         remote_endpoint.close().await;
                         client_endpoint.close().await;
-                        {
-                            let mut transports = transports.lock().await;
-                            transports.remove(&transport_id);
-                        }
-                        {
-                            let mut closed = closed.write().await;
-                            *closed = true;
-                        }
                     }
                 };
             }
