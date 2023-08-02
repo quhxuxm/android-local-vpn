@@ -10,12 +10,12 @@ use anyhow::Result;
 use anyhow::{anyhow, Error as AnyhowError};
 use log::{debug, error, info};
 
-use tokio::task::yield_now;
 use tokio::{
     runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
     sync::{mpsc::Sender, Mutex},
     task::JoinHandle,
 };
+use tokio::{sync::RwLock, task::yield_now};
 
 use crate::config::PpaassVpnServerConfig;
 use crate::{
@@ -27,7 +27,7 @@ use crate::{
 pub(crate) struct PpaassVpnServer {
     config: &'static PpaassVpnServerConfig,
     file_descriptor: i32,
-    closed: Arc<Mutex<bool>>,
+    closed: Arc<RwLock<bool>>,
     runtime: Option<TokioRuntime>,
     processor_handle: Option<JoinHandle<Result<()>>>,
     transports: Arc<Mutex<HashMap<TransportId, Sender<Vec<u8>>>>>,
@@ -38,7 +38,7 @@ impl PpaassVpnServer {
         Self {
             config,
             file_descriptor,
-            closed: Arc::new(Mutex::new(false)),
+            closed: Arc::new(RwLock::new(false)),
             runtime: None,
             processor_handle: None,
             transports: Default::default(),
@@ -85,7 +85,7 @@ impl PpaassVpnServer {
 
     async fn start_handle_client_data(
         client_file_read: Arc<Mutex<File>>,
-        closed: Arc<Mutex<bool>>,
+        closed: Arc<RwLock<bool>>,
         transports: Arc<Mutex<HashMap<TransportId, Sender<Vec<u8>>>>>,
         client_file_write: Arc<Mutex<File>>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
@@ -94,7 +94,7 @@ impl PpaassVpnServer {
         let mut client_file_read_buffer = [0u8; 65536];
         loop {
             {
-                let closed = closed.lock().await;
+                let closed = closed.read().await;
                 if *closed {
                     break;
                 }
@@ -181,7 +181,7 @@ impl PpaassVpnServer {
         if let Some(runtime) = self.runtime.take() {
             let closed = Arc::clone(&self.closed);
             runtime.spawn(async move {
-                let mut closed = closed.lock().await;
+                let mut closed = closed.write().await;
                 *closed = true;
             });
         }

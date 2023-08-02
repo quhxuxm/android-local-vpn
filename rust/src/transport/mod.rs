@@ -8,7 +8,7 @@ use anyhow::Result;
 use log::{debug, error, info};
 use tokio::sync::{
     mpsc::{channel as mpsc_channel, Receiver as MpscReceiver, Sender as MpscSender},
-    Mutex, Notify,
+    Mutex, Notify, RwLock,
 };
 
 use crate::{
@@ -26,7 +26,7 @@ pub(crate) struct Transport {
     transport_id: TransportId,
     client_file_write: Arc<Mutex<File>>,
     client_data_receiver: MpscReceiver<Vec<u8>>,
-    closed: Arc<Mutex<bool>>,
+    closed: Arc<RwLock<bool>>,
 }
 
 impl Transport {
@@ -37,7 +37,7 @@ impl Transport {
                 transport_id,
                 client_file_write,
                 client_data_receiver,
-                closed: Arc::new(Mutex::new(false)),
+                closed: Arc::new(RwLock::new(false)),
             },
             client_data_sender,
         )
@@ -121,14 +121,14 @@ impl Transport {
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
         transports: Arc<Mutex<HashMap<TransportId, MpscSender<Vec<u8>>>>>,
-        closed: Arc<Mutex<bool>>,
+        closed: Arc<RwLock<bool>>,
     ) where
         'b: 'static,
     {
         tokio::spawn(async move {
             loop {
                 {
-                    let closed = closed.lock().await;
+                    let closed = closed.read().await;
                     if *closed {
                         break;
                     }
@@ -142,7 +142,7 @@ impl Transport {
                             transports.remove(&transport_id);
                         }
                         {
-                            let mut closed = closed.lock().await;
+                            let mut closed = closed.write().await;
                             *closed = true;
                         }
                         remote_endpoint.close().await;
@@ -156,7 +156,7 @@ impl Transport {
                             transports.remove(&transport_id);
                         }
                         {
-                            let mut closed = closed.lock().await;
+                            let mut closed = closed.write().await;
                             *closed = true;
                         }
                         remote_endpoint.close().await;
@@ -176,7 +176,7 @@ impl Transport {
         client_endpoint: Arc<ClientEndpoint<'b>>,
         client_endpoint_recv_buffer_notify: Arc<Notify>,
         transports: Arc<Mutex<HashMap<TransportId, MpscSender<Vec<u8>>>>>,
-        closed: Arc<Mutex<bool>>,
+        closed: Arc<RwLock<bool>>,
     ) where
         'b: 'static,
     {
@@ -195,7 +195,7 @@ impl Transport {
             }
             loop {
                 {
-                    let closed = closed.lock().await;
+                    let closed = closed.read().await;
                     if *closed {
                         break;
                     }
@@ -206,7 +206,7 @@ impl Transport {
                     .await
                 {
                     Ok(()) => {
-                        let closed = closed.lock().await;
+                        let closed = closed.read().await;
                         if *closed {
                             break;
                         }
@@ -219,7 +219,7 @@ impl Transport {
                             transports.remove(&transport_id);
                         }
                         {
-                            let mut closed = closed.lock().await;
+                            let mut closed = closed.write().await;
                             *closed = true;
                         }
                         remote_endpoint.close().await;
@@ -238,7 +238,7 @@ impl Transport {
         remote_endpoint: Arc<RemoteEndpoint>,
         remote_endpoint_recv_buffer_notify: Arc<Notify>,
         transports: Arc<Mutex<HashMap<TransportId, MpscSender<Vec<u8>>>>>,
-        closed: Arc<Mutex<bool>>,
+        closed: Arc<RwLock<bool>>,
     ) where
         'b: 'static,
     {
@@ -257,7 +257,7 @@ impl Transport {
             }
             loop {
                 {
-                    let closed = closed.lock().await;
+                    let closed = closed.read().await;
                     if *closed {
                         break;
                     }
@@ -268,7 +268,7 @@ impl Transport {
                     .await
                 {
                     Ok(()) => {
-                        let closed = closed.lock().await;
+                        let closed = closed.read().await;
                         if *closed {
                             break;
                         }
@@ -282,7 +282,7 @@ impl Transport {
                             transports.remove(&transport_id);
                         }
                         {
-                            let mut closed = closed.lock().await;
+                            let mut closed = closed.write().await;
                             *closed = true;
                         }
                     }
