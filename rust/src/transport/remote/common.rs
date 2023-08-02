@@ -89,8 +89,7 @@ pub(crate) async fn read_from_remote_udp(
     recv_buffer_notify: &Notify,
     recv_buffer: &Mutex<VecDeque<Vec<u8>>>,
 ) -> Result<bool, RemoteEndpointError> {
-    let mut proxy_connection_read = proxy_connection_read.lock().await;
-    match proxy_connection_read.next().await {
+    match proxy_connection_read.lock().await.next().await {
         None => {
             recv_buffer_notify.notify_waiters();
             Ok(true)
@@ -129,8 +128,7 @@ pub(crate) async fn read_from_remote_tcp(
     recv_buffer_notify: &Notify,
     recv_buffer: &Arc<Mutex<VecDeque<u8>>>,
 ) -> Result<bool, RemoteEndpointError> {
-    let mut proxy_connection_read = proxy_connection_read.lock().await;
-    match proxy_connection_read.next().await {
+    match proxy_connection_read.lock().await.next().await {
         None => {
             recv_buffer_notify.notify_waiters();
             Ok(true)
