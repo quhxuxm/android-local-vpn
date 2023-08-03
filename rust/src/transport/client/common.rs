@@ -91,7 +91,7 @@ pub(crate) fn new_tcp(
     config: &'static PpaassVpnServerConfig,
 ) -> Result<(ClientEndpoint<'_>, Arc<Notify>), ClientEndpointError> {
     let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
-    let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1024));
+    let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1));
     let smoltcp_tcp_socket = create_smoltcp_tcp_socket(transport_id, config)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_tcp_socket);
     let recv_buffer_notify = Arc::new(Notify::new());
@@ -123,7 +123,7 @@ pub(crate) fn new_udp(
     config: &'static PpaassVpnServerConfig,
 ) -> Result<(ClientEndpoint<'_>, Arc<Notify>), ClientEndpointError> {
     let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
-    let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1024));
+    let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1));
     let smoltcp_udp_socket = create_smoltcp_udp_socket(transport_id)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_udp_socket);
     let recv_buffer_notify = Arc::new(Notify::new());
