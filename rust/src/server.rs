@@ -1,7 +1,7 @@
 use std::{fs::File, sync::Arc};
 
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::hash_map::Entry,
     io::{ErrorKind, Read},
     os::fd::FromRawFd,
 };
@@ -12,12 +12,12 @@ use log::{debug, error, info};
 
 use tokio::{
     runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
-    sync::{mpsc::Sender, Mutex},
+    sync::Mutex,
     task::JoinHandle,
 };
 use tokio::{sync::RwLock, task::yield_now};
 
-use crate::config::PpaassVpnServerConfig;
+use crate::{config::PpaassVpnServerConfig, transport::Transports};
 use crate::{
     transport::{Transport, TransportId},
     util::AgentRsaCryptoFetcher,
@@ -30,7 +30,7 @@ pub(crate) struct PpaassVpnServer {
     closed: Arc<RwLock<bool>>,
     runtime: Option<TokioRuntime>,
     processor_handle: Option<JoinHandle<Result<()>>>,
-    transports: Arc<Mutex<HashMap<TransportId, Sender<Vec<u8>>>>>,
+    transports: Transports,
 }
 
 impl PpaassVpnServer {
@@ -86,7 +86,7 @@ impl PpaassVpnServer {
     async fn start_handle_client_data(
         client_file_read: Arc<Mutex<File>>,
         closed: Arc<RwLock<bool>>,
-        transports: Arc<Mutex<HashMap<TransportId, Sender<Vec<u8>>>>>,
+        transports: Transports,
         client_file_write: Arc<Mutex<File>>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,

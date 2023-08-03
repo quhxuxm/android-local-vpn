@@ -2,7 +2,7 @@ mod client;
 mod remote;
 mod value;
 
-use std::{collections::HashMap, fs::File, sync::Arc};
+use std::{fs::File, sync::Arc};
 
 use anyhow::Result;
 use log::{debug, error, info};
@@ -11,15 +11,16 @@ use tokio::sync::{
     Mutex, Notify, RwLock,
 };
 
+use self::client::ClientEndpoint;
 use crate::{
     config::PpaassVpnServerConfig,
     error::{AgentError, ClientEndpointError, RemoteEndpointError},
 };
 use crate::{transport::remote::RemoteEndpoint, util::AgentRsaCryptoFetcher};
 
-use self::client::ClientEndpoint;
 pub(crate) use self::value::ControlProtocol;
 pub(crate) use self::value::TransportId;
+pub(crate) use self::value::Transports;
 
 #[derive(Debug)]
 pub(crate) struct Transport {
@@ -47,7 +48,7 @@ impl Transport {
         mut self,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
-        transports: Arc<Mutex<HashMap<TransportId, MpscSender<Vec<u8>>>>>,
+        transports: Transports,
     ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
         let (client_endpoint, client_endpoint_recv_buffer_notify) = match ClientEndpoint::new(
@@ -120,7 +121,7 @@ impl Transport {
         transport_id: TransportId,
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
-        transports: Arc<Mutex<HashMap<TransportId, MpscSender<Vec<u8>>>>>,
+        transports: Transports,
         closed: Arc<RwLock<bool>>,
     ) where
         'b: 'static,
@@ -160,7 +161,7 @@ impl Transport {
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
         client_endpoint_recv_buffer_notify: Arc<Notify>,
-        transports: Arc<Mutex<HashMap<TransportId, MpscSender<Vec<u8>>>>>,
+        transports: Transports,
         closed: Arc<RwLock<bool>>,
     ) where
         'b: 'static,
@@ -209,7 +210,7 @@ impl Transport {
         client_endpoint: Arc<ClientEndpoint<'b>>,
         remote_endpoint: Arc<RemoteEndpoint>,
         remote_endpoint_recv_buffer_notify: Arc<Notify>,
-        transports: Arc<Mutex<HashMap<TransportId, MpscSender<Vec<u8>>>>>,
+        transports: Transports,
         closed: Arc<RwLock<bool>>,
     ) where
         'b: 'static,

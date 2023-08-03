@@ -1,10 +1,13 @@
 use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv6Packet, TcpPacket, UdpPacket};
+use tokio::sync::{mpsc::Sender, Mutex};
 
-use std::hash::Hash;
+use std::{collections::HashMap, hash::Hash, sync::Arc};
 
 use anyhow::{anyhow, Result};
 use std::fmt::{self, Display};
 use std::net::SocketAddr;
+
+pub(crate) type Transports = Arc<Mutex<HashMap<TransportId, Sender<Vec<u8>>>>>;
 
 /// The transport protocol, TCP and UDP
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
