@@ -184,22 +184,18 @@ impl Transport {
                     break;
                 }
                 client_endpoint_recv_buffer_notify.notified().await;
-                match client_endpoint
+                if let Err(e) = client_endpoint
                     .consume_recv_buffer(Arc::clone(&remote_endpoint), consume_fn)
                     .await
                 {
-                    Ok(()) => {
-                        debug!(">>>> Transport {transport_id} consume client endpoint receive buffer success.")
-                    }
-                    Err(e) => {
-                        error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer because of error: {e:?}");
-                        transports.lock().await.remove(&transport_id);
-                        *closed.write().await = true;
-                        remote_endpoint.close().await;
-                        client_endpoint.close().await;
-                        break;
-                    }
+                    error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer because of error: {e:?}");
+                    transports.lock().await.remove(&transport_id);
+                    *closed.write().await = true;
+                    remote_endpoint.close().await;
+                    client_endpoint.close().await;
+                    break;
                 };
+                debug!(">>>> Transport {transport_id} consume client endpoint receive buffer success.")
             }
         });
     }
@@ -233,21 +229,17 @@ impl Transport {
                     break;
                 }
                 remote_endpoint_recv_buffer_notify.notified().await;
-                match remote_endpoint
+                if let Err(e) = remote_endpoint
                     .consume_recv_buffer(Arc::clone(&client_endpoint), consume_fn)
                     .await
                 {
-                    Ok(()) => {
-                        debug!(">>>> Transport {transport_id} consume remote endpoint receive buffer success.")
-                    }
-                    Err(e) => {
-                        error!(">>>> Transport {transport_id} fail to consume remote endpoint receive buffer because of error: {e:?}");
-                        transports.lock().await.remove(&transport_id);
-                        *closed.write().await = true;
-                        remote_endpoint.close().await;
-                        client_endpoint.close().await;
-                    }
+                    error!(">>>> Transport {transport_id} fail to consume remote endpoint receive buffer because of error: {e:?}");
+                    transports.lock().await.remove(&transport_id);
+                    *closed.write().await = true;
+                    remote_endpoint.close().await;
+                    client_endpoint.close().await;
                 };
+                debug!(">>>> Transport {transport_id} consume remote endpoint receive buffer success.")
             }
         });
     }

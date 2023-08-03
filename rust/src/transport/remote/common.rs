@@ -151,6 +151,7 @@ pub(crate) async fn read_from_remote_tcp(
         }
         Some(Err(e)) => {
             error!("<<<< Transport {transport_id} fail to read remote tcp data because of error: {e:?}");
+            recv_buffer_notify.notify_waiters();
             Err(e.into())
         }
     }
