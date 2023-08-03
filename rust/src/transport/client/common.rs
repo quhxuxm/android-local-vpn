@@ -156,19 +156,17 @@ async fn poll_and_transfer_smoltcp_data_to_client(
     smoltcp_device: &mut SmoltcpDevice,
     client_file_write: Arc<Mutex<File>>,
 ) -> bool {
-    if smoltcp_iface.poll(Instant::now(), smoltcp_device, smoltcp_socket_set) {
-        while let Some(output) = smoltcp_device.pop_tx() {
-            let mut client_file_write = client_file_write.lock().await;
-            if let Err(e) = client_file_write.write_all(&output) {
-                error!(
-                    "<<<< Transport {transport_id} fail to transfer smoltcp data for output because of error: {e:?}"
-                );
-                break;
-            };
-        }
-        return true;
+    if !smoltcp_iface.poll(Instant::now(), smoltcp_device, smoltcp_socket_set) {
+        return false;
     }
-    false
+    while let Some(output) = smoltcp_device.pop_tx() {
+        let mut client_file_write = client_file_write.lock().await;
+        if let Err(e) = client_file_write.write_all(&output) {
+            error!("<<<< Transport {transport_id} fail to transfer smoltcp data for output because of error: {e:?}");
+            break;
+        };
+    }
+    true
 }
 
 pub(crate) async fn close_client_tcp(
