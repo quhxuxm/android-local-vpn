@@ -149,6 +149,28 @@ pub(crate) fn new_udp(
     ))
 }
 
+async fn poll_and_transfer_smoltcp_data_to_client(
+    transport_id: TransportId,
+    smoltcp_socket_set: &mut SocketSet<'_>,
+    smoltcp_iface: &mut Interface,
+    smoltcp_device: &mut SmoltcpDevice,
+    client_file_write: Arc<Mutex<File>>,
+) -> bool {
+    if smoltcp_iface.poll(Instant::now(), smoltcp_device, smoltcp_socket_set) {
+        while let Some(output) = smoltcp_device.pop_tx() {
+            let mut client_file_write = client_file_write.lock().await;
+            if let Err(e) = client_file_write.write_all(&output) {
+                error!(
+                    "<<<< Transport {transport_id} fail to transfer smoltcp data for output because of error: {e:?}"
+                );
+                break;
+            };
+        }
+        return true;
+    }
+    false
+}
+
 pub(crate) async fn close_client_tcp(
     ctl: &ClientEndpointCtl<'_>,
     smoltcp_socket_handle: SocketHandle,
@@ -162,19 +184,14 @@ pub(crate) async fn close_client_tcp(
     } = ctl.lock().await;
     let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
     smoltcp_socket.close();
-    if smoltcp_iface.poll(
-        Instant::now(),
-        &mut *smoltcp_device,
+    poll_and_transfer_smoltcp_data_to_client(
+        transport_id,
         &mut smoltcp_socket_set,
-    ) {
-        while let Some(output) = smoltcp_device.pop_tx() {
-            let mut client_file_write = client_file_write.lock().await;
-            if let Err(e) = client_file_write.write_all(&output) {
-                error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for output because of error: {e:?}");
-                break;
-            };
-        }
-    }
+        &mut smoltcp_iface,
+        &mut smoltcp_device,
+        client_file_write,
+    )
+    .await;
 }
 
 pub(crate) async fn close_client_udp(
@@ -188,19 +205,14 @@ pub(crate) async fn close_client_udp(
         mut smoltcp_device,
     } = ctl.lock().await;
 
-    if smoltcp_iface.poll(
-        Instant::now(),
-        &mut *smoltcp_device,
+    poll_and_transfer_smoltcp_data_to_client(
+        transport_id,
         &mut smoltcp_socket_set,
-    ) {
-        while let Some(output) = smoltcp_device.pop_tx() {
-            let mut client_file_write = client_file_write.lock().await;
-            if let Err(e) = client_file_write.write_all(&output) {
-                error!("<<<< Transport {transport_id} fail to transfer smoltcp udp data for output because of error: {e:?}");
-                break;
-            };
-        }
-    }
+        &mut smoltcp_iface,
+        &mut smoltcp_device,
+        client_file_write,
+    )
+    .await;
 }
 
 pub(crate) async fn send_to_client_tcp(
@@ -221,19 +233,14 @@ pub(crate) async fn send_to_client_tcp(
             error!("<<<< Transport {transport_id} fail to transfer remote tcp recv buffer data to smoltcp because of error: {e:?}");
             anyhow!("{e:?}")
         })?;
-        if smoltcp_iface.poll(
-            Instant::now(),
-            &mut *smoltcp_device,
+        poll_and_transfer_smoltcp_data_to_client(
+            transport_id,
             &mut smoltcp_socket_set,
-        ) {
-            while let Some(output) = smoltcp_device.pop_tx() {
-                let mut client_file_write = client_file_write.lock().await;
-                if let Err(e) = client_file_write.write_all(&output) {
-                    error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for outupt because of error: {e:?}");
-                    break;
-                };
-            }
-        }
+            &mut smoltcp_iface,
+            &mut smoltcp_device,
+            client_file_write,
+        )
+        .await;
         return Ok(send_result);
     }
     Ok(0)
@@ -266,32 +273,17 @@ pub(crate) async fn send_to_client_udp(
                 error!("<<<< Transport {transport_id} fail to transfer remote udp recv buffer data to smoltcp with endpoint [{:?}] because of error: {e:?}", smoltcp_socket.endpoint());
                 anyhow!("{e:?}")
             })?;
-        if smoltcp_iface.poll(
-            Instant::now(),
-            &mut *smoltcp_device,
+        poll_and_transfer_smoltcp_data_to_client(
+            transport_id,
             &mut smoltcp_socket_set,
-        ) {
-            while let Some(output) = smoltcp_device.pop_tx() {
-                let mut client_file_write = client_file_write.lock().await;
-                if let Err(e) = client_file_write.write_all(&output) {
-                    error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for output because of error: {e:?}");
-                    break;
-                };
-            }
-        }
+            &mut smoltcp_iface,
+            &mut smoltcp_device,
+            client_file_write,
+        )
+        .await;
         return Ok(1);
     }
     Ok(0)
-}
-
-async fn recv_to_vpn_device_and_poll(
-    smoltcp_device: &mut SmoltcpDevice,
-    smoltcp_iface: &mut Interface,
-    smoltcp_socket_set: &mut SocketSet<'_>,
-    client_data: Vec<u8>,
-) -> bool {
-    smoltcp_device.push_rx(client_data);
-    smoltcp_iface.poll(Instant::now(), smoltcp_device, smoltcp_socket_set)
 }
 
 pub(crate) async fn recv_from_client_tcp(
@@ -309,22 +301,17 @@ pub(crate) async fn recv_from_client_tcp(
         mut smoltcp_device,
     } = ctl.lock().await;
 
-    if recv_to_vpn_device_and_poll(
-        &mut smoltcp_device,
-        &mut smoltcp_iface,
+    smoltcp_device.push_rx(client_data);
+    if poll_and_transfer_smoltcp_data_to_client(
+        transport_id,
         &mut smoltcp_socket_set,
-        client_data,
+        &mut smoltcp_iface,
+        &mut smoltcp_device,
+        Arc::clone(&client_file_write),
     )
     .await
     {
         let smoltcp_tcp_socket = smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
-        while let Some(output) = smoltcp_device.pop_tx() {
-            let mut client_file_write = client_file_write.lock().await;
-            if let Err(e) = client_file_write.write_all(&output) {
-                error!("<<<< Transport {transport_id} fail to transfer smoltcp tcp data for output because of error: {e:?}");
-                break;
-            };
-        }
         while smoltcp_tcp_socket.may_recv() {
             let mut tcp_data = [0u8; 65536];
             let tcp_data = match smoltcp_tcp_socket.recv_slice(&mut tcp_data) {
@@ -359,22 +346,17 @@ pub(crate) async fn recv_from_client_udp(
         mut smoltcp_iface,
         mut smoltcp_device,
     } = ctl.lock().await;
-    if recv_to_vpn_device_and_poll(
-        &mut smoltcp_device,
-        &mut smoltcp_iface,
+    smoltcp_device.push_rx(client_data);
+    if poll_and_transfer_smoltcp_data_to_client(
+        transport_id,
         &mut smoltcp_socket_set,
-        client_data,
+        &mut smoltcp_iface,
+        &mut smoltcp_device,
+        Arc::clone(&client_file_write),
     )
     .await
     {
         let smoltcp_udp_socket = smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
-        while let Some(output) = smoltcp_device.pop_tx() {
-            let mut client_file_write = client_file_write.lock().await;
-            if let Err(e) = client_file_write.write_all(&output) {
-                error!("<<<< Transport {transport_id} fail to transfer smoltcp udp data for output because of error: {e:?}");
-                break;
-            };
-        }
         while smoltcp_udp_socket.can_recv() {
             let mut udp_data = [0u8; 65535];
             let udp_data = match smoltcp_udp_socket.recv_slice(&mut udp_data) {
