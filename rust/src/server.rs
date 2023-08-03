@@ -93,29 +93,27 @@ impl PpaassVpnServer {
     ) {
         let mut client_file_read_buffer = [0u8; 65536];
         loop {
+            if *closed.read().await {
+                break;
+            }
+            let client_data = match client_file_read
+                .lock()
+                .await
+                .read(&mut client_file_read_buffer)
             {
-                let closed = closed.read().await;
-                if *closed {
+                Ok(0) => {
+                    error!("Nothing to read from client file break the loop.");
                     break;
                 }
-            }
-            let client_data = {
-                let mut client_file_read = client_file_read.lock().await;
-                match client_file_read.read(&mut client_file_read_buffer) {
-                    Ok(0) => {
-                        error!("Nothing to read from client file break the loop.");
-                        break;
-                    }
-                    Ok(size) => &client_file_read_buffer[..size],
-                    Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                        // sleep(Duration::from_millis(50)).await;
-                        yield_now().await;
-                        continue;
-                    }
-                    Err(e) => {
-                        error!("Fail to read client file data because of error: {e:?}");
-                        break;
-                    }
+                Ok(size) => &client_file_read_buffer[..size],
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    // sleep(Duration::from_millis(50)).await;
+                    yield_now().await;
+                    continue;
+                }
+                Err(e) => {
+                    error!("Fail to read client file data because of error: {e:?}");
+                    break;
                 }
             };
 
@@ -139,10 +137,7 @@ impl PpaassVpnServer {
                         .is_err()
                     {
                         error!("Transport {transport_id} closed already, can not send client data to transport");
-
-                        let transport_client_data_sender = entry.remove();
-                        transport_client_data_sender.closed().await;
-
+                        entry.remove();
                         info!("Transport {transport_id} removed from vpn server(error quite), current connection number in vpn server: {}", transports_lock.len());
                     };
                 }
