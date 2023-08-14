@@ -2,13 +2,19 @@ mod client;
 mod remote;
 mod value;
 
-use std::{fs::File, sync::Arc};
+use std::{
+    fs::File,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use anyhow::Result;
 use log::{debug, error, info};
 use tokio::sync::{
     mpsc::{channel as mpsc_channel, Receiver as MpscReceiver, Sender as MpscSender},
-    Mutex, Notify, RwLock,
+    Mutex, Notify,
 };
 
 use self::client::ClientEndpoint;
@@ -27,7 +33,7 @@ pub(crate) struct Transport {
     transport_id: TransportId,
     client_file_write: Arc<Mutex<File>>,
     client_data_receiver: MpscReceiver<Vec<u8>>,
-    closed: Arc<RwLock<bool>>,
+    closed: Arc<AtomicBool>,
 }
 
 impl Transport {
@@ -38,7 +44,7 @@ impl Transport {
                 transport_id,
                 client_file_write,
                 client_data_receiver,
-                closed: Arc::new(RwLock::new(false)),
+                closed: Arc::new(AtomicBool::new(false)),
             },
             client_data_sender,
         )
@@ -122,13 +128,13 @@ impl Transport {
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
         transports: Transports,
-        closed: Arc<RwLock<bool>>,
+        closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
     {
         tokio::spawn(async move {
             loop {
-                if *closed.read().await {
+                if closed.load(Ordering::Relaxed) {
                     break;
                 }
                 match remote_endpoint.read_from_remote().await {
@@ -136,7 +142,7 @@ impl Transport {
                     Ok(true) => {
                         debug!(">>>> Transport {transport_id} mark client & remote endpoint closed.");
                         transports.lock().await.remove(&transport_id);
-                        *closed.write().await = true;
+                        closed.swap(true, Ordering::Relaxed);
                         remote_endpoint.close().await;
                         client_endpoint.close().await;
                         break;
@@ -144,7 +150,7 @@ impl Transport {
                     Err(e) => {
                         debug!(">>>> Transport {transport_id} error happen on remote connection close client & remote endpoint, error: {e:?}");
                         transports.lock().await.remove(&transport_id);
-                        *closed.write().await = true;
+                        closed.swap(true, Ordering::Relaxed);
                         remote_endpoint.close().await;
                         client_endpoint.close().await;
                         break;
@@ -162,7 +168,7 @@ impl Transport {
         client_endpoint: Arc<ClientEndpoint<'b>>,
         client_endpoint_recv_buffer_notify: Arc<Notify>,
         transports: Transports,
-        closed: Arc<RwLock<bool>>,
+        closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
     {
@@ -180,7 +186,7 @@ impl Transport {
                 remote.write_to_remote(data).await
             }
             loop {
-                if *closed.read().await {
+                if closed.load(Ordering::Relaxed) {
                     break;
                 }
                 client_endpoint_recv_buffer_notify.notified().await;
@@ -190,7 +196,7 @@ impl Transport {
                 {
                     error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer because of error: {e:?}");
                     transports.lock().await.remove(&transport_id);
-                    *closed.write().await = true;
+                    closed.swap(true, Ordering::Relaxed);
                     remote_endpoint.close().await;
                     client_endpoint.close().await;
                     break;
@@ -207,7 +213,7 @@ impl Transport {
         remote_endpoint: Arc<RemoteEndpoint>,
         remote_endpoint_recv_buffer_notify: Arc<Notify>,
         transports: Transports,
-        closed: Arc<RwLock<bool>>,
+        closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
     {
@@ -225,7 +231,7 @@ impl Transport {
                 client.send_to_smoltcp(data).await
             }
             loop {
-                if *closed.read().await {
+                if closed.load(Ordering::Relaxed) {
                     break;
                 }
                 remote_endpoint_recv_buffer_notify.notified().await;
@@ -235,7 +241,7 @@ impl Transport {
                 {
                     error!(">>>> Transport {transport_id} fail to consume remote endpoint receive buffer because of error: {e:?}");
                     transports.lock().await.remove(&transport_id);
-                    *closed.write().await = true;
+                    closed.swap(true, Ordering::Relaxed);
                     remote_endpoint.close().await;
                     client_endpoint.close().await;
                 };
