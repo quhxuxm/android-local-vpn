@@ -22,7 +22,7 @@ use smoltcp::socket::udp::{
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
 use smoltcp::iface::SocketSet;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, RwLock};
 
 use super::{ClientEndpoint, ClientEndpointCtl, ClientEndpointCtlLockGuard};
 
@@ -106,7 +106,7 @@ pub(crate) fn new_tcp(
             transport_id,
             smoltcp_socket_handle,
             ctl,
-            recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(
+            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(
                 config.get_client_endpoint_tcp_recv_buffer_size(),
             ))),
             recv_buffer_notify: Arc::clone(&recv_buffer_notify),
@@ -138,7 +138,7 @@ pub(crate) fn new_udp(
             transport_id,
             smoltcp_socket_handle,
             ctl,
-            recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(
+            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(
                 config.get_client_endpoint_udp_recv_buffer_size(),
             ))),
             recv_buffer_notify: Arc::clone(&recv_buffer_notify),
@@ -290,7 +290,7 @@ pub(crate) async fn recv_from_client_tcp(
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_file_write: Arc<Mutex<File>>,
-    recv_buffer: &Mutex<VecDeque<u8>>,
+    recv_buffer: &RwLock<VecDeque<u8>>,
     recv_buffer_notify: &Notify,
 ) {
     let ClientEndpointCtlLockGuard {
@@ -322,9 +322,9 @@ pub(crate) async fn recv_from_client_tcp(
                     break;
                 }
             };
-            recv_buffer.lock().await.extend(tcp_data);
+            recv_buffer.write().await.extend(tcp_data);
         }
-        if !recv_buffer.lock().await.is_empty() {
+        if !recv_buffer.read().await.is_empty() {
             recv_buffer_notify.notify_waiters();
         }
     }
@@ -336,7 +336,7 @@ pub(crate) async fn recv_from_client_udp(
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_file_write: Arc<Mutex<File>>,
-    recv_buffer: &Mutex<VecDeque<Vec<u8>>>,
+    recv_buffer: &RwLock<VecDeque<Vec<u8>>>,
     recv_buffer_notify: &Notify,
 ) {
     let ClientEndpointCtlLockGuard {
@@ -367,9 +367,9 @@ pub(crate) async fn recv_from_client_udp(
                     break;
                 }
             };
-            recv_buffer.lock().await.push_back(udp_data.to_vec());
+            recv_buffer.write().await.push_back(udp_data.to_vec());
         }
-        if !recv_buffer.lock().await.is_empty() {
+        if !recv_buffer.read().await.is_empty() {
             recv_buffer_notify.notify_waiters();
         }
     }

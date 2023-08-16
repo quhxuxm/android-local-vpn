@@ -1,5 +1,6 @@
 use std::{fs::File, sync::Arc};
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::hash_map::Entry,
     io::{ErrorKind, Read},
@@ -10,12 +11,12 @@ use anyhow::Result;
 use anyhow::{anyhow, Error as AnyhowError};
 use log::{debug, error, info};
 
+use tokio::task::yield_now;
 use tokio::{
     runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
     sync::Mutex,
     task::JoinHandle,
 };
-use tokio::{sync::RwLock, task::yield_now};
 
 use crate::{config::PpaassVpnServerConfig, transport::Transports};
 use crate::{
@@ -27,7 +28,7 @@ use crate::{
 pub(crate) struct PpaassVpnServer {
     config: &'static PpaassVpnServerConfig,
     file_descriptor: i32,
-    closed: Arc<RwLock<bool>>,
+    closed: Arc<AtomicBool>,
     runtime: Option<TokioRuntime>,
     processor_handle: Option<JoinHandle<Result<()>>>,
     transports: Transports,
@@ -38,7 +39,7 @@ impl PpaassVpnServer {
         Self {
             config,
             file_descriptor,
-            closed: Arc::new(RwLock::new(false)),
+            closed: Arc::new(AtomicBool::new(false)),
             runtime: None,
             processor_handle: None,
             transports: Default::default(),
@@ -85,7 +86,7 @@ impl PpaassVpnServer {
 
     async fn start_handle_client_data(
         client_file_read: Arc<Mutex<File>>,
-        closed: Arc<RwLock<bool>>,
+        closed: Arc<AtomicBool>,
         transports: Transports,
         client_file_write: Arc<Mutex<File>>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
@@ -93,7 +94,7 @@ impl PpaassVpnServer {
     ) {
         let mut client_file_read_buffer = [0u8; 65536];
         loop {
-            if *closed.read().await {
+            if closed.load(Ordering::Relaxed) {
                 break;
             }
             let client_data = match client_file_read
@@ -174,10 +175,8 @@ impl PpaassVpnServer {
     pub(crate) fn stop(&mut self) -> Result<()> {
         debug!("Stop ppaass vpn server");
         if let Some(runtime) = self.runtime.take() {
-            let closed = Arc::clone(&self.closed);
-            runtime.spawn(async move {
-                let mut closed = closed.write().await;
-                *closed = true;
+            runtime.block_on(async {
+                self.closed.swap(true, Ordering::Relaxed);
             });
         }
         let processor_handle = self

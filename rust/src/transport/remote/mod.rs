@@ -7,6 +7,7 @@ use futures_util::stream::{SplitSink, SplitStream};
 
 use ppaass_common::{PpaassConnection, PpaassMessage};
 
+use tokio::sync::RwLock;
 use tokio::{
     net::TcpStream,
     sync::{Mutex, Notify},
@@ -33,7 +34,7 @@ pub(crate) enum RemoteEndpoint {
         transport_id: TransportId,
         proxy_connection_read: Mutex<ProxyConnectionRead>,
         proxy_connection_write: Mutex<ProxyConnectionWrite>,
-        recv_buffer: Arc<Mutex<VecDeque<u8>>>,
+        recv_buffer: Arc<RwLock<VecDeque<u8>>>,
         recv_buffer_notify: Arc<Notify>,
         config: &'static PpaassVpnServerConfig,
     },
@@ -41,7 +42,7 @@ pub(crate) enum RemoteEndpoint {
         transport_id: TransportId,
         proxy_connection_read: Mutex<ProxyConnectionRead>,
         proxy_connection_write: Mutex<ProxyConnectionWrite>,
-        recv_buffer: Arc<Mutex<VecDeque<Vec<u8>>>>,
+        recv_buffer: Arc<RwLock<VecDeque<Vec<u8>>>>,
         recv_buffer_notify: Arc<Notify>,
         config: &'static PpaassVpnServerConfig,
     },
@@ -127,10 +128,13 @@ impl RemoteEndpoint {
                 recv_buffer,
                 ..
             } => {
-                let mut recv_buffer = recv_buffer.lock().await;
-                if recv_buffer.len() == 0 {
-                    return Ok(());
+                {
+                    let recv_buffer = recv_buffer.read().await;
+                    if recv_buffer.len() == 0 {
+                        return Ok(());
+                    }
                 }
+                let mut recv_buffer = recv_buffer.write().await;
                 let consume_size = consume_fn(
                     *transport_id,
                     recv_buffer.make_contiguous().to_vec(),
@@ -145,11 +149,14 @@ impl RemoteEndpoint {
                 recv_buffer,
                 ..
             } => {
-                let mut consume_size = 0;
-                let mut recv_buffer = recv_buffer.lock().await;
-                if recv_buffer.len() == 0 {
-                    return Ok(());
+                {
+                    let recv_buffer = recv_buffer.read().await;
+                    if recv_buffer.len() == 0 {
+                        return Ok(());
+                    }
                 }
+                let mut recv_buffer = recv_buffer.write().await;
+                let mut consume_size = 0;
                 for udp_data in recv_buffer.iter() {
                     consume_fn(*transport_id, udp_data.to_vec(), Arc::clone(&remote)).await?;
                     consume_size += 1;

@@ -12,7 +12,7 @@ use anyhow::Result;
 
 use smoltcp::iface::Interface;
 use smoltcp::iface::{SocketHandle, SocketSet};
-use tokio::sync::{Mutex, MutexGuard, Notify};
+use tokio::sync::{Mutex, MutexGuard, Notify, RwLock};
 
 use crate::config::PpaassVpnServerConfig;
 use crate::{device::SmoltcpDevice, error::RemoteEndpointError};
@@ -79,7 +79,7 @@ pub(crate) enum ClientEndpoint<'buf> {
         transport_id: TransportId,
         ctl: ClientEndpointCtl<'buf>,
         smoltcp_socket_handle: SocketHandle,
-        recv_buffer: Arc<Mutex<VecDeque<u8>>>,
+        recv_buffer: Arc<RwLock<VecDeque<u8>>>,
         recv_buffer_notify: Arc<Notify>,
         client_file_write: Arc<Mutex<File>>,
         _config: &'static PpaassVpnServerConfig,
@@ -88,7 +88,7 @@ pub(crate) enum ClientEndpoint<'buf> {
         transport_id: TransportId,
         smoltcp_socket_handle: SocketHandle,
         ctl: ClientEndpointCtl<'buf>,
-        recv_buffer: Arc<Mutex<VecDeque<Vec<u8>>>>,
+        recv_buffer: Arc<RwLock<VecDeque<Vec<u8>>>>,
         recv_buffer_notify: Arc<Notify>,
         client_file_write: Arc<Mutex<File>>,
         _config: &'static PpaassVpnServerConfig,
@@ -118,10 +118,13 @@ impl<'buf> ClientEndpoint<'buf> {
                 recv_buffer,
                 ..
             } => {
-                let mut recv_buffer = recv_buffer.lock().await;
-                if recv_buffer.len() == 0 {
-                    return Ok(());
+                {
+                    let recv_buffer = recv_buffer.read().await;
+                    if recv_buffer.len() == 0 {
+                        return Ok(());
+                    }
                 }
+                let mut recv_buffer = recv_buffer.write().await;
                 let recv_buffer_data = recv_buffer.make_contiguous().to_vec();
                 let consume_size = consume_fn(*transport_id, recv_buffer_data, remote).await?;
                 recv_buffer.drain(..consume_size);
@@ -132,11 +135,14 @@ impl<'buf> ClientEndpoint<'buf> {
                 recv_buffer,
                 ..
             } => {
-                let mut consume_size = 0;
-                let mut recv_buffer = recv_buffer.lock().await;
-                if recv_buffer.len() == 0 {
-                    return Ok(());
+                {
+                    let recv_buffer = recv_buffer.read().await;
+                    if recv_buffer.len() == 0 {
+                        return Ok(());
+                    }
                 }
+                let mut recv_buffer = recv_buffer.write().await;
+                let mut consume_size = 0;
                 for udp_data in recv_buffer.iter() {
                     consume_fn(*transport_id, udp_data.to_vec(), Arc::clone(&remote)).await?;
                     consume_size += 1;

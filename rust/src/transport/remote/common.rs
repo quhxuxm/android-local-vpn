@@ -20,6 +20,7 @@ use ppaass_common::{
     PpaassConnection, PpaassMessage, PpaassMessageGenerator, PpaassMessagePayloadEncryptionSelector,
     PpaassMessageProxyPayload, PpaassMessageProxyPayloadType,
 };
+use tokio::sync::RwLock;
 use tokio::{
     net::{TcpSocket, TcpStream},
     sync::{Mutex, Notify},
@@ -87,7 +88,7 @@ pub(crate) async fn read_from_remote_udp(
     transport_id: TransportId,
     proxy_connection_read: &Mutex<SplitStream<PpaassConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>>>,
     recv_buffer_notify: &Notify,
-    recv_buffer: &Mutex<VecDeque<Vec<u8>>>,
+    recv_buffer: &RwLock<VecDeque<Vec<u8>>>,
 ) -> Result<bool, RemoteEndpointError> {
     match proxy_connection_read.lock().await.next().await {
         None => {
@@ -102,7 +103,7 @@ pub(crate) async fn read_from_remote_udp(
                 data: udp_relay_data,
                 ..
             } = proxy_message_payload.as_slice().try_into()?;
-            let mut recv_buffer = recv_buffer.lock().await;
+            let mut recv_buffer = recv_buffer.write().await;
             debug!(
                 "<<<< Transport {transport_id}, [UDP PROCESS] read remote udp data to remote receive buffer: {}",
                 pretty_hex::pretty_hex(&udp_relay_data)
@@ -126,7 +127,7 @@ pub(crate) async fn read_from_remote_tcp(
     transport_id: TransportId,
     proxy_connection_read: &Mutex<SplitStream<PpaassConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>>>,
     recv_buffer_notify: &Notify,
-    recv_buffer: &Arc<Mutex<VecDeque<u8>>>,
+    recv_buffer: &RwLock<VecDeque<u8>>,
 ) -> Result<bool, RemoteEndpointError> {
     match proxy_connection_read.lock().await.next().await {
         None => {
@@ -145,7 +146,7 @@ pub(crate) async fn read_from_remote_tcp(
                 "<<<< Transport {transport_id} read remote tcp data to remote endpoint receive buffer: {}",
                 pretty_hex::pretty_hex(&tcp_relay_data)
             );
-            recv_buffer.lock().await.extend(tcp_relay_data);
+            recv_buffer.write().await.extend(tcp_relay_data);
             recv_buffer_notify.notify_waiters();
             Ok(false)
         }
@@ -177,7 +178,7 @@ pub(crate) async fn new_tcp(
             transport_id,
             proxy_connection_read: Mutex::new(proxy_connection_read),
             proxy_connection_write: Mutex::new(proxy_connection_write),
-            recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
+            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(65536))),
             recv_buffer_notify: Arc::clone(&recv_buffer_notify),
             config,
         },
@@ -206,7 +207,7 @@ pub(crate) async fn new_udp(
             transport_id,
             proxy_connection_read: Mutex::new(proxy_connection_read),
             proxy_connection_write: Mutex::new(proxy_connection_write),
-            recv_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(65536))),
+            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(65536))),
             recv_buffer_notify: Arc::clone(&recv_buffer_notify),
             config,
         },

@@ -38,13 +38,6 @@ impl Device for SmoltcpDevice {
     type RxToken<'a> = RxToken where Self: 'a;
     type TxToken<'a> = TxToken<'a> where Self: 'a;
 
-    fn capabilities(&self) -> DeviceCapabilities {
-        let mut default = DeviceCapabilities::default();
-        default.max_transmission_unit = 65535;
-        default.medium = Medium::Ip;
-        default
-    }
-
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         self.rx_queue.pop_front().map(move |buffer| {
             let rx = RxToken {
@@ -64,6 +57,13 @@ impl Device for SmoltcpDevice {
             trans_id: self.trans_id,
             queue: &mut self.tx_queue,
         })
+    }
+
+    fn capabilities(&self) -> DeviceCapabilities {
+        let mut default = DeviceCapabilities::default();
+        default.max_transmission_unit = 65535;
+        default.medium = Medium::Ip;
+        default
     }
 }
 
