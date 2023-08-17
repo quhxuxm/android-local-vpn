@@ -1,4 +1,4 @@
-use std::{fs::File, sync::Arc};
+use std::{fs::File, io::Write, sync::Arc};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
@@ -7,18 +7,17 @@ use std::{
     os::fd::FromRawFd,
 };
 
+use anyhow::Error as AnyhowError;
 use anyhow::Result;
-use anyhow::{anyhow, Error as AnyhowError};
 use log::{debug, error, info};
 
-use tokio::task::yield_now;
 use tokio::{
     runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
-    sync::Mutex,
-    task::JoinHandle,
+    sync::mpsc::Sender,
 };
+use tokio::{sync::mpsc::channel, task::yield_now};
 
-use crate::{config::PpaassVpnServerConfig, transport::Transports};
+use crate::{config::PpaassVpnServerConfig, transport::Transports, util::ClientOutputPacket};
 use crate::{
     transport::{Transport, TransportId},
     util::AgentRsaCryptoFetcher,
@@ -30,7 +29,6 @@ pub(crate) struct PpaassVpnServer {
     file_descriptor: i32,
     closed: Arc<AtomicBool>,
     runtime: Option<TokioRuntime>,
-    processor_handle: Option<JoinHandle<Result<()>>>,
     transports: Transports,
 }
 
@@ -41,7 +39,6 @@ impl PpaassVpnServer {
             file_descriptor,
             closed: Arc::new(AtomicBool::new(false)),
             runtime: None,
-            processor_handle: None,
             transports: Default::default(),
         }
     }
@@ -62,36 +59,45 @@ impl PpaassVpnServer {
         debug!("Ppaass vpn server starting ...");
         let runtime = Self::init_async_runtime(self.config)?;
         let file_descriptor = self.file_descriptor;
-
-        let client_file = Arc::new(Mutex::new(unsafe { File::from_raw_fd(file_descriptor) }));
-        let (client_file_read, client_file_write) = (Arc::clone(&client_file), client_file);
+        let client_file_read = unsafe { File::from_raw_fd(file_descriptor) };
+        let mut client_file_write = unsafe { File::from_raw_fd(file_descriptor) };
+        let (client_output_tx, mut client_output_rx) = channel::<ClientOutputPacket>(1024);
         let transports = Arc::clone(&self.transports);
         let ppaass_server_config = self.config;
         let closed = Arc::clone(&self.closed);
-        let processor_handle = runtime.spawn(async move {
+        runtime.spawn(async move {
             info!("Begin to handle client file data.");
             Self::start_handle_client_data(
                 client_file_read,
                 closed,
                 transports,
-                client_file_write,
+                client_output_tx,
                 agent_rsa_crypto_fetcher,
                 ppaass_server_config,
             )
             .await;
             Ok::<(), AnyhowError>(())
         });
+        runtime.spawn(async move {
+            while let Some(client_outpu_packet) = client_output_rx.recv().await {
+                let transport_id = client_outpu_packet.transport_id;
+                if let Err(e) = client_file_write.write_all(&client_outpu_packet.data) {
+                    error!("<<<< Transport {transport_id} fail to write client output packet because of error: {e:?}");
+                };
+            }
+        });
+
         self.runtime = Some(runtime);
-        self.processor_handle = Some(processor_handle);
+
         info!("Ppaass vpn server started");
         Ok(())
     }
 
     async fn start_handle_client_data(
-        client_file_read: Arc<Mutex<File>>,
+        mut client_file_read: File,
         closed: Arc<AtomicBool>,
         transports: Transports,
-        client_file_write: Arc<Mutex<File>>,
+        client_output_tx: Sender<ClientOutputPacket>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
     ) {
@@ -100,11 +106,7 @@ impl PpaassVpnServer {
             if closed.load(Ordering::Relaxed) {
                 break;
             }
-            let client_data = match client_file_read
-                .lock()
-                .await
-                .read(&mut client_file_read_buffer)
-            {
+            let client_data = match client_file_read.read(&mut client_file_read_buffer) {
                 Ok(0) => {
                     error!("Nothing to read from client file break the loop.");
                     break;
@@ -150,7 +152,7 @@ impl PpaassVpnServer {
                         ">>>> Create new transport {transport_id}, current connection number in vpn server: {connection_number}"
                     );
                     let (transport, transport_client_data_sender) =
-                        Transport::new(transport_id, Arc::clone(&client_file_write));
+                        Transport::new(transport_id, client_output_tx.clone());
                     let transports = Arc::clone(&transports);
                     tokio::spawn(async move {
                         if let Err(e) = transport
@@ -181,12 +183,7 @@ impl PpaassVpnServer {
             runtime.block_on(async {
                 self.closed.swap(true, Ordering::Relaxed);
             });
-        }
-        let processor_handle = self
-            .processor_handle
-            .take()
-            .ok_or(anyhow!("Fail to take processor handler."))?;
-        processor_handle.abort();
+        };
         Ok(())
     }
 }

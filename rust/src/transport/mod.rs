@@ -2,25 +2,20 @@ mod client;
 mod remote;
 mod value;
 
-use std::{
-    fs::File,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 
 use anyhow::Result;
 use log::{debug, error, info};
-use tokio::sync::{
-    mpsc::{channel as mpsc_channel, Receiver as MpscReceiver, Sender as MpscSender},
-    Mutex,
-};
+use tokio::sync::mpsc::{channel as mpsc_channel, Receiver as MpscReceiver, Sender as MpscSender};
 
 use self::client::ClientEndpoint;
 use crate::{
     config::PpaassVpnServerConfig,
     error::{AgentError, ClientEndpointError, RemoteEndpointError},
+    util::ClientOutputPacket,
 };
 use crate::{transport::remote::RemoteEndpoint, util::AgentRsaCryptoFetcher};
 
@@ -31,7 +26,7 @@ pub(crate) use self::value::Transports;
 #[derive(Debug)]
 pub(crate) struct Transport {
     transport_id: TransportId,
-    client_file_write: Arc<Mutex<File>>,
+    client_output_tx: MpscSender<ClientOutputPacket>,
     client_data_receiver: MpscReceiver<Vec<u8>>,
     closed: Arc<AtomicBool>,
 }
@@ -39,13 +34,13 @@ pub(crate) struct Transport {
 impl Transport {
     pub(crate) fn new(
         transport_id: TransportId,
-        client_file_write: Arc<Mutex<File>>,
+        client_output_tx: MpscSender<ClientOutputPacket>,
     ) -> (Self, MpscSender<Vec<u8>>) {
         let (client_data_sender, client_data_receiver) = mpsc_channel::<Vec<u8>>(1024);
         (
             Self {
                 transport_id,
-                client_file_write,
+                client_output_tx,
                 client_data_receiver,
                 closed: Arc::new(AtomicBool::new(false)),
             },
@@ -62,7 +57,7 @@ impl Transport {
         let transport_id = self.transport_id;
         let client_endpoint = match ClientEndpoint::new(
             self.transport_id,
-            Arc::clone(&self.client_file_write),
+            self.client_output_tx,
             config,
         ) {
             Ok(client_endpoint_result) => client_endpoint_result,

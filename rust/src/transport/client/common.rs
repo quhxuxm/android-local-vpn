@@ -1,7 +1,10 @@
 use log::error;
-use std::{collections::VecDeque, fs::File, io::Write, sync::Arc};
+use std::{collections::VecDeque, sync::Arc};
 
-use crate::{config::PpaassVpnServerConfig, device::SmoltcpDevice, error::ClientEndpointError};
+use crate::{
+    config::PpaassVpnServerConfig, device::SmoltcpDevice, error::ClientEndpointError,
+    util::ClientOutputPacket,
+};
 
 use anyhow::anyhow;
 use anyhow::Result;
@@ -23,7 +26,7 @@ use smoltcp::socket::udp::{
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
 use smoltcp::iface::SocketSet;
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{mpsc::Sender, Mutex, Notify, RwLock};
 
 use super::{
     ClientEndpoint, ClientEndpointCtl, ClientEndpointCtlLockGuard, ClientTcpRecvBuf,
@@ -92,7 +95,7 @@ pub(crate) fn create_smoltcp_udp_socket<'a>(trans_id: TransportId) -> Result<Smo
 
 pub(crate) fn new_tcp(
     transport_id: TransportId,
-    client_file_write: Arc<Mutex<File>>,
+    client_output_tx: Sender<ClientOutputPacket>,
     config: &'static PpaassVpnServerConfig,
 ) -> Result<ClientEndpoint<'_>, ClientEndpointError> {
     let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
@@ -115,14 +118,14 @@ pub(crate) fn new_tcp(
             )),
             Notify::new(),
         )),
-        client_file_write,
+        client_output_tx,
         _config: config,
     })
 }
 
 pub(crate) fn new_udp(
     transport_id: TransportId,
-    client_file_write: Arc<Mutex<File>>,
+    client_output_tx: Sender<ClientOutputPacket>,
     config: &'static PpaassVpnServerConfig,
 ) -> Result<ClientEndpoint<'_>, ClientEndpointError> {
     let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
@@ -145,7 +148,7 @@ pub(crate) fn new_udp(
             )),
             Notify::new(),
         )),
-        client_file_write,
+        client_output_tx,
         _config: config,
     })
 }
@@ -155,14 +158,19 @@ async fn poll_and_transfer_smoltcp_data_to_client(
     smoltcp_socket_set: &mut SocketSet<'_>,
     smoltcp_iface: &mut Interface,
     smoltcp_device: &mut SmoltcpDevice,
-    client_file_write: Arc<Mutex<File>>,
+    client_output_tx: &Sender<ClientOutputPacket>,
 ) -> bool {
     if !smoltcp_iface.poll(Instant::now(), smoltcp_device, smoltcp_socket_set) {
         return false;
     }
     while let Some(output) = smoltcp_device.pop_tx() {
-        let mut client_file_write = client_file_write.lock().await;
-        if let Err(e) = client_file_write.write_all(&output) {
+        if let Err(e) = client_output_tx
+            .send(ClientOutputPacket {
+                transport_id,
+                data: output,
+            })
+            .await
+        {
             error!("<<<< Transport {transport_id} fail to transfer smoltcp data for output because of error: {e:?}");
             break;
         };
@@ -174,7 +182,7 @@ pub(crate) async fn close_client_tcp(
     ctl: &ClientEndpointCtl<'_>,
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
-    client_file_write: Arc<Mutex<File>>,
+    client_output_tx: &Sender<ClientOutputPacket>,
 ) {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
@@ -188,7 +196,7 @@ pub(crate) async fn close_client_tcp(
         &mut smoltcp_socket_set,
         &mut smoltcp_iface,
         &mut smoltcp_device,
-        client_file_write,
+        client_output_tx,
     )
     .await;
 }
@@ -196,7 +204,7 @@ pub(crate) async fn close_client_tcp(
 pub(crate) async fn close_client_udp(
     ctl: &ClientEndpointCtl<'_>,
     transport_id: TransportId,
-    client_file_write: Arc<Mutex<File>>,
+    client_output_tx: &Sender<ClientOutputPacket>,
 ) {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
@@ -209,7 +217,7 @@ pub(crate) async fn close_client_udp(
         &mut smoltcp_socket_set,
         &mut smoltcp_iface,
         &mut smoltcp_device,
-        client_file_write,
+        client_output_tx,
     )
     .await;
 }
@@ -219,7 +227,7 @@ pub(crate) async fn send_to_client_tcp(
     smoltcp_socket_handle: SocketHandle,
     data: Vec<u8>,
     transport_id: TransportId,
-    client_file_write: Arc<Mutex<File>>,
+    client_output_tx: &Sender<ClientOutputPacket>,
 ) -> Result<usize, ClientEndpointError> {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
@@ -237,7 +245,7 @@ pub(crate) async fn send_to_client_tcp(
             &mut smoltcp_socket_set,
             &mut smoltcp_iface,
             &mut smoltcp_device,
-            client_file_write,
+            client_output_tx,
         )
         .await;
         return Ok(send_result);
@@ -250,7 +258,7 @@ pub(crate) async fn send_to_client_udp(
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     data: Vec<u8>,
-    client_file_write: Arc<Mutex<File>>,
+    client_output_tx: &Sender<ClientOutputPacket>,
 ) -> Result<usize, ClientEndpointError> {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
@@ -277,7 +285,7 @@ pub(crate) async fn send_to_client_udp(
             &mut smoltcp_socket_set,
             &mut smoltcp_iface,
             &mut smoltcp_device,
-            client_file_write,
+            client_output_tx,
         )
         .await;
         return Ok(1);
@@ -290,7 +298,7 @@ pub(crate) async fn recv_from_client_tcp(
     client_data: Vec<u8>,
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
-    client_file_write: Arc<Mutex<File>>,
+    client_output_tx: &Sender<ClientOutputPacket>,
     recv_buffer: &ClientTcpRecvBuf,
 ) {
     let ClientEndpointCtlLockGuard {
@@ -305,7 +313,7 @@ pub(crate) async fn recv_from_client_tcp(
         &mut smoltcp_socket_set,
         &mut smoltcp_iface,
         &mut smoltcp_device,
-        Arc::clone(&client_file_write),
+        client_output_tx,
     )
     .await
     {
@@ -336,7 +344,7 @@ pub(crate) async fn recv_from_client_udp(
     client_data: Vec<u8>,
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
-    client_file_write: Arc<Mutex<File>>,
+    client_output_tx: &Sender<ClientOutputPacket>,
     recv_buffer: &ClientUdpRecvBuf,
 ) {
     let ClientEndpointCtlLockGuard {
@@ -350,7 +358,7 @@ pub(crate) async fn recv_from_client_udp(
         &mut smoltcp_socket_set,
         &mut smoltcp_iface,
         &mut smoltcp_device,
-        Arc::clone(&client_file_write),
+        client_output_tx,
     )
     .await
     {
