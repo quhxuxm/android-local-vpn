@@ -37,7 +37,10 @@ pub(crate) struct Transport {
 }
 
 impl Transport {
-    pub(crate) fn new(transport_id: TransportId, client_file_write: Arc<Mutex<File>>) -> (Self, MpscSender<Vec<u8>>) {
+    pub(crate) fn new(
+        transport_id: TransportId,
+        client_file_write: Arc<Mutex<File>>,
+    ) -> (Self, MpscSender<Vec<u8>>) {
         let (client_data_sender, client_data_receiver) = mpsc_channel::<Vec<u8>>(1024);
         (
             Self {
@@ -71,7 +74,13 @@ impl Transport {
             }
         };
         debug!(">>>> Transport {transport_id} success create client endpoint.");
-        let remote_endpoint = match RemoteEndpoint::new(transport_id, agent_rsa_crypto_fetcher, config).await {
+        let remote_endpoint = match RemoteEndpoint::new(
+            transport_id,
+            agent_rsa_crypto_fetcher,
+            config,
+        )
+        .await
+        {
             Ok(remote_endpoint_result) => remote_endpoint_result,
             Err(e) => {
                 let mut transports = transports.lock().await;
@@ -132,7 +141,9 @@ impl Transport {
                 match remote_endpoint.read_from_remote().await {
                     Ok(false) => continue,
                     Ok(true) => {
-                        debug!(">>>> Transport {transport_id} mark client & remote endpoint closed.");
+                        debug!(
+                            ">>>> Transport {transport_id} mark client & remote endpoint closed."
+                        );
                         transports.lock().await.remove(&transport_id);
                         closed.swap(true, Ordering::Relaxed);
                         remote_endpoint.close().await;
@@ -193,7 +204,9 @@ impl Transport {
                     client_endpoint.close().await;
                     break;
                 };
-                debug!(">>>> Transport {transport_id} consume client endpoint receive buffer success.")
+                debug!(
+                    ">>>> Transport {transport_id} consume client endpoint receive buffer success."
+                )
             }
         });
     }
@@ -237,7 +250,9 @@ impl Transport {
                     remote_endpoint.close().await;
                     client_endpoint.close().await;
                 };
-                debug!(">>>> Transport {transport_id} consume remote endpoint receive buffer success.")
+                debug!(
+                    ">>>> Transport {transport_id} consume remote endpoint receive buffer success."
+                )
             }
         });
     }

@@ -19,8 +19,8 @@ use crate::{device::SmoltcpDevice, error::RemoteEndpointError};
 use crate::{error::ClientEndpointError, transport::ControlProtocol};
 
 use self::common::{
-    close_client_tcp, close_client_udp, new_tcp, new_udp, recv_from_client_tcp, recv_from_client_udp,
-    send_to_client_tcp, send_to_client_udp,
+    close_client_tcp, close_client_udp, new_tcp, new_udp, recv_from_client_tcp,
+    recv_from_client_udp, send_to_client_tcp, send_to_client_udp,
 };
 
 use super::{remote::RemoteEndpoint, TransportId};
@@ -108,7 +108,11 @@ impl<'buf> ClientEndpoint<'buf> {
         }
     }
 
-    pub(crate) async fn consume_recv_buffer<F, Fut>(&self, remote: Arc<RemoteEndpoint>, mut consume_fn: F) -> Result<()>
+    pub(crate) async fn consume_recv_buffer<F, Fut>(
+        &self,
+        remote: Arc<RemoteEndpoint>,
+        mut consume_fn: F,
+    ) -> Result<()>
     where
         F: FnMut(TransportId, Vec<u8>, Arc<RemoteEndpoint>) -> Fut,
         Fut: Future<Output = Result<usize, RemoteEndpointError>>,
@@ -148,7 +152,10 @@ impl<'buf> ClientEndpoint<'buf> {
         }
     }
 
-    pub(crate) async fn send_to_smoltcp(&self, data: Vec<u8>) -> Result<usize, ClientEndpointError> {
+    pub(crate) async fn send_to_smoltcp(
+        &self,
+        data: Vec<u8>,
+    ) -> Result<usize, ClientEndpointError> {
         match self {
             Self::Tcp {
                 transport_id,

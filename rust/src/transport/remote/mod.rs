@@ -13,20 +13,25 @@ use tokio::{
     sync::{Mutex, Notify},
 };
 
-use crate::{config::PpaassVpnServerConfig, error::RemoteEndpointError, util::AgentRsaCryptoFetcher};
+use crate::{
+    config::PpaassVpnServerConfig, error::RemoteEndpointError, util::AgentRsaCryptoFetcher,
+};
 use crate::{error::ClientEndpointError, transport::ControlProtocol};
 
 use self::common::{
-    close_remote_tcp, close_remote_udp, new_tcp, new_udp, read_from_remote_tcp, read_from_remote_udp,
-    write_to_remote_tcp, write_to_remote_udp,
+    close_remote_tcp, close_remote_udp, new_tcp, new_udp, read_from_remote_tcp,
+    read_from_remote_udp, write_to_remote_tcp, write_to_remote_udp,
 };
 
 use super::{client::ClientEndpoint, TransportId};
 
-type ProxyConnectionWrite =
-    SplitSink<PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>, PpaassMessage>;
+type ProxyConnectionWrite = SplitSink<
+    PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>,
+    PpaassMessage,
+>;
 
-type ProxyConnectionRead = SplitStream<PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>>;
+type ProxyConnectionRead =
+    SplitStream<PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>>;
 
 pub(crate) type RemoteTcpRecvBuf = (RwLock<VecDeque<u8>>, Notify);
 pub(crate) type RemoteUdpRecvBuf = (RwLock<VecDeque<Vec<u8>>>, Notify);
@@ -79,7 +84,10 @@ impl RemoteEndpoint {
         }
     }
 
-    pub(crate) async fn write_to_remote(&self, data: Vec<u8>) -> Result<usize, RemoteEndpointError> {
+    pub(crate) async fn write_to_remote(
+        &self,
+        data: Vec<u8>,
+    ) -> Result<usize, RemoteEndpointError> {
         match self {
             Self::Tcp {
                 transport_id,

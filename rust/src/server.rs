@@ -55,7 +55,10 @@ impl PpaassVpnServer {
         Ok(runtime)
     }
 
-    pub(crate) fn start(&mut self, agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher) -> Result<()> {
+    pub(crate) fn start(
+        &mut self,
+        agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
+    ) -> Result<()> {
         debug!("Ppaass vpn server starting ...");
         let runtime = Self::init_async_runtime(self.config)?;
         let file_descriptor = self.file_descriptor;

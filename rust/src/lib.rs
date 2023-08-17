@@ -34,7 +34,10 @@ pub(crate) static mut VPN_SERVER_CONFIG: OnceCell<PpaassVpnServerConfig> = OnceC
 /// This function should not be called before the horsemen are ready.
 ///
 #[no_mangle]
-pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStopVpn(_jni_env: JNIEnv, _class: JClass) {
+pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStopVpn(
+    _jni_env: JNIEnv,
+    _class: JClass,
+) {
     info!("Begin to stop VPN ...");
     info!("Stopping vpn server ...");
     let ppaass_vpn_server = VPN_SERVER.get_mut().expect("Fail to get vpn server object");
@@ -80,7 +83,8 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
         .convert_byte_array(proxy_public_key)
         .expect("Fail to read proxy public key bytes from java object");
 
-    let agent_crypto_fetcher = match AgentRsaCryptoFetcher::new(agent_private_key, proxy_public_key) {
+    let agent_crypto_fetcher = match AgentRsaCryptoFetcher::new(agent_private_key, proxy_public_key)
+    {
         Ok(agent_crypto_fetcher) => agent_crypto_fetcher,
         Err(e) => {
             error!("Fail to generate agent rsa crypto fetcher because of error: {e:?}");

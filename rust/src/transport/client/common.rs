@@ -17,16 +17,22 @@ use smoltcp::{
 use crate::transport::TransportId;
 use smoltcp::socket::tcp::{Socket as SmoltcpTcpSocket, SocketBuffer as SmoltcpTcpSocketBuffer};
 use smoltcp::socket::udp::{
-    PacketBuffer as SmoltcpUdpSocketBuffer, PacketMetadata as SmoltcpUdpPacketMetadata, Socket as SmoltcpUdpSocket,
+    PacketBuffer as SmoltcpUdpSocketBuffer, PacketMetadata as SmoltcpUdpPacketMetadata,
+    Socket as SmoltcpUdpSocket,
 };
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
 use smoltcp::iface::SocketSet;
 use tokio::sync::{Mutex, Notify, RwLock};
 
-use super::{ClientEndpoint, ClientEndpointCtl, ClientEndpointCtlLockGuard, ClientTcpRecvBuf, ClientUdpRecvBuf};
+use super::{
+    ClientEndpoint, ClientEndpointCtl, ClientEndpointCtlLockGuard, ClientTcpRecvBuf,
+    ClientUdpRecvBuf,
+};
 
-pub(crate) fn prepare_smoltcp_iface_and_device(transport_id: TransportId) -> Result<(Interface, SmoltcpDevice)> {
+pub(crate) fn prepare_smoltcp_iface_and_device(
+    transport_id: TransportId,
+) -> Result<(Interface, SmoltcpDevice)> {
     let mut routes = Routes::new();
     let default_gateway_ipv4 = Ipv4Address::new(0, 0, 0, 1);
     routes.add_default_ipv4_route(default_gateway_ipv4).unwrap();
@@ -304,7 +310,8 @@ pub(crate) async fn recv_from_client_tcp(
     )
     .await
     {
-        let smoltcp_tcp_socket = smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
+        let smoltcp_tcp_socket =
+            smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
         while smoltcp_tcp_socket.may_recv() {
             let mut tcp_data = [0u8; 65536];
             let tcp_data = match smoltcp_tcp_socket.recv_slice(&mut tcp_data) {
@@ -348,7 +355,8 @@ pub(crate) async fn recv_from_client_udp(
     )
     .await
     {
-        let smoltcp_udp_socket = smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
+        let smoltcp_udp_socket =
+            smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
         while smoltcp_udp_socket.can_recv() {
             let mut udp_data = [0u8; 65535];
             let udp_data = match smoltcp_udp_socket.recv_slice(&mut udp_data) {
