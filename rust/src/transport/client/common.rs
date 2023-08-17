@@ -7,7 +7,7 @@ use anyhow::anyhow;
 use anyhow::Result;
 
 use smoltcp::{
-    iface::{Config, Interface, Routes, SocketHandle},
+    iface::{Config, Interface, SocketHandle},
     phy::PacketMeta,
     socket::udp::UdpMetadata,
     time::Instant,
@@ -30,12 +30,11 @@ use super::{
     ClientUdpRecvBuf,
 };
 
+static DEFAULT_GATEWAY_IPV4_ADDR: Ipv4Address = Ipv4Address::new(0, 0, 0, 1);
+
 pub(crate) fn prepare_smoltcp_iface_and_device(
     transport_id: TransportId,
 ) -> Result<(Interface, SmoltcpDevice)> {
-    let mut routes = Routes::new();
-    let default_gateway_ipv4 = Ipv4Address::new(0, 0, 0, 1);
-    routes.add_default_ipv4_route(default_gateway_ipv4).unwrap();
     let mut interface_config = Config::new(HardwareAddress::Ip);
     interface_config.random_seed = rand::random::<u64>();
     let mut vpn_device = SmoltcpDevice::new(transport_id);
@@ -48,7 +47,7 @@ pub(crate) fn prepare_smoltcp_iface_and_device(
     });
     interface
         .routes_mut()
-        .add_default_ipv4_route(Ipv4Address::new(0, 0, 0, 1))
+        .add_default_ipv4_route(DEFAULT_GATEWAY_IPV4_ADDR)
         .map_err(|e| {
             error!(">>>> Transportation {transport_id} fail to add default ipv4 route because of error: {e:?}");
             anyhow!("{e:?}")
