@@ -26,6 +26,9 @@ use self::common::{
 use super::{remote::RemoteEndpoint, TransportId};
 use std::fmt::Result as FormatResult;
 
+pub(crate) type ClientTcpRecvBuf = (RwLock<VecDeque<u8>>, Notify);
+pub(crate) type ClientUdpRecvBuf = (RwLock<VecDeque<Vec<u8>>>, Notify);
+
 pub(crate) struct ClientEndpointCtlLockGuard<'lock, 'buf> {
     pub(crate) smoltcp_socket_set: MutexGuard<'lock, SocketSet<'buf>>,
     pub(crate) smoltcp_iface: MutexGuard<'lock, Interface>,
@@ -79,8 +82,7 @@ pub(crate) enum ClientEndpoint<'buf> {
         transport_id: TransportId,
         ctl: ClientEndpointCtl<'buf>,
         smoltcp_socket_handle: SocketHandle,
-        recv_buffer: Arc<RwLock<VecDeque<u8>>>,
-        recv_buffer_notify: Arc<Notify>,
+        recv_buffer: Arc<ClientTcpRecvBuf>,
         client_file_write: Arc<Mutex<File>>,
         _config: &'static PpaassVpnServerConfig,
     },
@@ -88,8 +90,7 @@ pub(crate) enum ClientEndpoint<'buf> {
         transport_id: TransportId,
         smoltcp_socket_handle: SocketHandle,
         ctl: ClientEndpointCtl<'buf>,
-        recv_buffer: Arc<RwLock<VecDeque<Vec<u8>>>>,
-        recv_buffer_notify: Arc<Notify>,
+        recv_buffer: Arc<ClientUdpRecvBuf>,
         client_file_write: Arc<Mutex<File>>,
         _config: &'static PpaassVpnServerConfig,
     },
@@ -100,7 +101,7 @@ impl<'buf> ClientEndpoint<'buf> {
         transport_id: TransportId,
         client_file_write: Arc<Mutex<File>>,
         config: &'static PpaassVpnServerConfig,
-    ) -> Result<(ClientEndpoint<'_>, Arc<Notify>), ClientEndpointError> {
+    ) -> Result<ClientEndpoint<'_>, ClientEndpointError> {
         match transport_id.control_protocol {
             ControlProtocol::Tcp => new_tcp(transport_id, client_file_write, config),
             ControlProtocol::Udp => new_udp(transport_id, client_file_write, config),
@@ -118,13 +119,10 @@ impl<'buf> ClientEndpoint<'buf> {
                 recv_buffer,
                 ..
             } => {
-                {
-                    let recv_buffer = recv_buffer.read().await;
-                    if recv_buffer.len() == 0 {
-                        return Ok(());
-                    }
+                if recv_buffer.0.read().await.len() == 0 {
+                    return Ok(());
                 }
-                let mut recv_buffer = recv_buffer.write().await;
+                let mut recv_buffer = recv_buffer.0.write().await;
                 let recv_buffer_data = recv_buffer.make_contiguous().to_vec();
                 let consume_size = consume_fn(*transport_id, recv_buffer_data, remote).await?;
                 recv_buffer.drain(..consume_size);
@@ -135,13 +133,10 @@ impl<'buf> ClientEndpoint<'buf> {
                 recv_buffer,
                 ..
             } => {
-                {
-                    let recv_buffer = recv_buffer.read().await;
-                    if recv_buffer.len() == 0 {
-                        return Ok(());
-                    }
+                if recv_buffer.0.read().await.len() == 0 {
+                    return Ok(());
                 }
-                let mut recv_buffer = recv_buffer.write().await;
+                let mut recv_buffer = recv_buffer.0.write().await;
                 let mut consume_size = 0;
                 for udp_data in recv_buffer.iter() {
                     consume_fn(*transport_id, udp_data.to_vec(), Arc::clone(&remote)).await?;
@@ -198,7 +193,6 @@ impl<'buf> ClientEndpoint<'buf> {
                 ctl,
                 client_file_write,
                 recv_buffer,
-                recv_buffer_notify,
                 ..
             } => {
                 recv_from_client_tcp(
@@ -208,7 +202,6 @@ impl<'buf> ClientEndpoint<'buf> {
                     *transport_id,
                     Arc::clone(client_file_write),
                     recv_buffer,
-                    recv_buffer_notify,
                 )
                 .await;
             }
@@ -218,7 +211,6 @@ impl<'buf> ClientEndpoint<'buf> {
                 ctl,
                 client_file_write,
                 recv_buffer,
-                recv_buffer_notify,
                 ..
             } => {
                 recv_from_client_udp(
@@ -228,7 +220,6 @@ impl<'buf> ClientEndpoint<'buf> {
                     *transport_id,
                     Arc::clone(client_file_write),
                     recv_buffer,
-                    recv_buffer_notify,
                 )
                 .await;
             }
@@ -242,10 +233,10 @@ impl<'buf> ClientEndpoint<'buf> {
                 smoltcp_socket_handle,
                 ctl,
                 client_file_write,
-                recv_buffer_notify,
+                recv_buffer,
                 ..
             } => {
-                recv_buffer_notify.notify_waiters();
+                recv_buffer.1.notify_waiters();
                 close_client_tcp(
                     ctl,
                     *smoltcp_socket_handle,
@@ -258,12 +249,19 @@ impl<'buf> ClientEndpoint<'buf> {
                 transport_id,
                 ctl,
                 client_file_write,
-                recv_buffer_notify,
+                recv_buffer,
                 ..
             } => {
-                recv_buffer_notify.notify_waiters();
+                recv_buffer.1.notify_waiters();
                 close_client_udp(ctl, *transport_id, Arc::clone(client_file_write)).await;
             }
+        }
+    }
+
+    pub(crate) async fn awaiting_recv_buf(&self) {
+        match self {
+            ClientEndpoint::Tcp { recv_buffer, .. } => recv_buffer.1.notified().await,
+            ClientEndpoint::Udp { recv_buffer, .. } => recv_buffer.1.notified().await,
         }
     }
 }

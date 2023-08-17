@@ -26,7 +26,7 @@ use tokio::{
     sync::{Mutex, Notify},
 };
 
-use super::RemoteEndpoint;
+use super::{RemoteEndpoint, RemoteTcpRecvBuf, RemoteUdpRecvBuf};
 
 pub(crate) async fn write_to_remote_udp(
     config: &PpaassVpnServerConfig,
@@ -87,12 +87,11 @@ pub(crate) async fn write_to_remote_tcp(
 pub(crate) async fn read_from_remote_udp(
     transport_id: TransportId,
     proxy_connection_read: &Mutex<SplitStream<PpaassConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>>>,
-    recv_buffer_notify: &Notify,
-    recv_buffer: &RwLock<VecDeque<Vec<u8>>>,
+    recv_buffer: &RemoteUdpRecvBuf,
 ) -> Result<bool, RemoteEndpointError> {
     match proxy_connection_read.lock().await.next().await {
         None => {
-            recv_buffer_notify.notify_waiters();
+            recv_buffer.1.notify_waiters();
             Ok(true)
         }
         Some(Ok(PpaassMessage {
@@ -103,21 +102,24 @@ pub(crate) async fn read_from_remote_udp(
                 data: udp_relay_data,
                 ..
             } = proxy_message_payload.as_slice().try_into()?;
-            let mut recv_buffer = recv_buffer.write().await;
             debug!(
                 "<<<< Transport {transport_id}, [UDP PROCESS] read remote udp data to remote receive buffer: {}",
                 pretty_hex::pretty_hex(&udp_relay_data)
             );
-
             if let Ok(dns_response) = DnsPacket::parse(&udp_relay_data) {
                 debug!("<<<< Transport {transport_id}, [UDP PROCESS] read dns response from remote: {dns_response:?}")
             };
-            recv_buffer.push_back(udp_relay_data.to_vec());
-            recv_buffer_notify.notify_waiters();
+            recv_buffer
+                .0
+                .write()
+                .await
+                .push_back(udp_relay_data.to_vec());
+            recv_buffer.1.notify_waiters();
             Ok(false)
         }
         Some(Err(e)) => {
             error!("<<<< Transport {transport_id} fail to read remote udp data because of error: {e:?}");
+            recv_buffer.1.notify_waiters();
             Err(e.into())
         }
     }
@@ -126,12 +128,11 @@ pub(crate) async fn read_from_remote_udp(
 pub(crate) async fn read_from_remote_tcp(
     transport_id: TransportId,
     proxy_connection_read: &Mutex<SplitStream<PpaassConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>>>,
-    recv_buffer_notify: &Notify,
-    recv_buffer: &RwLock<VecDeque<u8>>,
+    recv_buffer: &RemoteTcpRecvBuf,
 ) -> Result<bool, RemoteEndpointError> {
     match proxy_connection_read.lock().await.next().await {
         None => {
-            recv_buffer_notify.notify_waiters();
+            recv_buffer.1.notify_waiters();
             Ok(true)
         }
         Some(Ok(PpaassMessage {
@@ -146,13 +147,13 @@ pub(crate) async fn read_from_remote_tcp(
                 "<<<< Transport {transport_id} read remote tcp data to remote endpoint receive buffer: {}",
                 pretty_hex::pretty_hex(&tcp_relay_data)
             );
-            recv_buffer.write().await.extend(tcp_relay_data);
-            recv_buffer_notify.notify_waiters();
+            recv_buffer.0.write().await.extend(tcp_relay_data);
+            recv_buffer.1.notify_waiters();
             Ok(false)
         }
         Some(Err(e)) => {
             error!("<<<< Transport {transport_id} fail to read remote tcp data because of error: {e:?}");
-            recv_buffer_notify.notify_waiters();
+            recv_buffer.1.notify_waiters();
             Err(e.into())
         }
     }
@@ -163,7 +164,7 @@ pub(crate) async fn new_tcp(
     transport_id: TransportId,
     agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
     config: &'static PpaassVpnServerConfig,
-) -> Result<(RemoteEndpoint, Arc<Notify>), RemoteEndpointError> {
+) -> Result<RemoteEndpoint, RemoteEndpointError> {
     let tcp_socket = match transport_id.internet_protocol {
         InternetProtocol::Ipv4 => TcpSocket::new_v4()?,
         InternetProtocol::Ipv6 => TcpSocket::new_v6()?,
@@ -172,18 +173,13 @@ pub(crate) async fn new_tcp(
     protect_socket(transport_id, raw_socket_fd)?;
     let proxy_connection = init_proxy_connection(tcp_socket, transport_id, agent_rsa_crypto_fetcher, config).await?;
     let (proxy_connection_write, proxy_connection_read) = proxy_connection.split();
-    let recv_buffer_notify = Arc::new(Notify::new());
-    Ok((
-        RemoteEndpoint::Tcp {
-            transport_id,
-            proxy_connection_read: Mutex::new(proxy_connection_read),
-            proxy_connection_write: Mutex::new(proxy_connection_write),
-            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(65536))),
-            recv_buffer_notify: Arc::clone(&recv_buffer_notify),
-            config,
-        },
-        recv_buffer_notify,
-    ))
+    Ok(RemoteEndpoint::Tcp {
+        transport_id,
+        proxy_connection_read: Mutex::new(proxy_connection_read),
+        proxy_connection_write: Mutex::new(proxy_connection_write),
+        recv_buffer: Arc::new((RwLock::new(VecDeque::with_capacity(65536)), Notify::new())),
+        config,
+    })
 }
 
 /// Create new udp remote endpoint
@@ -191,7 +187,7 @@ pub(crate) async fn new_udp(
     transport_id: TransportId,
     agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
     config: &'static PpaassVpnServerConfig,
-) -> Result<(RemoteEndpoint, Arc<Notify>), RemoteEndpointError> {
+) -> Result<RemoteEndpoint, RemoteEndpointError> {
     let tcp_socket = match transport_id.internet_protocol {
         InternetProtocol::Ipv4 => TcpSocket::new_v4()?,
         InternetProtocol::Ipv6 => TcpSocket::new_v6()?,
@@ -200,19 +196,13 @@ pub(crate) async fn new_udp(
     protect_socket(transport_id, raw_socket_fd)?;
     let proxy_connection = init_proxy_connection(tcp_socket, transport_id, agent_rsa_crypto_fetcher, config).await?;
     let (proxy_connection_write, proxy_connection_read) = proxy_connection.split();
-
-    let recv_buffer_notify = Arc::new(Notify::new());
-    Ok((
-        RemoteEndpoint::Udp {
-            transport_id,
-            proxy_connection_read: Mutex::new(proxy_connection_read),
-            proxy_connection_write: Mutex::new(proxy_connection_write),
-            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(65536))),
-            recv_buffer_notify: Arc::clone(&recv_buffer_notify),
-            config,
-        },
-        recv_buffer_notify,
-    ))
+    Ok(RemoteEndpoint::Udp {
+        transport_id,
+        proxy_connection_read: Mutex::new(proxy_connection_read),
+        proxy_connection_write: Mutex::new(proxy_connection_write),
+        recv_buffer: Arc::new((RwLock::new(VecDeque::with_capacity(65536)), Notify::new())),
+        config,
+    })
 }
 
 /// Initialize proxy connection

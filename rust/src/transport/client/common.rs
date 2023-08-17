@@ -24,7 +24,7 @@ use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 use smoltcp::iface::SocketSet;
 use tokio::sync::{Mutex, Notify, RwLock};
 
-use super::{ClientEndpoint, ClientEndpointCtl, ClientEndpointCtlLockGuard};
+use super::{ClientEndpoint, ClientEndpointCtl, ClientEndpointCtlLockGuard, ClientTcpRecvBuf, ClientUdpRecvBuf};
 
 pub(crate) fn prepare_smoltcp_iface_and_device(transport_id: TransportId) -> Result<(Interface, SmoltcpDevice)> {
     let mut routes = Routes::new();
@@ -89,64 +89,60 @@ pub(crate) fn new_tcp(
     transport_id: TransportId,
     client_file_write: Arc<Mutex<File>>,
     config: &'static PpaassVpnServerConfig,
-) -> Result<(ClientEndpoint<'_>, Arc<Notify>), ClientEndpointError> {
+) -> Result<ClientEndpoint<'_>, ClientEndpointError> {
     let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
     let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1));
     let smoltcp_tcp_socket = create_smoltcp_tcp_socket(transport_id, config)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_tcp_socket);
-    let recv_buffer_notify = Arc::new(Notify::new());
     let ctl = ClientEndpointCtl::new(
         transport_id,
         Arc::new(Mutex::new(smoltcp_socket_set)),
         Arc::new(Mutex::new(smoltcp_iface)),
         Arc::new(Mutex::new(smoltcp_device)),
     );
-    Ok((
-        ClientEndpoint::Tcp {
-            transport_id,
-            smoltcp_socket_handle,
-            ctl,
-            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(
+    Ok(ClientEndpoint::Tcp {
+        transport_id,
+        smoltcp_socket_handle,
+        ctl,
+        recv_buffer: Arc::new((
+            RwLock::new(VecDeque::with_capacity(
                 config.get_client_endpoint_tcp_recv_buffer_size(),
-            ))),
-            recv_buffer_notify: Arc::clone(&recv_buffer_notify),
-            client_file_write,
-            _config: config,
-        },
-        recv_buffer_notify,
-    ))
+            )),
+            Notify::new(),
+        )),
+        client_file_write,
+        _config: config,
+    })
 }
 
 pub(crate) fn new_udp(
     transport_id: TransportId,
     client_file_write: Arc<Mutex<File>>,
     config: &'static PpaassVpnServerConfig,
-) -> Result<(ClientEndpoint<'_>, Arc<Notify>), ClientEndpointError> {
+) -> Result<ClientEndpoint<'_>, ClientEndpointError> {
     let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
     let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1));
     let smoltcp_udp_socket = create_smoltcp_udp_socket(transport_id)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_udp_socket);
-    let recv_buffer_notify = Arc::new(Notify::new());
     let ctl = ClientEndpointCtl::new(
         transport_id,
         Arc::new(Mutex::new(smoltcp_socket_set)),
         Arc::new(Mutex::new(smoltcp_iface)),
         Arc::new(Mutex::new(smoltcp_device)),
     );
-    Ok((
-        ClientEndpoint::Udp {
-            transport_id,
-            smoltcp_socket_handle,
-            ctl,
-            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(
+    Ok(ClientEndpoint::Udp {
+        transport_id,
+        smoltcp_socket_handle,
+        ctl,
+        recv_buffer: Arc::new((
+            RwLock::new(VecDeque::with_capacity(
                 config.get_client_endpoint_udp_recv_buffer_size(),
-            ))),
-            recv_buffer_notify: Arc::clone(&recv_buffer_notify),
-            client_file_write,
-            _config: config,
-        },
-        recv_buffer_notify,
-    ))
+            )),
+            Notify::new(),
+        )),
+        client_file_write,
+        _config: config,
+    })
 }
 
 async fn poll_and_transfer_smoltcp_data_to_client(
@@ -290,8 +286,7 @@ pub(crate) async fn recv_from_client_tcp(
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_file_write: Arc<Mutex<File>>,
-    recv_buffer: &RwLock<VecDeque<u8>>,
-    recv_buffer_notify: &Notify,
+    recv_buffer: &ClientTcpRecvBuf,
 ) {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
@@ -322,10 +317,10 @@ pub(crate) async fn recv_from_client_tcp(
                     break;
                 }
             };
-            recv_buffer.write().await.extend(tcp_data);
+            recv_buffer.0.write().await.extend(tcp_data);
         }
-        if !recv_buffer.read().await.is_empty() {
-            recv_buffer_notify.notify_waiters();
+        if !recv_buffer.0.read().await.is_empty() {
+            recv_buffer.1.notify_waiters();
         }
     }
 }
@@ -336,8 +331,7 @@ pub(crate) async fn recv_from_client_udp(
     smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_file_write: Arc<Mutex<File>>,
-    recv_buffer: &RwLock<VecDeque<Vec<u8>>>,
-    recv_buffer_notify: &Notify,
+    recv_buffer: &ClientUdpRecvBuf,
 ) {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
@@ -367,10 +361,10 @@ pub(crate) async fn recv_from_client_udp(
                     break;
                 }
             };
-            recv_buffer.write().await.push_back(udp_data.to_vec());
+            recv_buffer.0.write().await.push_back(udp_data.to_vec());
         }
-        if !recv_buffer.read().await.is_empty() {
-            recv_buffer_notify.notify_waiters();
+        if !recv_buffer.0.read().await.is_empty() {
+            recv_buffer.1.notify_waiters();
         }
     }
 }

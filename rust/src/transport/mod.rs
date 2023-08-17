@@ -14,7 +14,7 @@ use anyhow::Result;
 use log::{debug, error, info};
 use tokio::sync::{
     mpsc::{channel as mpsc_channel, Receiver as MpscReceiver, Sender as MpscSender},
-    Mutex, Notify,
+    Mutex,
 };
 
 use self::client::ClientEndpoint;
@@ -57,7 +57,7 @@ impl Transport {
         transports: Transports,
     ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
-        let (client_endpoint, client_endpoint_recv_buffer_notify) = match ClientEndpoint::new(
+        let client_endpoint = match ClientEndpoint::new(
             self.transport_id,
             Arc::clone(&self.client_file_write),
             config,
@@ -71,13 +71,7 @@ impl Transport {
             }
         };
         debug!(">>>> Transport {transport_id} success create client endpoint.");
-        let (remote_endpoint, remote_endpoint_recv_buffer_notify) = match RemoteEndpoint::new(
-            transport_id,
-            agent_rsa_crypto_fetcher,
-            config,
-        )
-        .await
-        {
+        let remote_endpoint = match RemoteEndpoint::new(transport_id, agent_rsa_crypto_fetcher, config).await {
             Ok(remote_endpoint_result) => remote_endpoint_result,
             Err(e) => {
                 let mut transports = transports.lock().await;
@@ -94,7 +88,6 @@ impl Transport {
             transport_id,
             Arc::clone(&remote_endpoint),
             Arc::clone(&client_endpoint),
-            client_endpoint_recv_buffer_notify,
             Arc::clone(&transports),
             Arc::clone(&self.closed),
         );
@@ -102,7 +95,6 @@ impl Transport {
             transport_id,
             Arc::clone(&client_endpoint),
             Arc::clone(&remote_endpoint),
-            remote_endpoint_recv_buffer_notify,
             Arc::clone(&transports),
             Arc::clone(&self.closed),
         );
@@ -166,7 +158,6 @@ impl Transport {
         transport_id: TransportId,
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
-        client_endpoint_recv_buffer_notify: Arc<Notify>,
         transports: Transports,
         closed: Arc<AtomicBool>,
     ) where
@@ -174,6 +165,7 @@ impl Transport {
     {
         // Spawn a task for output data to client
         tokio::spawn(async move {
+            /// Define consume function
             async fn consume_fn(
                 transport_id: TransportId,
                 data: Vec<u8>,
@@ -189,7 +181,7 @@ impl Transport {
                 if closed.load(Ordering::Relaxed) {
                     break;
                 }
-                client_endpoint_recv_buffer_notify.notified().await;
+                client_endpoint.awaiting_recv_buf().await;
                 if let Err(e) = client_endpoint
                     .consume_recv_buffer(Arc::clone(&remote_endpoint), consume_fn)
                     .await
@@ -211,7 +203,6 @@ impl Transport {
         transport_id: TransportId,
         client_endpoint: Arc<ClientEndpoint<'b>>,
         remote_endpoint: Arc<RemoteEndpoint>,
-        remote_endpoint_recv_buffer_notify: Arc<Notify>,
         transports: Transports,
         closed: Arc<AtomicBool>,
     ) where
@@ -219,6 +210,7 @@ impl Transport {
     {
         // Spawn a task for output data to client
         tokio::spawn(async move {
+            /// Define the consume function
             async fn consume_fn(
                 transport_id: TransportId,
                 data: Vec<u8>,
@@ -234,7 +226,7 @@ impl Transport {
                 if closed.load(Ordering::Relaxed) {
                     break;
                 }
-                remote_endpoint_recv_buffer_notify.notified().await;
+                remote_endpoint.awaiting_recv_buf().await;
                 if let Err(e) = remote_endpoint
                     .consume_recv_buffer(Arc::clone(&client_endpoint), consume_fn)
                     .await
