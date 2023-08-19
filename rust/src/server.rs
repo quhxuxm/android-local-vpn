@@ -151,7 +151,7 @@ impl PpaassVpnServer {
                     info!(
                         ">>>> Create new transport {transport_id}, current connection number in vpn server: {connection_number}"
                     );
-                    let (transport, transport_client_data_sender) =
+                    let (transport, client_input_tx) =
                         Transport::new(transport_id, client_output_tx.clone());
                     let transports = Arc::clone(&transports);
                     tokio::spawn(async move {
@@ -162,15 +162,11 @@ impl PpaassVpnServer {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
                         };
                     });
-                    if transport_client_data_sender
-                        .send(client_data.to_vec())
-                        .await
-                        .is_err()
-                    {
+                    if client_input_tx.send(client_data.to_vec()).await.is_err() {
                         error!("Transport {transport_id} closed already, can not send client data to transport");
                         continue;
                     };
-                    entry.insert(transport_client_data_sender);
+                    entry.insert(client_input_tx);
                 }
             }
         }

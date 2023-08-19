@@ -27,7 +27,7 @@ pub(crate) use self::value::Transports;
 pub(crate) struct Transport {
     transport_id: TransportId,
     client_output_tx: MpscSender<ClientOutputPacket>,
-    client_data_receiver: MpscReceiver<Vec<u8>>,
+    client_input_rx: MpscReceiver<Vec<u8>>,
     closed: Arc<AtomicBool>,
 }
 
@@ -36,15 +36,15 @@ impl Transport {
         transport_id: TransportId,
         client_output_tx: MpscSender<ClientOutputPacket>,
     ) -> (Self, MpscSender<Vec<u8>>) {
-        let (client_data_sender, client_data_receiver) = mpsc_channel::<Vec<u8>>(1024);
+        let (client_input_tx, client_input_rx) = mpsc_channel::<Vec<u8>>(1024);
         (
             Self {
                 transport_id,
                 client_output_tx,
-                client_data_receiver,
+                client_input_rx,
                 closed: Arc::new(AtomicBool::new(false)),
             },
-            client_data_sender,
+            client_input_tx,
         )
     }
 
@@ -109,7 +109,7 @@ impl Transport {
             Arc::clone(&transports),
             Arc::clone(&self.closed),
         );
-        while let Some(client_data) = self.client_data_receiver.recv().await {
+        while let Some(client_data) = self.client_input_rx.recv().await {
             client_endpoint.receive_from_client(client_data).await;
         }
         let mut transports = transports.lock().await;
