@@ -131,6 +131,9 @@ impl Transport {
         tokio::spawn(async move {
             loop {
                 if closed.load(Ordering::Relaxed) {
+                    transports.lock().await.remove(&transport_id);
+                    remote_endpoint.close().await;
+                    client_endpoint.close().await;
                     break;
                 }
                 match remote_endpoint.read_from_remote().await {
@@ -185,6 +188,9 @@ impl Transport {
             }
             loop {
                 if closed.load(Ordering::Relaxed) {
+                    transports.lock().await.remove(&transport_id);
+                    remote_endpoint.close().await;
+                    client_endpoint.close().await;
                     break;
                 }
                 client_endpoint.awaiting_recv_buf().await;
@@ -232,6 +238,9 @@ impl Transport {
             }
             loop {
                 if closed.load(Ordering::Relaxed) {
+                    transports.lock().await.remove(&transport_id);
+                    remote_endpoint.close().await;
+                    client_endpoint.close().await;
                     break;
                 }
                 remote_endpoint.awaiting_recv_buf().await;
