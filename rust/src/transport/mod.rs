@@ -112,9 +112,14 @@ impl Transport {
         while let Some(client_data) = self.client_input_rx.recv().await {
             client_endpoint.receive_from_client(client_data).await;
         }
-        let mut transports = transports.lock().await;
-        transports.remove(&transport_id);
-        info!(">>>> Transport {transport_id} removed from vpn server(normal quite), current connection number in vpn server: {}", transports.len());
+        Self::close(
+            transport_id,
+            &client_endpoint,
+            &remote_endpoint,
+            &transports,
+            &self.closed,
+        )
+        .await;
         Ok::<(), AgentError>(())
     }
 
