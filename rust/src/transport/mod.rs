@@ -131,9 +131,14 @@ impl Transport {
         tokio::spawn(async move {
             loop {
                 if closed.load(Ordering::Relaxed) {
-                    transports.lock().await.remove(&transport_id);
-                    remote_endpoint.close().await;
-                    client_endpoint.close().await;
+                    Self::close(
+                        transport_id,
+                        &client_endpoint,
+                        &remote_endpoint,
+                        &transports,
+                        &closed,
+                    )
+                    .await;
                     break;
                 }
                 match remote_endpoint.read_from_remote().await {
@@ -142,18 +147,26 @@ impl Transport {
                         debug!(
                             ">>>> Transport {transport_id} mark client & remote endpoint closed."
                         );
-                        transports.lock().await.remove(&transport_id);
-                        closed.swap(true, Ordering::Relaxed);
-                        remote_endpoint.close().await;
-                        client_endpoint.close().await;
+                        Self::close(
+                            transport_id,
+                            &client_endpoint,
+                            &remote_endpoint,
+                            &transports,
+                            &closed,
+                        )
+                        .await;
                         break;
                     }
                     Err(e) => {
                         debug!(">>>> Transport {transport_id} error happen on remote connection close client & remote endpoint, error: {e:?}");
-                        transports.lock().await.remove(&transport_id);
-                        closed.swap(true, Ordering::Relaxed);
-                        remote_endpoint.close().await;
-                        client_endpoint.close().await;
+                        Self::close(
+                            transport_id,
+                            &client_endpoint,
+                            &remote_endpoint,
+                            &transports,
+                            &closed,
+                        )
+                        .await;
                         break;
                     }
                 };
@@ -188,9 +201,14 @@ impl Transport {
             }
             loop {
                 if closed.load(Ordering::Relaxed) {
-                    transports.lock().await.remove(&transport_id);
-                    remote_endpoint.close().await;
-                    client_endpoint.close().await;
+                    Self::close(
+                        transport_id,
+                        &client_endpoint,
+                        &remote_endpoint,
+                        &transports,
+                        &closed,
+                    )
+                    .await;
                     break;
                 }
                 client_endpoint.awaiting_recv_buf().await;
@@ -199,10 +217,14 @@ impl Transport {
                     .await
                 {
                     error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer because of error: {e:?}");
-                    transports.lock().await.remove(&transport_id);
-                    closed.swap(true, Ordering::Relaxed);
-                    remote_endpoint.close().await;
-                    client_endpoint.close().await;
+                    Self::close(
+                        transport_id,
+                        &client_endpoint,
+                        &remote_endpoint,
+                        &transports,
+                        &closed,
+                    )
+                    .await;
                     break;
                 };
                 debug!(
@@ -238,9 +260,14 @@ impl Transport {
             }
             loop {
                 if closed.load(Ordering::Relaxed) {
-                    transports.lock().await.remove(&transport_id);
-                    remote_endpoint.close().await;
-                    client_endpoint.close().await;
+                    Self::close(
+                        transport_id,
+                        &client_endpoint,
+                        &remote_endpoint,
+                        &transports,
+                        &closed,
+                    )
+                    .await;
                     break;
                 }
                 remote_endpoint.awaiting_recv_buf().await;
@@ -249,15 +276,35 @@ impl Transport {
                     .await
                 {
                     error!(">>>> Transport {transport_id} fail to consume remote endpoint receive buffer because of error: {e:?}");
-                    transports.lock().await.remove(&transport_id);
-                    closed.swap(true, Ordering::Relaxed);
-                    remote_endpoint.close().await;
-                    client_endpoint.close().await;
+
+                    Self::close(
+                        transport_id,
+                        &client_endpoint,
+                        &remote_endpoint,
+                        &transports,
+                        &closed,
+                    )
+                    .await;
                 };
                 debug!(
                     ">>>> Transport {transport_id} consume remote endpoint receive buffer success."
                 )
             }
         });
+    }
+
+    async fn close<'b>(
+        transport_id: TransportId,
+        client_endpoint: &ClientEndpoint<'b>,
+        remote_endpoint: &RemoteEndpoint,
+        transports: &Transports,
+        closed: &AtomicBool,
+    ) where
+        'b: 'static,
+    {
+        transports.lock().await.remove(&transport_id);
+        closed.swap(true, Ordering::Relaxed);
+        remote_endpoint.close().await;
+        client_endpoint.close().await;
     }
 }
