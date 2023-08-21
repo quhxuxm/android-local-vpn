@@ -333,9 +333,7 @@ pub(crate) async fn recv_from_client_tcp(
             };
             recv_buffer.0.write().await.extend(tcp_data);
         }
-        if !recv_buffer.0.read().await.is_empty() {
-            recv_buffer.1.notify_waiters();
-        }
+        recv_buffer.1.notify_waiters();
     }
 }
 
@@ -378,8 +376,6 @@ pub(crate) async fn recv_from_client_udp(
             };
             recv_buffer.0.write().await.push_back(udp_data.to_vec());
         }
-        if !recv_buffer.0.read().await.is_empty() {
-            recv_buffer.1.notify_waiters();
-        }
+        recv_buffer.1.notify_waiters();
     }
 }
