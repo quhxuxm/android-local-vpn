@@ -242,9 +242,9 @@ impl<'buf> ClientEndpoint<'buf> {
                 recv_buffer,
                 ..
             } => {
-                recv_buffer.1.notify_waiters();
                 close_client_tcp(ctl, *smoltcp_socket_handle, *transport_id, client_output_tx)
                     .await;
+                recv_buffer.1.notify_waiters();
             }
             Self::Udp {
                 transport_id,
@@ -253,8 +253,8 @@ impl<'buf> ClientEndpoint<'buf> {
                 recv_buffer,
                 ..
             } => {
-                recv_buffer.1.notify_waiters();
                 close_client_udp(ctl, *transport_id, client_output_tx).await;
+                recv_buffer.1.notify_waiters();
             }
         }
     }
