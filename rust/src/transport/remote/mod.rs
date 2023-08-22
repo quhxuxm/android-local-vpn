@@ -5,8 +5,6 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 use anyhow::Result;
 use futures_util::stream::{SplitSink, SplitStream};
 
-use ppaass_common::{PpaassConnection, PpaassMessage};
-
 use tokio::sync::RwLock;
 use tokio::{
     net::TcpStream,
@@ -22,21 +20,20 @@ use self::common::{
     close_remote_tcp, close_remote_udp, new_tcp, new_udp, read_from_remote_tcp,
     read_from_remote_udp, write_to_remote_tcp, write_to_remote_udp,
 };
-
 use super::{client::ClientEndpoint, TransportId};
+use ppaass_common::{proxy::PpaassProxyConnection, PpaassAgentMessage};
 
 type ProxyConnectionWrite = SplitSink<
-    PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>,
-    PpaassMessage,
+    PpaassProxyConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>,
+    PpaassAgentMessage,
 >;
 
 type ProxyConnectionRead =
-    SplitStream<PpaassConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>>;
+    SplitStream<PpaassProxyConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>>;
 
 pub(crate) type RemoteTcpRecvBuf = (RwLock<VecDeque<u8>>, Notify);
 pub(crate) type RemoteUdpRecvBuf = (RwLock<VecDeque<Vec<u8>>>, Notify);
 
-#[derive(Debug)]
 pub(crate) enum RemoteEndpoint {
     Tcp {
         transport_id: TransportId,
