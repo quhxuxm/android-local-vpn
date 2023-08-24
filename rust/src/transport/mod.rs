@@ -8,7 +8,7 @@ use std::sync::{
 };
 
 use anyhow::Result;
-use log::{debug, error, info};
+use log::{debug, error};
 use tokio::sync::mpsc::{channel as mpsc_channel, Receiver as MpscReceiver, Sender as MpscSender};
 
 use self::client::ClientEndpoint;
@@ -52,7 +52,7 @@ impl Transport {
         mut self,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
-        transports: Transports,
+        transports_remove_tx: MpscSender<TransportId>,
     ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
         let client_endpoint = match ClientEndpoint::new(
@@ -62,9 +62,9 @@ impl Transport {
         ) {
             Ok(client_endpoint_result) => client_endpoint_result,
             Err(e) => {
-                let mut transports = transports.lock().await;
-                transports.remove(&transport_id);
-                info!(">>>> Transport {transport_id} removed from vpn server(fail to create client endpoint), current connection number in vpn server: {}", transports.len());
+                if let Err(e) = transports_remove_tx.send(transport_id).await {
+                    error!(">>>> Transport {transport_id} fail to send remove message because of error: {e:?}")
+                };
                 return Err(e.into());
             }
         };
@@ -78,9 +78,9 @@ impl Transport {
         {
             Ok(remote_endpoint_result) => remote_endpoint_result,
             Err(e) => {
-                let mut transports = transports.lock().await;
-                transports.remove(&transport_id);
-                info!(">>>> Transport {transport_id} removed from vpn server(fail to create remote endpoint), current connection number in vpn server: {}", transports.len());
+                if let Err(e) = transports_remove_tx.send(transport_id).await {
+                    error!(">>>> Transport {transport_id} fail to send remove message because of error: {e:?}")
+                };
                 return Err(e.into());
             }
         };
@@ -92,21 +92,21 @@ impl Transport {
             transport_id,
             Arc::clone(&remote_endpoint),
             Arc::clone(&client_endpoint),
-            Arc::clone(&transports),
+            transports_remove_tx.clone(),
             Arc::clone(&self.closed),
         );
         Self::spawn_consume_remote_recv_buf_task(
             transport_id,
             Arc::clone(&client_endpoint),
             Arc::clone(&remote_endpoint),
-            Arc::clone(&transports),
+            transports_remove_tx.clone(),
             Arc::clone(&self.closed),
         );
         Self::spawn_read_remote_task(
             transport_id,
             Arc::clone(&remote_endpoint),
             Arc::clone(&client_endpoint),
-            Arc::clone(&transports),
+            transports_remove_tx.clone(),
             Arc::clone(&self.closed),
         );
         while let Some(client_data) = self.client_input_rx.recv().await {
@@ -116,7 +116,7 @@ impl Transport {
             transport_id,
             &client_endpoint,
             &remote_endpoint,
-            &transports,
+            transports_remove_tx,
             &self.closed,
         )
         .await;
@@ -128,7 +128,7 @@ impl Transport {
         transport_id: TransportId,
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
-        transports: Transports,
+        transports_remove_tx: MpscSender<TransportId>,
         closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
@@ -140,7 +140,7 @@ impl Transport {
                         transport_id,
                         &client_endpoint,
                         &remote_endpoint,
-                        &transports,
+                        transports_remove_tx,
                         &closed,
                     )
                     .await;
@@ -156,7 +156,7 @@ impl Transport {
                             transport_id,
                             &client_endpoint,
                             &remote_endpoint,
-                            &transports,
+                            transports_remove_tx,
                             &closed,
                         )
                         .await;
@@ -168,7 +168,7 @@ impl Transport {
                             transport_id,
                             &client_endpoint,
                             &remote_endpoint,
-                            &transports,
+                            transports_remove_tx,
                             &closed,
                         )
                         .await;
@@ -185,7 +185,7 @@ impl Transport {
         transport_id: TransportId,
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
-        transports: Transports,
+        transports_remove_tx: MpscSender<TransportId>,
         closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
@@ -210,7 +210,7 @@ impl Transport {
                         transport_id,
                         &client_endpoint,
                         &remote_endpoint,
-                        &transports,
+                        transports_remove_tx,
                         &closed,
                     )
                     .await;
@@ -226,7 +226,7 @@ impl Transport {
                         transport_id,
                         &client_endpoint,
                         &remote_endpoint,
-                        &transports,
+                        transports_remove_tx,
                         &closed,
                     )
                     .await;
@@ -244,7 +244,7 @@ impl Transport {
         transport_id: TransportId,
         client_endpoint: Arc<ClientEndpoint<'b>>,
         remote_endpoint: Arc<RemoteEndpoint>,
-        transports: Transports,
+        transports_remove_tx: MpscSender<TransportId>,
         closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
@@ -269,7 +269,7 @@ impl Transport {
                         transport_id,
                         &client_endpoint,
                         &remote_endpoint,
-                        &transports,
+                        transports_remove_tx.clone(),
                         &closed,
                     )
                     .await;
@@ -286,7 +286,7 @@ impl Transport {
                         transport_id,
                         &client_endpoint,
                         &remote_endpoint,
-                        &transports,
+                        transports_remove_tx.clone(),
                         &closed,
                     )
                     .await;
@@ -302,12 +302,16 @@ impl Transport {
         transport_id: TransportId,
         client_endpoint: &ClientEndpoint<'b>,
         remote_endpoint: &RemoteEndpoint,
-        transports: &Transports,
+        transports_remove_tx: MpscSender<TransportId>,
         closed: &AtomicBool,
     ) where
         'b: 'static,
     {
-        transports.lock().await.remove(&transport_id);
+        if let Err(e) = transports_remove_tx.send(transport_id).await {
+            error!(
+                ">>>> Transport {transport_id} fail to send remove message because of error: {e:?}"
+            )
+        };
         closed.swap(true, Ordering::Relaxed);
         remote_endpoint.close().await;
         client_endpoint.close().await;
