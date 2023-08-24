@@ -20,8 +20,8 @@ impl SmoltcpDevice {
     pub(crate) fn new(trans_id: TransportId) -> SmoltcpDevice {
         SmoltcpDevice {
             trans_id,
-            rx_queue: VecDeque::new(),
-            tx_queue: VecDeque::new(),
+            rx_queue: VecDeque::with_capacity(65536),
+            tx_queue: VecDeque::with_capacity(65536),
         }
     }
 
