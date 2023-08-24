@@ -9,7 +9,7 @@ use std::sync::{
 
 use anyhow::Result;
 use log::{debug, error};
-use tokio::sync::mpsc::{channel as mpsc_channel, Receiver as MpscReceiver, Sender as MpscSender};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use self::client::ClientEndpoint;
 use crate::{
@@ -26,17 +26,17 @@ pub(crate) use self::value::Transports;
 #[derive(Debug)]
 pub(crate) struct Transport {
     transport_id: TransportId,
-    client_output_tx: MpscSender<ClientOutputPacket>,
-    client_input_rx: MpscReceiver<Vec<u8>>,
+    client_output_tx: Sender<ClientOutputPacket>,
+    client_input_rx: Receiver<Vec<u8>>,
     closed: Arc<AtomicBool>,
 }
 
 impl Transport {
     pub(crate) fn new(
         transport_id: TransportId,
-        client_output_tx: MpscSender<ClientOutputPacket>,
-    ) -> (Self, MpscSender<Vec<u8>>) {
-        let (client_input_tx, client_input_rx) = mpsc_channel::<Vec<u8>>(1024);
+        client_output_tx: Sender<ClientOutputPacket>,
+    ) -> (Self, Sender<Vec<u8>>) {
+        let (client_input_tx, client_input_rx) = channel::<Vec<u8>>(1024);
         (
             Self {
                 transport_id,
@@ -52,7 +52,7 @@ impl Transport {
         mut self,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
-        transports_remove_tx: MpscSender<TransportId>,
+        transports_remove_tx: Sender<TransportId>,
     ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
         let client_endpoint = match ClientEndpoint::new(
@@ -128,7 +128,7 @@ impl Transport {
         transport_id: TransportId,
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
-        transports_remove_tx: MpscSender<TransportId>,
+        transports_remove_tx: Sender<TransportId>,
         closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
@@ -185,7 +185,7 @@ impl Transport {
         transport_id: TransportId,
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
-        transports_remove_tx: MpscSender<TransportId>,
+        transports_remove_tx: Sender<TransportId>,
         closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
@@ -244,7 +244,7 @@ impl Transport {
         transport_id: TransportId,
         client_endpoint: Arc<ClientEndpoint<'b>>,
         remote_endpoint: Arc<RemoteEndpoint>,
-        transports_remove_tx: MpscSender<TransportId>,
+        transports_remove_tx: Sender<TransportId>,
         closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
@@ -302,7 +302,7 @@ impl Transport {
         transport_id: TransportId,
         client_endpoint: &ClientEndpoint<'b>,
         remote_endpoint: &RemoteEndpoint,
-        transports_remove_tx: MpscSender<TransportId>,
+        transports_remove_tx: Sender<TransportId>,
         closed: &AtomicBool,
     ) where
         'b: 'static,
