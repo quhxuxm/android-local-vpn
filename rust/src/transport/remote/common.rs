@@ -8,18 +8,15 @@ use crate::{
 };
 use anyhow::anyhow;
 use dns_parser::Packet as DnsPacket;
-use futures_util::{
-    stream::{SplitSink, SplitStream},
-    SinkExt, StreamExt,
-};
+use futures_util::{SinkExt, StreamExt};
 use log::{debug, error};
 use ppaass_common::{
     generate_uuid,
     proxy::PpaassProxyConnection,
     tcp::{ProxyTcpData, ProxyTcpInit, ProxyTcpInitResultType},
     udp::UdpData,
-    PpaassAgentMessage, PpaassMessageGenerator, PpaassMessagePayloadEncryptionSelector,
-    PpaassMessageProxyPayloadType, PpaassProxyMessage, PpaassProxyMessagePayload,
+    PpaassMessageGenerator, PpaassMessagePayloadEncryptionSelector, PpaassMessageProxyPayloadType,
+    PpaassProxyMessage, PpaassProxyMessagePayload,
 };
 use tokio::sync::RwLock;
 use tokio::{
@@ -27,18 +24,15 @@ use tokio::{
     sync::{Mutex, Notify},
 };
 
-use super::{RemoteEndpoint, RemoteTcpRecvBuf, RemoteUdpRecvBuf};
+use super::{
+    ProxyConnectionRead, ProxyConnectionWrite, RemoteEndpoint, RemoteTcpRecvBuf, RemoteUdpRecvBuf,
+};
 
 pub(crate) async fn write_to_remote_udp(
     config: &PpaassVpnServerConfig,
     data: Vec<u8>,
     transport_id: &TransportId,
-    proxy_connection_write: &Mutex<
-        SplitSink<
-            PpaassProxyConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>,
-            PpaassAgentMessage,
-        >,
-    >,
+    proxy_connection_write: &Mutex<ProxyConnectionWrite>,
 ) -> Result<usize, RemoteEndpointError> {
     let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(
         config.get_user_token(),
@@ -68,12 +62,7 @@ pub(crate) async fn write_to_remote_tcp(
     config: &PpaassVpnServerConfig,
     data: Vec<u8>,
     transport_id: &TransportId,
-    proxy_connection_write: &Mutex<
-        SplitSink<
-            PpaassProxyConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>,
-            PpaassAgentMessage,
-        >,
-    >,
+    proxy_connection_write: &Mutex<ProxyConnectionWrite>,
 ) -> Result<usize, RemoteEndpointError> {
     let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(
         config.get_user_token(),
@@ -93,9 +82,7 @@ pub(crate) async fn write_to_remote_tcp(
 
 pub(crate) async fn read_from_remote_udp(
     transport_id: TransportId,
-    proxy_connection_read: &Mutex<
-        SplitStream<PpaassProxyConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>>,
-    >,
+    proxy_connection_read: &Mutex<ProxyConnectionRead>,
     recv_buffer: &RemoteUdpRecvBuf,
 ) -> Result<bool, RemoteEndpointError> {
     match proxy_connection_read.lock().await.next().await {
@@ -136,9 +123,7 @@ pub(crate) async fn read_from_remote_udp(
 
 pub(crate) async fn read_from_remote_tcp(
     transport_id: TransportId,
-    proxy_connection_read: &Mutex<
-        SplitStream<PpaassProxyConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>>,
-    >,
+    proxy_connection_read: &Mutex<ProxyConnectionRead>,
     recv_buffer: &RemoteTcpRecvBuf,
 ) -> Result<bool, RemoteEndpointError> {
     match proxy_connection_read.lock().await.next().await {
@@ -300,12 +285,7 @@ async fn init_proxy_connection(
 
 pub(crate) async fn close_remote_tcp(
     transport_id: TransportId,
-    proxy_connection_write: &Mutex<
-        SplitSink<
-            PpaassProxyConnection<'_, TcpStream, AgentRsaCryptoFetcher, TransportId>,
-            PpaassAgentMessage,
-        >,
-    >,
+    proxy_connection_write: &Mutex<ProxyConnectionWrite>,
 ) {
     let mut proxy_connection_write = proxy_connection_write.lock().await;
     if let Err(e) = proxy_connection_write.close().await {
