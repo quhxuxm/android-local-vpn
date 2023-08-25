@@ -180,6 +180,18 @@ impl Transport {
         });
     }
 
+    async fn consume_client_recv_buf_fn(
+        transport_id: TransportId,
+        data: Vec<u8>,
+        remote: Arc<RemoteEndpoint>,
+    ) -> Result<usize, RemoteEndpointError> {
+        debug!(
+            ">>>> Transport {transport_id} write data to remote: {}",
+            pretty_hex::pretty_hex(&data)
+        );
+        remote.write_to_remote(data).await
+    }
+
     /// Spawn a task to consume the client endpoint receive data buffer
     fn spawn_consume_client_recv_buf_task<'b>(
         transport_id: TransportId,
@@ -192,18 +204,6 @@ impl Transport {
     {
         // Spawn a task for output data to client
         tokio::spawn(async move {
-            /// Define consume function
-            async fn consume_fn(
-                transport_id: TransportId,
-                data: Vec<u8>,
-                remote: Arc<RemoteEndpoint>,
-            ) -> Result<usize, RemoteEndpointError> {
-                debug!(
-                    ">>>> Transport {transport_id} write data to remote: {}",
-                    pretty_hex::pretty_hex(&data)
-                );
-                remote.write_to_remote(data).await
-            }
             loop {
                 if closed.load(Ordering::Relaxed) {
                     Self::close(
@@ -218,7 +218,10 @@ impl Transport {
                 }
                 client_endpoint.awaiting_recv_buf().await;
                 if let Err(e) = client_endpoint
-                    .consume_recv_buffer(Arc::clone(&remote_endpoint), consume_fn)
+                    .consume_recv_buffer(
+                        Arc::clone(&remote_endpoint),
+                        Self::consume_client_recv_buf_fn,
+                    )
                     .await
                 {
                     error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer because of error: {e:?}");
@@ -239,6 +242,19 @@ impl Transport {
         });
     }
 
+    /// Define the consume function
+    async fn consume_remote_recv_buf_fn(
+        transport_id: TransportId,
+        data: Vec<u8>,
+        client: Arc<ClientEndpoint<'_>>,
+    ) -> Result<usize, ClientEndpointError> {
+        debug!(
+            ">>>> Transport {transport_id} write data to smoltcp: {}",
+            pretty_hex::pretty_hex(&data)
+        );
+        client.send_to_smoltcp(data).await
+    }
+
     /// Spawn a task to consume the remote endpoint receive data buffer
     fn spawn_consume_remote_recv_buf_task<'b>(
         transport_id: TransportId,
@@ -251,18 +267,6 @@ impl Transport {
     {
         // Spawn a task for output data to client
         tokio::spawn(async move {
-            /// Define the consume function
-            async fn consume_fn(
-                transport_id: TransportId,
-                data: Vec<u8>,
-                client: Arc<ClientEndpoint<'_>>,
-            ) -> Result<usize, ClientEndpointError> {
-                debug!(
-                    ">>>> Transport {transport_id} write data to smoltcp: {}",
-                    pretty_hex::pretty_hex(&data)
-                );
-                client.send_to_smoltcp(data).await
-            }
             loop {
                 if closed.load(Ordering::Relaxed) {
                     Self::close(
@@ -277,7 +281,10 @@ impl Transport {
                 }
                 remote_endpoint.awaiting_recv_buf().await;
                 if let Err(e) = remote_endpoint
-                    .consume_recv_buffer(Arc::clone(&client_endpoint), consume_fn)
+                    .consume_recv_buffer(
+                        Arc::clone(&client_endpoint),
+                        Self::consume_remote_recv_buf_fn,
+                    )
                     .await
                 {
                     error!(">>>> Transport {transport_id} fail to consume remote endpoint receive buffer because of error: {e:?}");
