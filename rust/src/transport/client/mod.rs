@@ -185,7 +185,10 @@ impl<'buf> ClientEndpoint<'buf> {
         }
     }
 
-    pub(crate) async fn receive_from_client(&self, client_data: Vec<u8>) {
+    pub(crate) async fn receive_from_client(
+        &self,
+        client_data: Vec<u8>,
+    ) -> Result<(), ClientEndpointError> {
         match self {
             Self::Tcp {
                 transport_id,

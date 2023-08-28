@@ -113,7 +113,20 @@ impl Transport {
             Arc::clone(&self.closed),
         );
         while let Some(client_data) = self.client_input_rx.recv().await {
-            client_endpoint.receive_from_client(client_data).await
+            if let Err(e) =
+                client_endpoint.receive_from_client(client_data).await
+            {
+                error!(">>>> Transport {transport_id} fail to receive client data from smoltcp because of error: {e:?}");
+                Self::close(
+                    transport_id,
+                    &client_endpoint,
+                    &remote_endpoint,
+                    transports_remove_tx,
+                    &self.closed,
+                )
+                .await;
+                break;
+            };
         }
         Ok::<(), AgentError>(())
     }

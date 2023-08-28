@@ -153,7 +153,7 @@ impl RemoteEndpoint {
         &self,
         remote: Arc<ClientEndpoint<'buf>>,
         mut consume_fn: F,
-    ) -> Result<()>
+    ) -> Result<(), ClientEndpointError>
     where
         F: FnMut(TransportId, Vec<u8>, Arc<ClientEndpoint<'buf>>) -> Fut,
         Fut: Future<Output = Result<usize, ClientEndpointError>>,

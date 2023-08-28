@@ -251,10 +251,7 @@ pub(crate) async fn send_to_client_tcp(
     let smoltcp_socket =
         smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
     if smoltcp_socket.may_send() {
-        let send_result = smoltcp_socket.send_slice(&data).map_err(|e| {
-            error!("<<<< Transport {transport_id} fail to transfer remote tcp recv buffer data to smoltcp because of error: {e:?}");
-            anyhow!("{e:?}")
-        })?;
+        let send_result = smoltcp_socket.send_slice(&data)?;
         poll_and_transfer_smoltcp_data_to_client(
             transport_id,
             &mut smoltcp_socket_set,
@@ -290,12 +287,7 @@ pub(crate) async fn send_to_client_udp(
             endpoint: transport_id.source.into(),
             meta: udp_packet_meta,
         };
-        smoltcp_socket
-            .send_slice(&data, udp_meta_data)
-            .map_err(|e| {
-                error!("<<<< Transport {transport_id} fail to transfer remote udp recv buffer data to smoltcp with endpoint [{:?}] because of error: {e:?}", smoltcp_socket.endpoint());
-                anyhow!("{e:?}")
-            })?;
+        smoltcp_socket.send_slice(&data, udp_meta_data)?;
         poll_and_transfer_smoltcp_data_to_client(
             transport_id,
             &mut smoltcp_socket_set,
@@ -316,7 +308,7 @@ pub(crate) async fn recv_from_client_tcp(
     transport_id: TransportId,
     client_output_tx: &Sender<ClientOutputPacket>,
     recv_buffer: &ClientTcpRecvBuf,
-) {
+) -> Result<(), ClientEndpointError> {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
         mut smoltcp_iface,
@@ -344,13 +336,15 @@ pub(crate) async fn recv_from_client_tcp(
                     error!(
                         ">>>> Transport {transport_id} fail to receive tcp data from smoltcp because of error: {e:?}"
                     );
-                    break;
+                    recv_buffer.1.notify_waiters();
+                    return Err(ClientEndpointError::SmoltcpTcpReceiveError(e));
                 }
             };
             recv_buffer.0.write().await.extend(tcp_data);
         }
         recv_buffer.1.notify_waiters();
     }
+    Ok(())
 }
 
 pub(crate) async fn recv_from_client_udp(
@@ -360,7 +354,7 @@ pub(crate) async fn recv_from_client_udp(
     transport_id: TransportId,
     client_output_tx: &Sender<ClientOutputPacket>,
     recv_buffer: &ClientUdpRecvBuf,
-) {
+) -> Result<(), ClientEndpointError> {
     let ClientEndpointCtlLockGuard {
         mut smoltcp_socket_set,
         mut smoltcp_iface,
@@ -387,11 +381,13 @@ pub(crate) async fn recv_from_client_udp(
                     error!(
                         ">>>> Transport {transport_id} fail to receive udp data from smoltcp because of error: {e:?}"
                     );
-                    break;
+                    recv_buffer.1.notify_waiters();
+                    return Err(ClientEndpointError::SmoltcpUdpReceiveError(e));
                 }
             };
             recv_buffer.0.write().await.push_back(udp_data.to_vec());
         }
         recv_buffer.1.notify_waiters();
     }
+    Ok(())
 }
