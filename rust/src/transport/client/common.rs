@@ -117,7 +117,6 @@ pub(crate) fn new_tcp(
     let smoltcp_tcp_socket = create_smoltcp_tcp_socket(transport_id, config)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_tcp_socket);
     let ctl = ClientEndpointCtl::new(
-        transport_id,
         Arc::new(Mutex::new(smoltcp_socket_set)),
         Arc::new(Mutex::new(smoltcp_iface)),
         Arc::new(Mutex::new(smoltcp_device)),
@@ -148,7 +147,6 @@ pub(crate) fn new_udp(
     let smoltcp_udp_socket = create_smoltcp_udp_socket(transport_id)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_udp_socket);
     let ctl = ClientEndpointCtl::new(
-        transport_id,
         Arc::new(Mutex::new(smoltcp_socket_set)),
         Arc::new(Mutex::new(smoltcp_iface)),
         Arc::new(Mutex::new(smoltcp_device)),

@@ -1,11 +1,6 @@
 mod common;
 
-use std::{
-    collections::VecDeque,
-    fmt::{Debug, Formatter},
-    future::Future,
-    sync::Arc,
-};
+use std::{collections::VecDeque, future::Future, sync::Arc};
 
 use anyhow::Result;
 
@@ -23,7 +18,6 @@ use self::common::{
 };
 
 use super::{remote::RemoteEndpoint, TransportId};
-use std::fmt::Result as FormatResult;
 
 pub(crate) type ClientTcpRecvBuf = (RwLock<VecDeque<u8>>, Notify);
 pub(crate) type ClientUdpRecvBuf = (RwLock<VecDeque<Vec<u8>>>, Notify);
@@ -35,29 +29,18 @@ pub(crate) struct ClientEndpointCtlLockGuard<'lock, 'buf> {
 }
 
 pub(crate) struct ClientEndpointCtl<'buf> {
-    transport_id: TransportId,
     smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
     smoltcp_iface: Arc<Mutex<Interface>>,
     smoltcp_device: Arc<Mutex<SmoltcpDevice>>,
 }
 
-impl Debug for ClientEndpointCtl<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FormatResult {
-        f.debug_struct("ClientEndpointCtl")
-            .field("transport_id", &self.transport_id)
-            .finish()
-    }
-}
-
 impl<'buf> ClientEndpointCtl<'buf> {
-    pub(crate) fn new(
-        transport_id: TransportId,
+    fn new(
         smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
         smoltcp_iface: Arc<Mutex<Interface>>,
         smoltcp_device: Arc<Mutex<SmoltcpDevice>>,
     ) -> Self {
         Self {
-            transport_id,
             smoltcp_socket_set,
             smoltcp_iface,
             smoltcp_device,
@@ -77,7 +60,6 @@ impl<'buf> ClientEndpointCtl<'buf> {
     }
 }
 
-#[derive(Debug)]
 pub(crate) enum ClientEndpoint<'buf> {
     Tcp {
         transport_id: TransportId,
