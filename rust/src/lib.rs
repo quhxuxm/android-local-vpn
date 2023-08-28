@@ -5,7 +5,10 @@ mod server;
 mod transport;
 mod util;
 
-use crate::{config::PpaassVpnServerConfig, server::PpaassVpnServer, util::AgentRsaCryptoFetcher};
+use crate::{
+    config::PpaassVpnServerConfig, server::PpaassVpnServer,
+    util::AgentRsaCryptoFetcher,
+};
 use android_logger::Config as AndroidLoggerConfig;
 
 use jni::{
@@ -20,11 +23,15 @@ use log::{error, info, LevelFilter};
 
 use std::{cell::OnceCell, process};
 
-pub(crate) static mut JAVA_VPN_SERVICE_OBJ: OnceCell<GlobalRef> = OnceCell::new();
+pub(crate) static mut JAVA_VPN_SERVICE_OBJ: OnceCell<GlobalRef> =
+    OnceCell::new();
 pub(crate) static mut JAVA_VPN_JVM: OnceCell<JavaVM> = OnceCell::new();
 pub(crate) static mut VPN_SERVER: OnceCell<PpaassVpnServer> = OnceCell::new();
-pub(crate) static mut AGENT_RSA_CRYPTO_FETCHER: OnceCell<AgentRsaCryptoFetcher> = OnceCell::new();
-pub(crate) static mut VPN_SERVER_CONFIG: OnceCell<PpaassVpnServerConfig> = OnceCell::new();
+pub(crate) static mut AGENT_RSA_CRYPTO_FETCHER: OnceCell<
+    AgentRsaCryptoFetcher,
+> = OnceCell::new();
+pub(crate) static mut VPN_SERVER_CONFIG: OnceCell<PpaassVpnServerConfig> =
+    OnceCell::new();
 
 /// Stop the vpn server, the method will stop the vpn server thread first,
 /// then destory the Java VPN Service object, finally destory the JVM object.
@@ -40,7 +47,8 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStopVpn(
 ) {
     info!("Begin to stop VPN ...");
     info!("Stopping vpn server ...");
-    let ppaass_vpn_server = VPN_SERVER.get_mut().expect("Fail to get vpn server object");
+    let ppaass_vpn_server =
+        VPN_SERVER.get_mut().expect("Fail to get vpn server object");
     if let Err(e) = ppaass_vpn_server.stop() {
         error!("Fail to stop vpn server because of error: {e:?}")
     };
@@ -83,8 +91,10 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
         .convert_byte_array(proxy_public_key)
         .expect("Fail to read proxy public key bytes from java object");
 
-    let agent_crypto_fetcher = match AgentRsaCryptoFetcher::new(agent_private_key, proxy_public_key)
-    {
+    let agent_crypto_fetcher = match AgentRsaCryptoFetcher::new(
+        agent_private_key,
+        proxy_public_key,
+    ) {
         Ok(agent_crypto_fetcher) => agent_crypto_fetcher,
         Err(e) => {
             error!("Fail to generate agent rsa crypto fetcher because of error: {e:?}");

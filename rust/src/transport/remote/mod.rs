@@ -12,7 +12,8 @@ use tokio::{
 };
 
 use crate::{
-    config::PpaassVpnServerConfig, error::RemoteEndpointError, util::AgentRsaCryptoFetcher,
+    config::PpaassVpnServerConfig, error::RemoteEndpointError,
+    util::AgentRsaCryptoFetcher,
 };
 use crate::{error::ClientEndpointError, transport::ControlProtocol};
 
@@ -24,12 +25,23 @@ use super::{client::ClientEndpoint, TransportId};
 use ppaass_common::{proxy::PpaassProxyConnection, PpaassAgentMessage};
 
 type ProxyConnectionWrite = SplitSink<
-    PpaassProxyConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>,
+    PpaassProxyConnection<
+        'static,
+        TcpStream,
+        AgentRsaCryptoFetcher,
+        TransportId,
+    >,
     PpaassAgentMessage,
 >;
 
-type ProxyConnectionRead =
-    SplitStream<PpaassProxyConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>>;
+type ProxyConnectionRead = SplitStream<
+    PpaassProxyConnection<
+        'static,
+        TcpStream,
+        AgentRsaCryptoFetcher,
+        TransportId,
+    >,
+>;
 
 pub(crate) type RemoteTcpRecvBuf = (RwLock<VecDeque<u8>>, Notify);
 pub(crate) type RemoteUdpRecvBuf = (RwLock<VecDeque<Vec<u8>>>, Notify);
@@ -59,25 +71,45 @@ impl RemoteEndpoint {
         config: &'static PpaassVpnServerConfig,
     ) -> Result<RemoteEndpoint, RemoteEndpointError> {
         match transport_id.control_protocol {
-            ControlProtocol::Tcp => new_tcp(transport_id, agent_rsa_crypto_fetcher, config).await,
-            ControlProtocol::Udp => new_udp(transport_id, agent_rsa_crypto_fetcher, config).await,
+            ControlProtocol::Tcp => {
+                new_tcp(transport_id, agent_rsa_crypto_fetcher, config).await
+            }
+            ControlProtocol::Udp => {
+                new_udp(transport_id, agent_rsa_crypto_fetcher, config).await
+            }
         }
     }
 
-    pub(crate) async fn read_from_remote(&self) -> Result<bool, RemoteEndpointError> {
+    pub(crate) async fn read_from_remote(
+        &self,
+    ) -> Result<bool, RemoteEndpointError> {
         match self {
             Self::Tcp {
                 transport_id,
                 proxy_connection_read,
                 recv_buffer,
                 ..
-            } => read_from_remote_tcp(*transport_id, proxy_connection_read, recv_buffer).await,
+            } => {
+                read_from_remote_tcp(
+                    *transport_id,
+                    proxy_connection_read,
+                    recv_buffer,
+                )
+                .await
+            }
             Self::Udp {
                 transport_id,
                 proxy_connection_read,
                 recv_buffer,
                 ..
-            } => read_from_remote_udp(*transport_id, proxy_connection_read, recv_buffer).await,
+            } => {
+                read_from_remote_udp(
+                    *transport_id,
+                    proxy_connection_read,
+                    recv_buffer,
+                )
+                .await
+            }
         }
     }
 
@@ -91,13 +123,29 @@ impl RemoteEndpoint {
                 proxy_connection_write,
                 config,
                 ..
-            } => write_to_remote_tcp(config, data, transport_id, proxy_connection_write).await,
+            } => {
+                write_to_remote_tcp(
+                    config,
+                    data,
+                    transport_id,
+                    proxy_connection_write,
+                )
+                .await
+            }
             Self::Udp {
                 transport_id,
                 proxy_connection_write,
                 config,
                 ..
-            } => write_to_remote_udp(config, data, transport_id, proxy_connection_write).await,
+            } => {
+                write_to_remote_udp(
+                    config,
+                    data,
+                    transport_id,
+                    proxy_connection_write,
+                )
+                .await
+            }
         }
     }
 
@@ -140,7 +188,12 @@ impl RemoteEndpoint {
                 let mut recv_buffer = recv_buffer.0.write().await;
                 let mut consume_size = 0;
                 for udp_data in recv_buffer.iter() {
-                    consume_fn(*transport_id, udp_data.to_vec(), Arc::clone(&remote)).await?;
+                    consume_fn(
+                        *transport_id,
+                        udp_data.to_vec(),
+                        Arc::clone(&remote),
+                    )
+                    .await?;
                     consume_size += 1;
                 }
                 recv_buffer.drain(..consume_size);
@@ -169,8 +222,12 @@ impl RemoteEndpoint {
 
     pub(crate) async fn awaiting_recv_buf(&self) {
         match self {
-            RemoteEndpoint::Tcp { recv_buffer, .. } => recv_buffer.1.notified().await,
-            RemoteEndpoint::Udp { recv_buffer, .. } => recv_buffer.1.notified().await,
+            RemoteEndpoint::Tcp { recv_buffer, .. } => {
+                recv_buffer.1.notified().await
+            }
+            RemoteEndpoint::Udp { recv_buffer, .. } => {
+                recv_buffer.1.notified().await
+            }
         }
     }
 }

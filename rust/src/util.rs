@@ -2,7 +2,8 @@ use anyhow::Result;
 use jni::objects::JValue;
 use log::trace;
 use ppaass_common::{
-    PpaassMessagePayloadEncryptionSelector, RsaCrypto, RsaCryptoFetcher, RsaError,
+    PpaassMessagePayloadEncryptionSelector, RsaCrypto, RsaCryptoFetcher,
+    RsaError,
 };
 
 use crate::{error::RemoteEndpointError, transport::TransportId};
@@ -20,31 +21,33 @@ pub(crate) fn protect_socket(
     trace!("Begin to protect outbound socket: {socket_fd}");
     let socket_fd_jni_arg = JValue::Int(socket_fd);
     let java_vpn_service_obj = unsafe {
-        JAVA_VPN_SERVICE_OBJ
-            .get_mut()
-            .ok_or(RemoteEndpointError::ProtectRemoteSocket {
+        JAVA_VPN_SERVICE_OBJ.get_mut().ok_or(
+            RemoteEndpointError::ProtectRemoteSocket {
                 transport_id,
                 socket_fd,
                 message: "Can not get vpn service java object".to_string(),
-            })?
+            },
+        )?
     }
     .as_obj();
     let java_vm = unsafe {
-        JAVA_VPN_JVM
-            .get_mut()
-            .ok_or(RemoteEndpointError::ProtectRemoteSocket {
+        JAVA_VPN_JVM.get_mut().ok_or(
+            RemoteEndpointError::ProtectRemoteSocket {
                 transport_id,
                 socket_fd,
                 message: "Can not get JVM instance.".to_string(),
-            })?
+            },
+        )?
     };
-    let mut jni_env = java_vm.attach_current_thread_permanently().map_err(|e| {
-        RemoteEndpointError::ProtectRemoteSocket {
+    let mut jni_env = java_vm.attach_current_thread_permanently().map_err(
+        |e| RemoteEndpointError::ProtectRemoteSocket {
             transport_id,
             socket_fd,
-            message: format!("Can not attach current java thread because of error: {e:?}"),
-        }
-    })?;
+            message: format!(
+                "Can not attach current java thread because of error: {e:?}"
+            ),
+        },
+    )?;
     let protect_result = jni_env
         .call_method(
             java_vpn_service_obj,
@@ -83,14 +86,21 @@ pub(crate) struct AgentRsaCryptoFetcher {
 }
 
 impl AgentRsaCryptoFetcher {
-    pub(crate) fn new(private_key: Vec<u8>, public_key: Vec<u8>) -> Result<Self> {
-        let rsa_crypto = RsaCrypto::new(public_key.as_slice(), private_key.as_slice())?;
+    pub(crate) fn new(
+        private_key: Vec<u8>,
+        public_key: Vec<u8>,
+    ) -> Result<Self> {
+        let rsa_crypto =
+            RsaCrypto::new(public_key.as_slice(), private_key.as_slice())?;
         Ok(Self { rsa_crypto })
     }
 }
 
 impl RsaCryptoFetcher for AgentRsaCryptoFetcher {
-    fn fetch(&self, _user_token: impl AsRef<str>) -> Result<Option<&RsaCrypto>, RsaError> {
+    fn fetch(
+        &self,
+        _user_token: impl AsRef<str>,
+    ) -> Result<Option<&RsaCrypto>, RsaError> {
         let rsa_crypto = &self.rsa_crypto;
         Ok(Some(rsa_crypto))
     }
@@ -98,4 +108,7 @@ impl RsaCryptoFetcher for AgentRsaCryptoFetcher {
 
 pub(crate) struct AgentPpaassMessagePayloadEncryptionSelector;
 
-impl PpaassMessagePayloadEncryptionSelector for AgentPpaassMessagePayloadEncryptionSelector {}
+impl PpaassMessagePayloadEncryptionSelector
+    for AgentPpaassMessagePayloadEncryptionSelector
+{
+}

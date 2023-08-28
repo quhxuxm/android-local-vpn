@@ -58,11 +58,16 @@ impl TransportId {
             IpProtocol::Tcp => {
                 let payload = ip_packet.payload();
                 let packet = TcpPacket::new_checked(payload)?;
-                let source_ip: [u8; 4] = ip_packet.src_addr().as_bytes().try_into()?;
-                let destination_ip: [u8; 4] = ip_packet.dst_addr().as_bytes().try_into()?;
+                let source_ip: [u8; 4] =
+                    ip_packet.src_addr().as_bytes().try_into()?;
+                let destination_ip: [u8; 4] =
+                    ip_packet.dst_addr().as_bytes().try_into()?;
                 Ok(TransportId {
                     source: SocketAddr::from((source_ip, packet.src_port())),
-                    destination: SocketAddr::from((destination_ip, packet.dst_port())),
+                    destination: SocketAddr::from((
+                        destination_ip,
+                        packet.dst_port(),
+                    )),
                     control_protocol: ControlProtocol::Tcp,
                     internet_protocol: InternetProtocol::Ipv4,
                 })
@@ -70,11 +75,16 @@ impl TransportId {
             IpProtocol::Udp => {
                 let payload = ip_packet.payload();
                 let packet = UdpPacket::new_checked(payload)?;
-                let source_ip: [u8; 4] = ip_packet.src_addr().as_bytes().try_into()?;
-                let destination_ip: [u8; 4] = ip_packet.dst_addr().as_bytes().try_into()?;
+                let source_ip: [u8; 4] =
+                    ip_packet.src_addr().as_bytes().try_into()?;
+                let destination_ip: [u8; 4] =
+                    ip_packet.dst_addr().as_bytes().try_into()?;
                 Ok(TransportId {
                     source: SocketAddr::from((source_ip, packet.src_port())),
-                    destination: SocketAddr::from((destination_ip, packet.dst_port())),
+                    destination: SocketAddr::from((
+                        destination_ip,
+                        packet.dst_port(),
+                    )),
                     control_protocol: ControlProtocol::Udp,
                     internet_protocol: InternetProtocol::Ipv4,
                 })
@@ -93,11 +103,16 @@ impl TransportId {
             IpProtocol::Tcp => {
                 let payload = ip_packet.payload();
                 let packet = TcpPacket::new_checked(payload)?;
-                let source_ip: [u8; 16] = ip_packet.src_addr().as_bytes().try_into()?;
-                let destination_ip: [u8; 16] = ip_packet.dst_addr().as_bytes().try_into()?;
+                let source_ip: [u8; 16] =
+                    ip_packet.src_addr().as_bytes().try_into()?;
+                let destination_ip: [u8; 16] =
+                    ip_packet.dst_addr().as_bytes().try_into()?;
                 Ok(TransportId {
                     source: SocketAddr::from((source_ip, packet.src_port())),
-                    destination: SocketAddr::from((destination_ip, packet.dst_port())),
+                    destination: SocketAddr::from((
+                        destination_ip,
+                        packet.dst_port(),
+                    )),
                     control_protocol: ControlProtocol::Tcp,
                     internet_protocol: InternetProtocol::Ipv6,
                 })
@@ -105,11 +120,16 @@ impl TransportId {
             IpProtocol::Udp => {
                 let payload = ip_packet.payload();
                 let packet = UdpPacket::new_checked(payload)?;
-                let source_ip: [u8; 16] = ip_packet.src_addr().as_bytes().try_into()?;
-                let destination_ip: [u8; 16] = ip_packet.dst_addr().as_bytes().try_into()?;
+                let source_ip: [u8; 16] =
+                    ip_packet.src_addr().as_bytes().try_into()?;
+                let destination_ip: [u8; 16] =
+                    ip_packet.dst_addr().as_bytes().try_into()?;
                 Ok(TransportId {
                     source: SocketAddr::from((source_ip, packet.src_port())),
-                    destination: SocketAddr::from((destination_ip, packet.dst_port())),
+                    destination: SocketAddr::from((
+                        destination_ip,
+                        packet.dst_port(),
+                    )),
                     control_protocol: ControlProtocol::Udp,
                     internet_protocol: InternetProtocol::Ipv6,
                 })

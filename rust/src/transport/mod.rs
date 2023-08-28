@@ -9,6 +9,7 @@ use std::sync::{
 
 use anyhow::Result;
 use log::{debug, error};
+
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use self::client::ClientEndpoint;
@@ -63,7 +64,9 @@ impl Transport {
             Ok(client_endpoint_result) => client_endpoint_result,
             Err(e) => {
                 if let Err(e) = transports_remove_tx.send(transport_id).await {
-                    error!(">>>> Transport {transport_id} fail to send remove message because of error: {e:?}")
+                    error!(
+                            ">>>> Transport {transport_id} fail to send remove message because of error: {e:?}"
+                        )
                 };
                 return Err(e.into());
             }
@@ -110,16 +113,8 @@ impl Transport {
             Arc::clone(&self.closed),
         );
         while let Some(client_data) = self.client_input_rx.recv().await {
-            client_endpoint.receive_from_client(client_data).await;
+            client_endpoint.receive_from_client(client_data).await
         }
-        Self::close(
-            transport_id,
-            &client_endpoint,
-            &remote_endpoint,
-            transports_remove_tx,
-            &self.closed,
-        )
-        .await;
         Ok::<(), AgentError>(())
     }
 
@@ -136,22 +131,12 @@ impl Transport {
         tokio::spawn(async move {
             loop {
                 if closed.load(Ordering::Relaxed) {
-                    Self::close(
-                        transport_id,
-                        &client_endpoint,
-                        &remote_endpoint,
-                        transports_remove_tx,
-                        &closed,
-                    )
-                    .await;
+                    // The transport closed already quite the task
                     break;
                 }
                 match remote_endpoint.read_from_remote().await {
                     Ok(false) => continue,
                     Ok(true) => {
-                        debug!(
-                            ">>>> Transport {transport_id} mark client & remote endpoint closed."
-                        );
                         Self::close(
                             transport_id,
                             &client_endpoint,
@@ -180,16 +165,20 @@ impl Transport {
         });
     }
 
+    /// The concrete function to forward client receive buffer to remote.
+    /// * transport_id: The transportation id.
+    /// * data: The data going to send to remote.
+    /// * remote_endpoint: The remote endpoint.
     async fn consume_client_recv_buf_fn(
         transport_id: TransportId,
         data: Vec<u8>,
-        remote: Arc<RemoteEndpoint>,
+        remote_endpoint: Arc<RemoteEndpoint>,
     ) -> Result<usize, RemoteEndpointError> {
         debug!(
             ">>>> Transport {transport_id} write data to remote: {}",
             pretty_hex::pretty_hex(&data)
         );
-        remote.write_to_remote(data).await
+        remote_endpoint.write_to_remote(data).await
     }
 
     /// Spawn a task to consume the client endpoint receive data buffer
@@ -206,14 +195,7 @@ impl Transport {
         tokio::spawn(async move {
             loop {
                 if closed.load(Ordering::Relaxed) {
-                    Self::close(
-                        transport_id,
-                        &client_endpoint,
-                        &remote_endpoint,
-                        transports_remove_tx,
-                        &closed,
-                    )
-                    .await;
+                    // The transport closed already quite the task
                     break;
                 }
                 client_endpoint.awaiting_recv_buf().await;
@@ -235,24 +217,24 @@ impl Transport {
                     .await;
                     break;
                 };
-                debug!(
-                    ">>>> Transport {transport_id} consume client endpoint receive buffer success."
-                )
             }
         });
     }
 
-    /// Define the consume function
+    /// The concrete function to forward remote receive buffer to client.
+    /// * transport_id: The transportation id.
+    /// * data: The data going to send to remote.
+    /// * client: The client endpoint.
     async fn consume_remote_recv_buf_fn(
         transport_id: TransportId,
         data: Vec<u8>,
-        client: Arc<ClientEndpoint<'_>>,
+        client_endpoint: Arc<ClientEndpoint<'_>>,
     ) -> Result<usize, ClientEndpointError> {
         debug!(
             ">>>> Transport {transport_id} write data to smoltcp: {}",
             pretty_hex::pretty_hex(&data)
         );
-        client.send_to_smoltcp(data).await
+        client_endpoint.send_to_smoltcp(data).await
     }
 
     /// Spawn a task to consume the remote endpoint receive data buffer
@@ -269,14 +251,7 @@ impl Transport {
         tokio::spawn(async move {
             loop {
                 if closed.load(Ordering::Relaxed) {
-                    Self::close(
-                        transport_id,
-                        &client_endpoint,
-                        &remote_endpoint,
-                        transports_remove_tx.clone(),
-                        &closed,
-                    )
-                    .await;
+                    // The transport closed already quite the task
                     break;
                 }
                 remote_endpoint.awaiting_recv_buf().await;
@@ -288,7 +263,6 @@ impl Transport {
                     .await
                 {
                     error!(">>>> Transport {transport_id} fail to consume remote endpoint receive buffer because of error: {e:?}");
-
                     Self::close(
                         transport_id,
                         &client_endpoint,
@@ -297,10 +271,8 @@ impl Transport {
                         &closed,
                     )
                     .await;
+                    break;
                 };
-                debug!(
-                    ">>>> Transport {transport_id} consume remote endpoint receive buffer success."
-                )
             }
         });
     }

@@ -63,7 +63,9 @@ impl<'buf> ClientEndpointCtl<'buf> {
             smoltcp_device,
         }
     }
-    pub(crate) async fn lock<'lock>(&'lock self) -> ClientEndpointCtlLockGuard<'lock, 'buf> {
+    pub(crate) async fn lock<'lock>(
+        &'lock self,
+    ) -> ClientEndpointCtlLockGuard<'lock, 'buf> {
         let smoltcp_device = self.smoltcp_device.lock().await;
         let smoltcp_iface = self.smoltcp_iface.lock().await;
         let smoltcp_socket_set = self.smoltcp_socket_set.lock().await;
@@ -102,8 +104,12 @@ impl<'buf> ClientEndpoint<'buf> {
         config: &'static PpaassVpnServerConfig,
     ) -> Result<ClientEndpoint<'_>, ClientEndpointError> {
         match transport_id.control_protocol {
-            ControlProtocol::Tcp => new_tcp(transport_id, client_output_tx, config),
-            ControlProtocol::Udp => new_udp(transport_id, client_output_tx, config),
+            ControlProtocol::Tcp => {
+                new_tcp(transport_id, client_output_tx, config)
+            }
+            ControlProtocol::Udp => {
+                new_udp(transport_id, client_output_tx, config)
+            }
         }
     }
 
@@ -127,7 +133,8 @@ impl<'buf> ClientEndpoint<'buf> {
                 }
                 let mut recv_buffer = recv_buffer.0.write().await;
                 let recv_buffer_data = recv_buffer.make_contiguous().to_vec();
-                let consume_size = consume_fn(*transport_id, recv_buffer_data, remote).await?;
+                let consume_size =
+                    consume_fn(*transport_id, recv_buffer_data, remote).await?;
                 recv_buffer.drain(..consume_size);
                 Ok(())
             }
@@ -142,7 +149,12 @@ impl<'buf> ClientEndpoint<'buf> {
                 let mut recv_buffer = recv_buffer.0.write().await;
                 let mut consume_size = 0;
                 for udp_data in recv_buffer.iter() {
-                    consume_fn(*transport_id, udp_data.to_vec(), Arc::clone(&remote)).await?;
+                    consume_fn(
+                        *transport_id,
+                        udp_data.to_vec(),
+                        Arc::clone(&remote),
+                    )
+                    .await?;
                     consume_size += 1;
                 }
                 recv_buffer.drain(..consume_size);
@@ -209,7 +221,7 @@ impl<'buf> ClientEndpoint<'buf> {
                     client_output_tx,
                     recv_buffer,
                 )
-                .await;
+                .await
             }
             Self::Udp {
                 transport_id,
@@ -227,9 +239,9 @@ impl<'buf> ClientEndpoint<'buf> {
                     client_output_tx,
                     recv_buffer,
                 )
-                .await;
+                .await
             }
-        };
+        }
     }
 
     pub(crate) async fn close(&self) {
@@ -242,8 +254,13 @@ impl<'buf> ClientEndpoint<'buf> {
                 recv_buffer,
                 ..
             } => {
-                close_client_tcp(ctl, *smoltcp_socket_handle, *transport_id, client_output_tx)
-                    .await;
+                close_client_tcp(
+                    ctl,
+                    *smoltcp_socket_handle,
+                    *transport_id,
+                    client_output_tx,
+                )
+                .await;
                 recv_buffer.1.notify_waiters();
             }
             Self::Udp {
@@ -261,8 +278,12 @@ impl<'buf> ClientEndpoint<'buf> {
 
     pub(crate) async fn awaiting_recv_buf(&self) {
         match self {
-            ClientEndpoint::Tcp { recv_buffer, .. } => recv_buffer.1.notified().await,
-            ClientEndpoint::Udp { recv_buffer, .. } => recv_buffer.1.notified().await,
+            ClientEndpoint::Tcp { recv_buffer, .. } => {
+                recv_buffer.1.notified().await
+            }
+            ClientEndpoint::Udp { recv_buffer, .. } => {
+                recv_buffer.1.notified().await
+            }
         }
     }
 }

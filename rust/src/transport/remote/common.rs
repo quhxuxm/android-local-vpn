@@ -4,7 +4,10 @@ use crate::{
     config::PpaassVpnServerConfig,
     error::RemoteEndpointError,
     transport::{value::InternetProtocol, ControlProtocol, TransportId},
-    util::{protect_socket, AgentPpaassMessagePayloadEncryptionSelector, AgentRsaCryptoFetcher},
+    util::{
+        protect_socket, AgentPpaassMessagePayloadEncryptionSelector,
+        AgentRsaCryptoFetcher,
+    },
 };
 use anyhow::anyhow;
 use dns_parser::Packet as DnsPacket;
@@ -15,8 +18,9 @@ use ppaass_common::{
     proxy::PpaassProxyConnection,
     tcp::{ProxyTcpData, ProxyTcpInit, ProxyTcpInitResultType},
     udp::UdpData,
-    PpaassMessageGenerator, PpaassMessagePayloadEncryptionSelector, PpaassMessageProxyPayloadType,
-    PpaassProxyMessage, PpaassProxyMessagePayload,
+    PpaassMessageGenerator, PpaassMessagePayloadEncryptionSelector,
+    PpaassMessageProxyPayloadType, PpaassProxyMessage,
+    PpaassProxyMessagePayload,
 };
 use tokio::sync::RwLock;
 use tokio::{
@@ -25,7 +29,8 @@ use tokio::{
 };
 
 use super::{
-    ProxyConnectionRead, ProxyConnectionWrite, RemoteEndpoint, RemoteTcpRecvBuf, RemoteUdpRecvBuf,
+    ProxyConnectionRead, ProxyConnectionWrite, RemoteEndpoint,
+    RemoteTcpRecvBuf, RemoteUdpRecvBuf,
 };
 
 pub(crate) async fn write_to_remote_udp(
@@ -34,10 +39,11 @@ pub(crate) async fn write_to_remote_udp(
     transport_id: &TransportId,
     proxy_connection_write: &Mutex<ProxyConnectionWrite>,
 ) -> Result<usize, RemoteEndpointError> {
-    let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(
-        config.get_user_token(),
-        Some(generate_uuid().into_bytes()),
-    );
+    let payload_encryption =
+        AgentPpaassMessagePayloadEncryptionSelector::select(
+            config.get_user_token(),
+            Some(generate_uuid().into_bytes()),
+        );
     debug!(
         ">>>> Transport {transport_id}, [UDP PROCESS] send udp data to remote: {}",
         pretty_hex::pretty_hex(&data)
@@ -64,10 +70,11 @@ pub(crate) async fn write_to_remote_tcp(
     transport_id: &TransportId,
     proxy_connection_write: &Mutex<ProxyConnectionWrite>,
 ) -> Result<usize, RemoteEndpointError> {
-    let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(
-        config.get_user_token(),
-        Some(generate_uuid().into_bytes()),
-    );
+    let payload_encryption =
+        AgentPpaassMessagePayloadEncryptionSelector::select(
+            config.get_user_token(),
+            Some(generate_uuid().into_bytes()),
+        );
     let data_len = data.len();
     let tcp_data = PpaassMessageGenerator::generate_agent_tcp_data_message(
         config.get_user_token(),
@@ -167,14 +174,23 @@ pub(crate) async fn new_tcp(
     };
     let raw_socket_fd = tcp_socket.as_raw_fd();
     protect_socket(transport_id, raw_socket_fd)?;
-    let proxy_connection =
-        init_proxy_connection(tcp_socket, transport_id, agent_rsa_crypto_fetcher, config).await?;
-    let (proxy_connection_write, proxy_connection_read) = proxy_connection.split();
+    let proxy_connection = init_proxy_connection(
+        tcp_socket,
+        transport_id,
+        agent_rsa_crypto_fetcher,
+        config,
+    )
+    .await?;
+    let (proxy_connection_write, proxy_connection_read) =
+        proxy_connection.split();
     Ok(RemoteEndpoint::Tcp {
         transport_id,
         proxy_connection_read: Mutex::new(proxy_connection_read),
         proxy_connection_write: Mutex::new(proxy_connection_write),
-        recv_buffer: Arc::new((RwLock::new(VecDeque::with_capacity(65536)), Notify::new())),
+        recv_buffer: Arc::new((
+            RwLock::new(VecDeque::with_capacity(65536)),
+            Notify::new(),
+        )),
         config,
     })
 }
@@ -191,14 +207,23 @@ pub(crate) async fn new_udp(
     };
     let raw_socket_fd = tcp_socket.as_raw_fd();
     protect_socket(transport_id, raw_socket_fd)?;
-    let proxy_connection =
-        init_proxy_connection(tcp_socket, transport_id, agent_rsa_crypto_fetcher, config).await?;
-    let (proxy_connection_write, proxy_connection_read) = proxy_connection.split();
+    let proxy_connection = init_proxy_connection(
+        tcp_socket,
+        transport_id,
+        agent_rsa_crypto_fetcher,
+        config,
+    )
+    .await?;
+    let (proxy_connection_write, proxy_connection_read) =
+        proxy_connection.split();
     Ok(RemoteEndpoint::Udp {
         transport_id,
         proxy_connection_read: Mutex::new(proxy_connection_read),
         proxy_connection_write: Mutex::new(proxy_connection_write),
-        recv_buffer: Arc::new((RwLock::new(VecDeque::with_capacity(65536)), Notify::new())),
+        recv_buffer: Arc::new((
+            RwLock::new(VecDeque::with_capacity(65536)),
+            Notify::new(),
+        )),
         config,
     })
 }
@@ -210,16 +235,19 @@ async fn init_proxy_connection(
     agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
     config: &'static PpaassVpnServerConfig,
 ) -> Result<
-    PpaassProxyConnection<'static, TcpStream, AgentRsaCryptoFetcher, TransportId>,
+    PpaassProxyConnection<
+        'static,
+        TcpStream,
+        AgentRsaCryptoFetcher,
+        TransportId,
+    >,
     RemoteEndpointError,
 > {
     let proxy_addresses = config.get_proxy_address();
     let proxy_tcp_stream = tcp_socket
-        .connect(
-            proxy_addresses
-                .parse()
-                .map_err(|e| anyhow!("Faill to parse proxy address because of error: {e:?}"))?,
-        )
+        .connect(proxy_addresses.parse().map_err(|e| {
+            anyhow!("Faill to parse proxy address because of error: {e:?}")
+        })?)
         .await?;
     let mut proxy_connection = PpaassProxyConnection::new(
         transport_id,
@@ -228,18 +256,20 @@ async fn init_proxy_connection(
         true,
         config.get_proxy_connection_buffer_size(),
     );
-    let payload_encryption = AgentPpaassMessagePayloadEncryptionSelector::select(
-        config.get_user_token(),
-        Some(generate_uuid().into_bytes()),
-    );
+    let payload_encryption =
+        AgentPpaassMessagePayloadEncryptionSelector::select(
+            config.get_user_token(),
+            Some(generate_uuid().into_bytes()),
+        );
 
     if let ControlProtocol::Tcp = transport_id.control_protocol {
-        let tcp_init_request = PpaassMessageGenerator::generate_agent_tcp_init_message(
-            config.get_user_token(),
-            transport_id.source.into(),
-            transport_id.destination.into(),
-            payload_encryption,
-        )?;
+        let tcp_init_request =
+            PpaassMessageGenerator::generate_agent_tcp_init_message(
+                config.get_user_token(),
+                transport_id.source.into(),
+                transport_id.destination.into(),
+                payload_encryption,
+            )?;
         proxy_connection.send(tcp_init_request).await?;
         let PpaassProxyMessage {
             payload:
@@ -248,10 +278,9 @@ async fn init_proxy_connection(
                     data: proxy_msg_payload_data,
                 },
             ..
-        } = proxy_connection
-            .next()
-            .await
-            .ok_or(anyhow!("Transport {transport_id} nothing read from proxy."))??;
+        } = proxy_connection.next().await.ok_or(anyhow!(
+            "Transport {transport_id} nothing read from proxy."
+        ))??;
 
         let tcp_init_response = match proxy_msg_payload_type {
             PpaassMessageProxyPayloadType::TcpInit => {
@@ -275,7 +304,9 @@ async fn init_proxy_connection(
             }
             ProxyTcpInitResultType::Fail => {
                 error!(">>>> Transport {transport_id} fail to initialize proxy tcp connection.");
-                return Err(anyhow!("Fail to initialize proxy tcp connection").into());
+                return Err(
+                    anyhow!("Fail to initialize proxy tcp connection").into()
+                );
             }
         }
     }

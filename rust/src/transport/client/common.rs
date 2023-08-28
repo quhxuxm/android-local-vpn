@@ -2,8 +2,8 @@ use log::error;
 use std::{collections::VecDeque, sync::Arc};
 
 use crate::{
-    config::PpaassVpnServerConfig, device::SmoltcpDevice, error::ClientEndpointError,
-    util::ClientOutputPacket,
+    config::PpaassVpnServerConfig, device::SmoltcpDevice,
+    error::ClientEndpointError, util::ClientOutputPacket,
 };
 
 use anyhow::anyhow;
@@ -18,10 +18,12 @@ use smoltcp::{
 };
 
 use crate::transport::TransportId;
-use smoltcp::socket::tcp::{Socket as SmoltcpTcpSocket, SocketBuffer as SmoltcpTcpSocketBuffer};
+use smoltcp::socket::tcp::{
+    Socket as SmoltcpTcpSocket, SocketBuffer as SmoltcpTcpSocketBuffer,
+};
 use smoltcp::socket::udp::{
-    PacketBuffer as SmoltcpUdpSocketBuffer, PacketMetadata as SmoltcpUdpPacketMetadata,
-    Socket as SmoltcpUdpSocket,
+    PacketBuffer as SmoltcpUdpSocketBuffer,
+    PacketMetadata as SmoltcpUdpPacketMetadata, Socket as SmoltcpUdpSocket,
 };
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
@@ -29,8 +31,8 @@ use smoltcp::iface::SocketSet;
 use tokio::sync::{mpsc::Sender, Mutex, Notify, RwLock};
 
 use super::{
-    ClientEndpoint, ClientEndpointCtl, ClientEndpointCtlLockGuard, ClientTcpRecvBuf,
-    ClientUdpRecvBuf,
+    ClientEndpoint, ClientEndpointCtl, ClientEndpointCtlLockGuard,
+    ClientTcpRecvBuf, ClientUdpRecvBuf,
 };
 
 static DEFAULT_GATEWAY_IPV4_ADDR: Ipv4Address = Ipv4Address::new(0, 0, 0, 1);
@@ -41,7 +43,8 @@ pub(crate) fn prepare_smoltcp_iface_and_device(
     let mut interface_config = Config::new(HardwareAddress::Ip);
     interface_config.random_seed = rand::random::<u64>();
     let mut vpn_device = SmoltcpDevice::new(transport_id);
-    let mut interface = Interface::new(interface_config, &mut vpn_device, Instant::now());
+    let mut interface =
+        Interface::new(interface_config, &mut vpn_device, Instant::now());
     interface.set_any_ip(true);
     interface.update_ip_addrs(|ip_addrs| {
         if let Err(e) = ip_addrs.push(IpCidr::new(IpAddress::v4(0, 0, 0, 1), 0)) {
@@ -64,15 +67,25 @@ pub(crate) fn create_smoltcp_tcp_socket<'a>(
     config: &PpaassVpnServerConfig,
 ) -> Result<SmoltcpTcpSocket<'a>, ClientEndpointError> {
     let mut socket = SmoltcpTcpSocket::new(
-        SmoltcpTcpSocketBuffer::new(vec![0; config.get_smoltcp_tcp_rx_buffer_size()]),
-        SmoltcpTcpSocketBuffer::new(vec![0; config.get_smoltcp_tcp_tx_buffer_size()]),
+        SmoltcpTcpSocketBuffer::new(vec![
+            0;
+            config
+                .get_smoltcp_tcp_rx_buffer_size()
+        ]),
+        SmoltcpTcpSocketBuffer::new(vec![
+            0;
+            config
+                .get_smoltcp_tcp_tx_buffer_size()
+        ]),
     );
     socket.listen(transport_id.destination)?;
     socket.set_ack_delay(None);
     Ok(socket)
 }
 
-pub(crate) fn create_smoltcp_udp_socket<'a>(trans_id: TransportId) -> Result<SmoltcpUdpSocket<'a>> {
+pub(crate) fn create_smoltcp_udp_socket<'a>(
+    trans_id: TransportId,
+) -> Result<SmoltcpUdpSocket<'a>> {
     let mut socket = SmoltcpUdpSocket::new(
         SmoltcpUdpSocketBuffer::new(
             // vec![UdpPacketMetadata::EMPTY, UdpPacketMetadata::EMPTY],
@@ -98,7 +111,8 @@ pub(crate) fn new_tcp(
     client_output_tx: Sender<ClientOutputPacket>,
     config: &'static PpaassVpnServerConfig,
 ) -> Result<ClientEndpoint<'_>, ClientEndpointError> {
-    let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
+    let (smoltcp_iface, smoltcp_device) =
+        prepare_smoltcp_iface_and_device(transport_id)?;
     let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1));
     let smoltcp_tcp_socket = create_smoltcp_tcp_socket(transport_id, config)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_tcp_socket);
@@ -128,7 +142,8 @@ pub(crate) fn new_udp(
     client_output_tx: Sender<ClientOutputPacket>,
     config: &'static PpaassVpnServerConfig,
 ) -> Result<ClientEndpoint<'_>, ClientEndpointError> {
-    let (smoltcp_iface, smoltcp_device) = prepare_smoltcp_iface_and_device(transport_id)?;
+    let (smoltcp_iface, smoltcp_device) =
+        prepare_smoltcp_iface_and_device(transport_id)?;
     let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1));
     let smoltcp_udp_socket = create_smoltcp_udp_socket(transport_id)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_udp_socket);
@@ -189,7 +204,8 @@ pub(crate) async fn close_client_tcp(
         mut smoltcp_iface,
         mut smoltcp_device,
     } = ctl.lock().await;
-    let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
+    let smoltcp_socket =
+        smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
     smoltcp_socket.close();
     poll_and_transfer_smoltcp_data_to_client(
         transport_id,
@@ -234,7 +250,8 @@ pub(crate) async fn send_to_client_tcp(
         mut smoltcp_iface,
         mut smoltcp_device,
     } = ctl.lock().await;
-    let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
+    let smoltcp_socket =
+        smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
     if smoltcp_socket.may_send() {
         let send_result = smoltcp_socket.send_slice(&data).map_err(|e| {
             error!("<<<< Transport {transport_id} fail to transfer remote tcp recv buffer data to smoltcp because of error: {e:?}");
@@ -265,7 +282,8 @@ pub(crate) async fn send_to_client_udp(
         mut smoltcp_iface,
         mut smoltcp_device,
     } = ctl.lock().await;
-    let smoltcp_socket = smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
+    let smoltcp_socket =
+        smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
     if smoltcp_socket.can_send() {
         let mut udp_packet_meta = PacketMeta::default();
         udp_packet_meta.id = rand::random::<u32>();
@@ -317,8 +335,8 @@ pub(crate) async fn recv_from_client_tcp(
     )
     .await
     {
-        let smoltcp_tcp_socket =
-            smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
+        let smoltcp_tcp_socket = smoltcp_socket_set
+            .get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
         while smoltcp_tcp_socket.may_recv() {
             let mut tcp_data = [0u8; 65536];
             let tcp_data = match smoltcp_tcp_socket.recv_slice(&mut tcp_data) {
@@ -360,8 +378,8 @@ pub(crate) async fn recv_from_client_udp(
     )
     .await
     {
-        let smoltcp_udp_socket =
-            smoltcp_socket_set.get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
+        let smoltcp_udp_socket = smoltcp_socket_set
+            .get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
         while smoltcp_udp_socket.can_recv() {
             let mut udp_data = [0u8; 65535];
             let udp_data = match smoltcp_udp_socket.recv_slice(&mut udp_data) {

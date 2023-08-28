@@ -17,7 +17,10 @@ use tokio::{
 };
 use tokio::{sync::mpsc::channel, task::yield_now};
 
-use crate::{config::PpaassVpnServerConfig, transport::Transports, util::ClientOutputPacket};
+use crate::{
+    config::PpaassVpnServerConfig, transport::Transports,
+    util::ClientOutputPacket,
+};
 use crate::{
     transport::{Transport, TransportId},
     util::AgentRsaCryptoFetcher,
@@ -32,7 +35,10 @@ pub(crate) struct PpaassVpnServer {
 }
 
 impl PpaassVpnServer {
-    pub(crate) fn new(file_descriptor: i32, config: &'static PpaassVpnServerConfig) -> Self {
+    pub(crate) fn new(
+        file_descriptor: i32,
+        config: &'static PpaassVpnServerConfig,
+    ) -> Self {
         Self {
             config,
             file_descriptor,
@@ -41,7 +47,9 @@ impl PpaassVpnServer {
         }
     }
 
-    fn init_async_runtime(config: &PpaassVpnServerConfig) -> Result<TokioRuntime> {
+    fn init_async_runtime(
+        config: &PpaassVpnServerConfig,
+    ) -> Result<TokioRuntime> {
         let mut runtime_builder = TokioRuntimeBuilder::new_multi_thread();
         runtime_builder.worker_threads(config.get_thread_number());
         runtime_builder.enable_all();
@@ -58,8 +66,10 @@ impl PpaassVpnServer {
         let runtime = Self::init_async_runtime(self.config)?;
         let file_descriptor = self.file_descriptor;
         let client_file_read = unsafe { File::from_raw_fd(file_descriptor) };
-        let mut client_file_write = unsafe { File::from_raw_fd(file_descriptor) };
-        let (client_output_tx, mut client_output_rx) = channel::<ClientOutputPacket>(1024);
+        let mut client_file_write =
+            unsafe { File::from_raw_fd(file_descriptor) };
+        let (client_output_tx, mut client_output_rx) =
+            channel::<ClientOutputPacket>(1024);
 
         let ppaass_server_config = self.config;
         let closed = Arc::clone(&self.closed);
@@ -76,9 +86,9 @@ impl PpaassVpnServer {
             Ok::<(), AnyhowError>(())
         });
         runtime.spawn(async move {
-            while let Some(client_outpu_packet) = client_output_rx.recv().await {
-                let transport_id = client_outpu_packet.transport_id;
-                if let Err(e) = client_file_write.write_all(&client_outpu_packet.data) {
+            while let Some(client_output_packet) = client_output_rx.recv().await {
+                let transport_id = client_output_packet.transport_id;
+                if let Err(e) = client_file_write.write_all(&client_output_packet.data) {
                     error!("<<<< Transport {transport_id} fail to write client output packet because of error: {e:?}");
                 };
             }
@@ -99,13 +109,17 @@ impl PpaassVpnServer {
     ) {
         let transports = Arc::new(Mutex::new(Transports::default()));
         let mut client_rx_buffer = [0u8; 65536];
-        let (transports_remove_tx, mut transports_remove_rx) = channel::<TransportId>(1024);
+        let (transports_remove_tx, mut transports_remove_rx) =
+            channel::<TransportId>(1024);
         {
             let transports = transports.clone();
             tokio::spawn(async move {
-                while let Some(transport_id) = transports_remove_rx.recv().await {
+                while let Some(transport_id) = transports_remove_rx.recv().await
+                {
                     let mut transports = transports.lock().await;
+                    error!("###### Before remove transport {transport_id} from proxy server, current transports number: {}", transports.len());
                     transports.remove(&transport_id);
+                    error!("###### After remove transport {transport_id} from proxy server, current transports number: {}", transports.len());
                 }
             });
         }
@@ -114,7 +128,8 @@ impl PpaassVpnServer {
                 info!("Close vpn server, going to quite.");
                 break;
             }
-            let client_data = match client_file_read.read(&mut client_rx_buffer) {
+            let client_data = match client_file_read.read(&mut client_rx_buffer)
+            {
                 Ok(0) => {
                     error!("Nothing to read from client file break the loop.");
                     break;
@@ -126,7 +141,9 @@ impl PpaassVpnServer {
                     continue;
                 }
                 Err(e) => {
-                    error!("Fail to read client file data because of error: {e:?}");
+                    error!(
+                        "Fail to read client file data because of error: {e:?}"
+                    );
                     break;
                 }
             };
@@ -154,13 +171,18 @@ impl PpaassVpnServer {
                     let transports_remove_tx = transports_remove_tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = transport
-                            .exec(agent_rsa_crypto_fetcher, config, transports_remove_tx)
+                            .exec(
+                                agent_rsa_crypto_fetcher,
+                                config,
+                                transports_remove_tx,
+                            )
                             .await
                         {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
                         };
                     });
-                    if client_input_tx.send(client_data.to_vec()).await.is_err() {
+                    if client_input_tx.send(client_data.to_vec()).await.is_err()
+                    {
                         error!("Transport {transport_id} closed already, can not send client data to transport");
                         continue;
                     };
