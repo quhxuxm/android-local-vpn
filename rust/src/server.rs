@@ -109,19 +109,7 @@ impl PpaassVpnServer {
     ) {
         let transports = Arc::new(Mutex::new(Transports::default()));
         let mut client_rx_buffer = [0u8; 65536];
-        let (transports_remove_tx, mut transports_remove_rx) =
-            channel::<TransportId>(1024);
-        {
-            let transports = transports.clone();
-            tokio::spawn(async move {
-                while let Some(transport_id) = transports_remove_rx.recv().await
-                {
-                    let mut transports = transports.lock().await;
-                    let transport = transports.remove(&transport_id);
-                    info!("###### Remove transport {transport_id} from proxy server, current transports number: {}, removed transport details: [{transport:?}]", transports.len());
-                }
-            });
-        }
+
         loop {
             if closed.load(Ordering::Relaxed) {
                 info!("Close vpn server, going to quite.");
@@ -158,8 +146,8 @@ impl PpaassVpnServer {
                 }
             };
 
-            let mut transports = transports.lock().await;
-            match transports.entry(transport_id) {
+            let mut transports_lock = transports.lock().await;
+            match transports_lock.entry(transport_id) {
                 Entry::Occupied(entry) => {
                     debug!(">>>> Found existing transport {transport_id}.");
                     if entry.get().send(client_data.to_vec()).await.is_err() {
@@ -168,16 +156,15 @@ impl PpaassVpnServer {
                     };
                 }
                 Entry::Vacant(entry) => {
-                    let (transport, client_input_tx) =
-                        Transport::new(transport_id, client_output_tx.clone());
-                    let transports_remove_tx = transports_remove_tx.clone();
+                    let (transport, client_input_tx) = Transport::new(
+                        transport_id,
+                        client_output_tx.clone(),
+                        Arc::clone(&transports),
+                    );
+
                     tokio::spawn(async move {
                         if let Err(e) = transport
-                            .exec(
-                                agent_rsa_crypto_fetcher,
-                                config,
-                                transports_remove_tx,
-                            )
+                            .exec(agent_rsa_crypto_fetcher, config)
                             .await
                         {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");

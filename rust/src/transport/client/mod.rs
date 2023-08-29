@@ -12,6 +12,7 @@ use smoltcp::{
 };
 use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, Notify, RwLock};
 
+use crate::transport::client::common::abort_client_tcp;
 use crate::{config::PpaassVpnServerConfig, util::ClientOutputPacket};
 use crate::{device::SmoltcpDevice, error::RemoteEndpointError};
 use crate::{error::ClientEndpointError, transport::ControlProtocol};
@@ -64,6 +65,7 @@ impl<'buf> ClientEndpointCtl<'buf> {
     }
 }
 
+#[derive(Debug)]
 pub(crate) enum ClientEndpointState {
     Tcp(State),
     Udp(bool),
@@ -269,6 +271,37 @@ impl<'buf> ClientEndpoint<'buf> {
         }
     }
 
+    pub(crate) async fn abort(&self) {
+        match self {
+            Self::Tcp {
+                transport_id,
+                smoltcp_socket_handle,
+                ctl,
+                client_output_tx,
+                recv_buffer,
+                ..
+            } => {
+                abort_client_tcp(
+                    ctl,
+                    *smoltcp_socket_handle,
+                    *transport_id,
+                    client_output_tx,
+                )
+                .await;
+                recv_buffer.1.notify_waiters();
+            }
+            Self::Udp {
+                transport_id,
+                ctl,
+                client_output_tx,
+                recv_buffer,
+                ..
+            } => {
+                close_client_udp(ctl, *transport_id, client_output_tx).await;
+                recv_buffer.1.notify_waiters();
+            }
+        }
+    }
     pub(crate) async fn close(&self) {
         match self {
             Self::Tcp {

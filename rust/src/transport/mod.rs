@@ -2,6 +2,7 @@ mod client;
 mod remote;
 mod value;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -9,7 +10,7 @@ use log::{debug, error, info};
 
 use smoltcp::socket::tcp::State;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::sync::Notify;
+use tokio::sync::Mutex;
 
 use self::client::ClientEndpoint;
 pub(crate) use self::value::ControlProtocol;
@@ -28,14 +29,15 @@ pub(crate) struct Transport {
     transport_id: TransportId,
     client_output_tx: Sender<ClientOutputPacket>,
     client_input_rx: Receiver<Vec<u8>>,
-    client_endpoint_close_notify: Arc<Notify>,
-    remote_endpoint_close_notify: Arc<Notify>,
+    remote_data_exhausted: Arc<AtomicBool>,
+    transports: Arc<Mutex<Transports>>,
 }
 
 impl Transport {
     pub(crate) fn new(
         transport_id: TransportId,
         client_output_tx: Sender<ClientOutputPacket>,
+        transports: Arc<Mutex<Transports>>,
     ) -> (Self, Sender<Vec<u8>>) {
         let (client_input_tx, client_input_rx) = channel::<Vec<u8>>(1024);
         (
@@ -43,8 +45,8 @@ impl Transport {
                 transport_id,
                 client_output_tx,
                 client_input_rx,
-                client_endpoint_close_notify: Arc::new(Notify::new()),
-                remote_endpoint_close_notify: Arc::new(Notify::new()),
+                remote_data_exhausted: Arc::new(AtomicBool::new(false)),
+                transports,
             },
             client_input_tx,
         )
@@ -54,7 +56,6 @@ impl Transport {
         mut self,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
-        transports_remove_tx: Sender<TransportId>,
     ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
         let client_endpoint = match ClientEndpoint::new(
@@ -94,106 +95,107 @@ impl Transport {
 
         Self::spawn_read_remote_task(
             transport_id,
+            Arc::clone(&client_endpoint),
             Arc::clone(&remote_endpoint),
-            Arc::clone(&self.client_endpoint_close_notify),
-            Arc::clone(&self.remote_endpoint_close_notify),
+            Arc::clone(&self.remote_data_exhausted),
+            transports_remove_tx.clone(),
         );
         Self::spawn_consume_client_recv_buf_task(
             transport_id,
             Arc::clone(&remote_endpoint),
             Arc::clone(&client_endpoint),
-            Arc::clone(&self.client_endpoint_close_notify),
-            Arc::clone(&self.remote_endpoint_close_notify),
         );
         Self::spawn_consume_remote_recv_buf_task(
             transport_id,
             Arc::clone(&client_endpoint),
             Arc::clone(&remote_endpoint),
-            Arc::clone(&self.client_endpoint_close_notify),
-            Arc::clone(&self.remote_endpoint_close_notify),
+            Arc::clone(&self.remote_data_exhausted),
         );
 
-        loop {
-            tokio::select! {
-                Some(client_data) = self.client_input_rx.recv() => {
-                    match client_endpoint.receive_from_client(client_data).await{
-                        Ok(()) => {
-                            let client_endpoint_state = client_endpoint.get_state().await;
-                            match client_endpoint_state{
-                                ClientEndpointState::Tcp(State::Closed)=>{
-                                    if let Err(e) = transports_remove_tx.send(transport_id).await {
-                                        error!(">>>> Transport {transport_id} fail to send remove message because of error: {e:?}")
-                                    };
-                                    info!("###### Transport {transport_id} closed");
-                                    return Ok(());
-                                }
-                                ClientEndpointState::Tcp(_)=>{
-                                    continue;
-                                }
-                                ClientEndpointState::Udp(true)=>{
-                                    continue;
-                                }
-                                ClientEndpointState::Udp(false)=>{
-                                    if let Err(e) = transports_remove_tx.send(transport_id).await {
-                                        error!(">>>> Transport {transport_id} fail to send remove message because of error: {e:?}")
-                                    };
-                                    info!("###### Transport {transport_id} closed");
-                                    return Ok(());
-                                }
-                            }
-                        },
-                        Err(e) => {
-                            error!(">>>> Transport {transport_id} fail to receive client data from smoltcp because of error: {e:?}");
-                            client_endpoint.close().await;
-                            remote_endpoint.close().await;
-                            if let Err(e) = transports_remove_tx.send(transport_id).await {
-                                error!(">>>> Transport {transport_id} fail to send remove message because of error: {e:?}")
+        while let Some(client_data) = self.client_input_rx.recv().await {
+            // Push the data into smoltcp stack.
+            match client_endpoint.receive_from_client(client_data).await {
+                Ok(()) => {
+                    //Check the tcp connection state because of the ip packet just pass through the smoltcp stack
+                    let client_endpoint_state =
+                        client_endpoint.get_state().await;
+                    match client_endpoint_state {
+                        ClientEndpointState::Tcp(State::Closed) => {
+                            // The tcp connection is closed we should remove the transport from the repository because of no data will come again.
+                            if let Err(e) =
+                                transports_remove_tx.send(transport_id).await
+                            {
+                                error!(">>>> Transport {transport_id} fail to send remove tcp transport message because of error: {e:?}");
                             };
-                            return Err(AgentError::ClientEndpoint(ClientEndpointError::Other(anyhow!(e))));
-                        },
-                    };
+                            info!("###### Transport {transport_id} tcp connection in Closed state, remove it from repository.");
+                            return Ok(());
+                        }
+                        ClientEndpointState::Udp(false) => {
+                            // The udp connection is closed, we should remove the transport from the repository because of no data will come again.
+                            if let Err(e) =
+                                transports_remove_tx.send(transport_id).await
+                            {
+                                error!(">>>> Transport {transport_id} fail to send remove udp transport message because of error: {e:?}")
+                            };
+                            info!("###### Transport {transport_id} udp connection is closed, remove it from repository.");
+                            return Ok(());
+                        }
+                        _ =>
+                        //For other case we just continue, even for tcp CloseWait and LastAck because of the smoltcp stack should handle the tcp packet.
+                        {
+                            continue
+                        }
+                    }
                 }
-                _ = self.client_endpoint_close_notify.notified() => {
-                    client_endpoint.close().await;
-                    remote_endpoint.close().await;
-                    if let Err(e) = transports_remove_tx.send(transport_id).await {
-                        error!(">>>> Transport {transport_id} fail to send remove message because of error: {e:?}")
+                Err(e) => {
+                    error!(">>>> Transport {transport_id} error happen when receive client data from smoltcp stack, abort the connection, and remove the tcp connection from the repository: {e:?}");
+                    client_endpoint.abort().await;
+                    if let Err(e) =
+                        transports_remove_tx.send(transport_id).await
+                    {
+                        error!(">>>> Transport {transport_id} fail to send remove transport message because of error: {e:?}");
                     };
-                    return Ok(());
+                    return Err(AgentError::ClientEndpoint(
+                        ClientEndpointError::Other(anyhow!(e)),
+                    ));
                 }
-            }
+            };
         }
+        Ok(())
     }
 
     /// Spawn a task to read remote data
     fn spawn_read_remote_task<'b>(
         transport_id: TransportId,
+        client_endpoint: Arc<ClientEndpoint<'b>>,
         remote_endpoint: Arc<RemoteEndpoint>,
-        client_endpoint_close_notify: Arc<Notify>,
-        remote_endpoint_close_notify: Arc<Notify>,
+        remote_data_exhausted: Arc<AtomicBool>,
+        transports_remove_tx: Sender<TransportId>,
     ) where
         'b: 'static,
     {
         tokio::spawn(async move {
             loop {
-                tokio::select! {
-                    remote_read_result = remote_endpoint.read_from_remote() => {
-                        match remote_read_result {
-                            Ok(false) => continue,
-                            Ok(true) => {
-                                client_endpoint_close_notify.notify_waiters();
-                                return;
-                            }
-                            Err(e) => {
-                                error!(">>>> Transport {transport_id} error happen on read remote data: {e:?}");
-                                remote_endpoint_close_notify.notify_waiters();
-                                client_endpoint_close_notify.notify_waiters();
-                                return;
-                            }
+                match remote_endpoint.read_from_remote().await {
+                    Ok(false) =>
+                    // Remote endpoint still have data to read
+                    {
+                        continue
+                    }
+                    Ok(true) => {
+                        // No data from remote endpoint anymore
+                        remote_data_exhausted.swap(true, Ordering::Relaxed);
+                        return;
+                    }
+                    Err(e) => {
+                        error!(">>>> Transport {transport_id} error happen on read remote data: {e:?}");
+                        client_endpoint.abort().await;
+                        remote_endpoint.close().await;
+                        if let Err(e) =
+                            transports_remove_tx.send(transport_id).await
+                        {
+                            error!(">>>> Transport {transport_id} fail to send remove transport message because of error: {e:?}");
                         };
-                    },
-                    _ = remote_endpoint_close_notify.notified() => {
-                        client_endpoint_close_notify.notify_waiters();
                         return;
                     }
                 }
@@ -222,29 +224,41 @@ impl Transport {
         transport_id: TransportId,
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
-        client_endpoint_close_notify: Arc<Notify>,
-        remote_endpoint_close_notify: Arc<Notify>,
     ) where
         'b: 'static,
     {
         // Spawn a task for output data to client
         tokio::spawn(async move {
             loop {
-                tokio::select! {
-                    _ = client_endpoint.awaiting_recv_buf() => {
-                        // Send the client endpoint receive buffer to remote
-                        if let Err(e) = client_endpoint.consume_recv_buffer(Arc::clone(&remote_endpoint),
-                            Self::consume_client_recv_buf_fn).await {
-                            error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer because of error: {e:?}");
-                            remote_endpoint_close_notify.notify_waiters();
-                            return;
-                        };
-                    },
-                    _ = remote_endpoint_close_notify.notified() => {
-                        client_endpoint_close_notify.notify_waiters();
-                        return;
-                    }
+                client_endpoint.awaiting_recv_buf().await;
+                // Send the client endpoint receive buffer to remote
+                if let Err(e) = client_endpoint
+                    .consume_recv_buffer(
+                        Arc::clone(&remote_endpoint),
+                        Self::consume_client_recv_buf_fn,
+                    )
+                    .await
+                {
+                    error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer because of error: {e:?}");
+                    remote_endpoint.close().await;
+                    return;
                 };
+
+                match client_endpoint.get_state().await {
+                    state @ ClientEndpointState::Tcp(State::CloseWait)
+                    | state @ ClientEndpointState::Tcp(State::LastAck)
+                    | state @ ClientEndpointState::Tcp(State::Closed) => {
+                        // No more tcp data will send to remote, close the remote endpoint.
+                        info!("###### Transport {transport_id} tcp client endpoint in {state:?} state, close the remote endpoint because of no client data anymore.");
+                        remote_endpoint.close().await;
+                    }
+                    ClientEndpointState::Udp(false) => {
+                        // No more udp data will send to remote, close the remote endpoint.
+                        info!("###### Transport {transport_id} udp client endpoint closed, close the remote endpoint because of no client data anymore.");
+                        remote_endpoint.close().await;
+                    }
+                    _ => continue,
+                }
             }
         });
     }
@@ -270,34 +284,30 @@ impl Transport {
         transport_id: TransportId,
         client_endpoint: Arc<ClientEndpoint<'b>>,
         remote_endpoint: Arc<RemoteEndpoint>,
-        client_endpoint_close_notify: Arc<Notify>,
-        remote_endpoint_close_notify: Arc<Notify>,
+        remote_data_exhausted: Arc<AtomicBool>,
     ) where
         'b: 'static,
     {
         // Spawn a task for output data to client
         tokio::spawn(async move {
             loop {
-                tokio::select! {
-                    _ = remote_endpoint.awaiting_recv_buf() => {
-                         // Send the remote endpoint receive buffer to client
-                        if let Err(e) = remote_endpoint.consume_recv_buffer(Arc::clone(&client_endpoint),
-                            Self::consume_remote_recv_buf_fn).await {
-                            error!(">>>> Transport {transport_id} fail to consume remote endpoint receive buffer because of error, close client endpoint: {e:?}");
-                            client_endpoint_close_notify.notify_waiters();
-                            return;
-                        };
-                        // if remote_endpoint.is_no_more_remote_data() {
-                        //     // No remote data in the remote receive buffer, notify client endpoint to close.
-                        //     client_endpoint_close_notify.notify_waiters();
-                        //     return;
-                        // }
-                    },
-                    _ = client_endpoint_close_notify.notified() => {
-                        remote_endpoint_close_notify.notify_waiters();
-                        return;
-                    }
+                remote_endpoint.awaiting_recv_buf().await;
+                // Send the remote endpoint receive buffer to client
+                if let Err(e) = remote_endpoint
+                    .consume_recv_buffer(
+                        Arc::clone(&client_endpoint),
+                        Self::consume_remote_recv_buf_fn,
+                    )
+                    .await
+                {
+                    error!(">>>> Transport {transport_id} fail to consume remote endpoint receive buffer because of error, close client endpoint: {e:?}");
+                    client_endpoint.close().await;
+                    return;
                 };
+                if remote_data_exhausted.load(Ordering::Relaxed) {
+                    // Remote date exhausted, close the client endpoint.
+                    client_endpoint.close().await;
+                }
             }
         });
     }

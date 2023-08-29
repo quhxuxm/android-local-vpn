@@ -12,7 +12,7 @@ use anyhow::Result;
 use smoltcp::{
     iface::{Config, Interface, SocketHandle},
     phy::PacketMeta,
-    socket::{tcp::State, udp::UdpMetadata},
+    socket::udp::UdpMetadata,
     time::Instant,
     wire::HardwareAddress,
 };
@@ -191,6 +191,29 @@ async fn poll_and_transfer_smoltcp_data_to_client(
     true
 }
 
+pub(crate) async fn abort_client_tcp(
+    ctl: &ClientEndpointCtl<'_>,
+    smoltcp_socket_handle: SocketHandle,
+    transport_id: TransportId,
+    client_output_tx: &Sender<ClientOutputPacket>,
+) {
+    let ClientEndpointCtlLockGuard {
+        mut smoltcp_socket_set,
+        mut smoltcp_iface,
+        mut smoltcp_device,
+    } = ctl.lock().await;
+    let smoltcp_socket =
+        smoltcp_socket_set.get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
+    smoltcp_socket.abort();
+    poll_and_transfer_smoltcp_data_to_client(
+        transport_id,
+        &mut smoltcp_socket_set,
+        &mut smoltcp_iface,
+        &mut smoltcp_device,
+        client_output_tx,
+    )
+    .await;
+}
 pub(crate) async fn close_client_tcp(
     ctl: &ClientEndpointCtl<'_>,
     smoltcp_socket_handle: SocketHandle,
@@ -331,12 +354,6 @@ pub(crate) async fn recv_from_client_tcp(
             ">>>> Transport {transport_id} client endpoint state: {}",
             smoltcp_tcp_socket.state()
         );
-        if (State::Closed == smoltcp_tcp_socket.state())
-            || (State::CloseWait == smoltcp_tcp_socket.state())
-        {
-            return Ok(());
-        }
-
         while smoltcp_tcp_socket.may_recv() {
             let mut tcp_data = [0u8; 65536];
             let tcp_data = match smoltcp_tcp_socket.recv_slice(&mut tcp_data) {
@@ -352,7 +369,6 @@ pub(crate) async fn recv_from_client_tcp(
             };
             recv_buffer.0.write().await.extend(tcp_data);
         }
-
         recv_buffer.1.notify_waiters();
     }
     Ok(())

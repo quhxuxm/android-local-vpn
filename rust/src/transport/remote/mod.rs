@@ -219,7 +219,6 @@ impl RemoteEndpoint {
             }
         }
     }
-
     pub(crate) async fn awaiting_recv_buf(&self) {
         match self {
             RemoteEndpoint::Tcp { recv_buffer, .. } => {
