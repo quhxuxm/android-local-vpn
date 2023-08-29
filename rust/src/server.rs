@@ -65,9 +65,9 @@ impl PpaassVpnServer {
         debug!("Ppaass vpn server starting ...");
         let runtime = Self::init_async_runtime(self.config)?;
         let file_descriptor = self.file_descriptor;
-        let client_file_read = unsafe { File::from_raw_fd(file_descriptor) };
-        let mut client_file_write =
-            unsafe { File::from_raw_fd(file_descriptor) };
+        let client_file_read =
+            Arc::new(Mutex::new(unsafe { File::from_raw_fd(file_descriptor) }));
+        let client_file_write = Arc::clone(&client_file_read);
         let (client_output_tx, mut client_output_rx) =
             channel::<ClientOutputPacket>(1024);
 
@@ -88,7 +88,7 @@ impl PpaassVpnServer {
         runtime.spawn(async move {
             while let Some(client_output_packet) = client_output_rx.recv().await {
                 let transport_id = client_output_packet.transport_id;
-                if let Err(e) = client_file_write.write_all(&client_output_packet.data) {
+                if let Err(e) = client_file_write.lock().await.write_all(&client_output_packet.data) {
                     error!("<<<< Transport {transport_id} fail to write client output packet because of error: {e:?}");
                 };
             }
@@ -101,7 +101,7 @@ impl PpaassVpnServer {
     }
 
     async fn start_handle_client_rx(
-        mut client_file_read: File,
+        client_file_read: Arc<Mutex<File>>,
         closed: Arc<AtomicBool>,
         client_output_tx: Sender<ClientOutputPacket>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
@@ -117,9 +117,8 @@ impl PpaassVpnServer {
                 while let Some(transport_id) = transports_remove_rx.recv().await
                 {
                     let mut transports = transports.lock().await;
-                    error!("###### Before remove transport {transport_id} from proxy server, current transports number: {}", transports.len());
-                    transports.remove(&transport_id);
-                    error!("###### After remove transport {transport_id} from proxy server, current transports number: {}", transports.len());
+                    let transport = transports.remove(&transport_id);
+                    info!("###### Remove transport {transport_id} from proxy server, current transports number: {}, removed transport details: [{transport:?}]", transports.len());
                 }
             });
         }
@@ -128,7 +127,10 @@ impl PpaassVpnServer {
                 info!("Close vpn server, going to quite.");
                 break;
             }
-            let client_data = match client_file_read.read(&mut client_rx_buffer)
+            let client_data = match client_file_read
+                .lock()
+                .await
+                .read(&mut client_rx_buffer)
             {
                 Ok(0) => {
                     error!("Nothing to read from client file break the loop.");

@@ -1,13 +1,6 @@
 mod common;
 
-use std::{
-    collections::VecDeque,
-    future::Future,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use std::{collections::VecDeque, future::Future, sync::Arc};
 
 use anyhow::Result;
 use futures_util::stream::{SplitSink, SplitStream};
@@ -60,7 +53,6 @@ pub(crate) enum RemoteEndpoint {
         proxy_connection_write: Mutex<ProxyConnectionWrite>,
         recv_buffer: Arc<RemoteTcpRecvBuf>,
         config: &'static PpaassVpnServerConfig,
-        no_more_remote_data: AtomicBool,
     },
     Udp {
         transport_id: TransportId,
@@ -68,7 +60,6 @@ pub(crate) enum RemoteEndpoint {
         proxy_connection_write: Mutex<ProxyConnectionWrite>,
         recv_buffer: Arc<RemoteUdpRecvBuf>,
         config: &'static PpaassVpnServerConfig,
-        no_more_remote_data: AtomicBool,
     },
 }
 
@@ -89,35 +80,20 @@ impl RemoteEndpoint {
         }
     }
 
-    pub(crate) fn is_no_more_remote_data(&self) -> bool {
-        match self {
-            RemoteEndpoint::Tcp {
-                no_more_remote_data,
-                ..
-            } => no_more_remote_data.load(Ordering::Relaxed),
-            RemoteEndpoint::Udp {
-                no_more_remote_data,
-                ..
-            } => no_more_remote_data.load(Ordering::Relaxed),
-        }
-    }
-
     pub(crate) async fn read_from_remote(
         &self,
-    ) -> Result<(), RemoteEndpointError> {
+    ) -> Result<bool, RemoteEndpointError> {
         match self {
             Self::Tcp {
                 transport_id,
                 proxy_connection_read,
                 recv_buffer,
-                no_more_remote_data,
                 ..
             } => {
                 read_from_remote_tcp(
                     *transport_id,
                     proxy_connection_read,
                     recv_buffer,
-                    no_more_remote_data,
                 )
                 .await
             }
@@ -125,14 +101,12 @@ impl RemoteEndpoint {
                 transport_id,
                 proxy_connection_read,
                 recv_buffer,
-                no_more_remote_data,
                 ..
             } => {
                 read_from_remote_udp(
                     *transport_id,
                     proxy_connection_read,
                     recv_buffer,
-                    no_more_remote_data,
                 )
                 .await
             }

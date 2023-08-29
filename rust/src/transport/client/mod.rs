@@ -4,8 +4,12 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 
 use anyhow::Result;
 
-use smoltcp::iface::Interface;
 use smoltcp::iface::{SocketHandle, SocketSet};
+use smoltcp::socket::udp::Socket as SmoltcpUdpSocket;
+use smoltcp::{
+    iface::Interface, socket::tcp::Socket as SmoltcpTcpSocket,
+    socket::tcp::State,
+};
 use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, Notify, RwLock};
 
 use crate::{config::PpaassVpnServerConfig, util::ClientOutputPacket};
@@ -60,6 +64,11 @@ impl<'buf> ClientEndpointCtl<'buf> {
     }
 }
 
+pub(crate) enum ClientEndpointState {
+    Tcp(State),
+    Udp(bool),
+}
+
 pub(crate) enum ClientEndpoint<'buf> {
     Tcp {
         transport_id: TransportId,
@@ -91,6 +100,37 @@ impl<'buf> ClientEndpoint<'buf> {
             }
             ControlProtocol::Udp => {
                 new_udp(transport_id, client_output_tx, config)
+            }
+        }
+    }
+
+    pub(crate) async fn get_state(&self) -> ClientEndpointState {
+        match self {
+            ClientEndpoint::Tcp {
+                ctl,
+                smoltcp_socket_handle,
+                ..
+            } => {
+                let ClientEndpointCtlLockGuard {
+                    mut smoltcp_socket_set,
+                    ..
+                } = ctl.lock().await;
+                let smoltcp_socket = smoltcp_socket_set
+                    .get_mut::<SmoltcpTcpSocket>(*smoltcp_socket_handle);
+                ClientEndpointState::Tcp(smoltcp_socket.state())
+            }
+            ClientEndpoint::Udp {
+                smoltcp_socket_handle,
+                ctl,
+                ..
+            } => {
+                let ClientEndpointCtlLockGuard {
+                    mut smoltcp_socket_set,
+                    ..
+                } = ctl.lock().await;
+                let smoltcp_socket = smoltcp_socket_set
+                    .get_mut::<SmoltcpUdpSocket>(*smoltcp_socket_handle);
+                ClientEndpointState::Udp(smoltcp_socket.is_open())
             }
         }
     }

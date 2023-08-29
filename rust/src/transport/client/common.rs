@@ -1,4 +1,4 @@
-use log::error;
+use log::{error, info};
 use std::{collections::VecDeque, sync::Arc};
 
 use crate::{
@@ -12,7 +12,7 @@ use anyhow::Result;
 use smoltcp::{
     iface::{Config, Interface, SocketHandle},
     phy::PacketMeta,
-    socket::udp::UdpMetadata,
+    socket::{tcp::State, udp::UdpMetadata},
     time::Instant,
     wire::HardwareAddress,
 };
@@ -327,6 +327,16 @@ pub(crate) async fn recv_from_client_tcp(
     {
         let smoltcp_tcp_socket = smoltcp_socket_set
             .get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
+        info!(
+            ">>>> Transport {transport_id} client endpoint state: {}",
+            smoltcp_tcp_socket.state()
+        );
+        if (State::Closed == smoltcp_tcp_socket.state())
+            || (State::CloseWait == smoltcp_tcp_socket.state())
+        {
+            return Ok(());
+        }
+
         while smoltcp_tcp_socket.may_recv() {
             let mut tcp_data = [0u8; 65536];
             let tcp_data = match smoltcp_tcp_socket.recv_slice(&mut tcp_data) {
@@ -342,6 +352,7 @@ pub(crate) async fn recv_from_client_tcp(
             };
             recv_buffer.0.write().await.extend(tcp_data);
         }
+
         recv_buffer.1.notify_waiters();
     }
     Ok(())
@@ -372,6 +383,9 @@ pub(crate) async fn recv_from_client_udp(
     {
         let smoltcp_udp_socket = smoltcp_socket_set
             .get_mut::<SmoltcpUdpSocket>(smoltcp_socket_handle);
+        if !smoltcp_udp_socket.is_open() {
+            return Ok(());
+        }
         while smoltcp_udp_socket.can_recv() {
             let mut udp_data = [0u8; 65535];
             let udp_data = match smoltcp_udp_socket.recv_slice(&mut udp_data) {
@@ -387,6 +401,7 @@ pub(crate) async fn recv_from_client_udp(
             };
             recv_buffer.0.write().await.push_back(udp_data.to_vec());
         }
+
         recv_buffer.1.notify_waiters();
     }
     Ok(())

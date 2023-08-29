@@ -1,11 +1,4 @@
-use std::{
-    collections::VecDeque,
-    os::fd::AsRawFd,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use std::{collections::VecDeque, os::fd::AsRawFd, sync::Arc};
 
 use crate::{
     config::PpaassVpnServerConfig,
@@ -98,13 +91,11 @@ pub(crate) async fn read_from_remote_udp(
     transport_id: TransportId,
     proxy_connection_read: &Mutex<ProxyConnectionRead>,
     recv_buffer: &RemoteUdpRecvBuf,
-    no_more_remote_data: &AtomicBool,
-) -> Result<(), RemoteEndpointError> {
+) -> Result<bool, RemoteEndpointError> {
     match proxy_connection_read.lock().await.next().await {
         None => {
             recv_buffer.1.notify_waiters();
-            no_more_remote_data.swap(true, Ordering::Relaxed);
-            Ok(())
+            Ok(true)
         }
         Some(Ok(PpaassProxyMessage {
             payload: proxy_message_payload,
@@ -127,10 +118,11 @@ pub(crate) async fn read_from_remote_udp(
                 .await
                 .push_back(udp_relay_data.to_vec());
             recv_buffer.1.notify_waiters();
-            Ok(())
+            Ok(false)
         }
         Some(Err(e)) => {
             error!("<<<< Transport {transport_id} fail to read remote udp data because of error: {e:?}");
+
             recv_buffer.1.notify_waiters();
             Err(e.into())
         }
@@ -141,13 +133,11 @@ pub(crate) async fn read_from_remote_tcp(
     transport_id: TransportId,
     proxy_connection_read: &Mutex<ProxyConnectionRead>,
     recv_buffer: &RemoteTcpRecvBuf,
-    no_more_remote_data: &AtomicBool,
-) -> Result<(), RemoteEndpointError> {
+) -> Result<bool, RemoteEndpointError> {
     match proxy_connection_read.lock().await.next().await {
         None => {
             recv_buffer.1.notify_waiters();
-            no_more_remote_data.swap(true, Ordering::Relaxed);
-            Ok(())
+            Ok(true)
         }
         Some(Ok(PpaassProxyMessage {
             payload: proxy_message_payload,
@@ -163,7 +153,7 @@ pub(crate) async fn read_from_remote_tcp(
             );
             recv_buffer.0.write().await.extend(tcp_relay_data);
             recv_buffer.1.notify_waiters();
-            Ok(())
+            Ok(false)
         }
         Some(Err(e)) => {
             error!("<<<< Transport {transport_id} fail to read remote tcp data because of error: {e:?}");
@@ -203,7 +193,6 @@ pub(crate) async fn new_tcp(
             Notify::new(),
         )),
         config,
-        no_more_remote_data: AtomicBool::new(false),
     })
 }
 
@@ -237,7 +226,6 @@ pub(crate) async fn new_udp(
             Notify::new(),
         )),
         config,
-        no_more_remote_data: AtomicBool::new(false),
     })
 }
 
