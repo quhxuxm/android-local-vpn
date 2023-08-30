@@ -30,14 +30,12 @@ pub(crate) struct Transport {
     client_output_tx: Sender<ClientOutputPacket>,
     client_input_rx: Receiver<Vec<u8>>,
     remote_data_exhausted: Arc<AtomicBool>,
-    transports: Arc<Mutex<Transports>>,
 }
 
 impl Transport {
     pub(crate) fn new(
         transport_id: TransportId,
         client_output_tx: Sender<ClientOutputPacket>,
-        transports: Arc<Mutex<Transports>>,
     ) -> (Self, Sender<Vec<u8>>) {
         let (client_input_tx, client_input_rx) = channel::<Vec<u8>>(1024);
         (
@@ -46,7 +44,6 @@ impl Transport {
                 client_output_tx,
                 client_input_rx,
                 remote_data_exhausted: Arc::new(AtomicBool::new(false)),
-                transports,
             },
             client_input_tx,
         )
@@ -56,6 +53,7 @@ impl Transport {
         mut self,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
+        transports: Arc<Mutex<Transports>>,
     ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
         let client_endpoint = match ClientEndpoint::new(
@@ -65,11 +63,7 @@ impl Transport {
         ) {
             Ok(client_endpoint_result) => client_endpoint_result,
             Err(e) => {
-                if let Err(e) = transports_remove_tx.send(transport_id).await {
-                    error!(
-                            ">>>> Transport {transport_id} fail to send remove message because of error: {e:?}"
-                        )
-                };
+                transports.lock().await.remove(&transport_id);
                 return Err(e.into());
             }
         };
@@ -83,9 +77,7 @@ impl Transport {
         {
             Ok(remote_endpoint_result) => remote_endpoint_result,
             Err(e) => {
-                if let Err(e) = transports_remove_tx.send(transport_id).await {
-                    error!(">>>> Transport {transport_id} fail to send remove message because of error: {e:?}")
-                };
+                transports.lock().await.remove(&transport_id);
                 return Err(e.into());
             }
         };
@@ -98,7 +90,7 @@ impl Transport {
             Arc::clone(&client_endpoint),
             Arc::clone(&remote_endpoint),
             Arc::clone(&self.remote_data_exhausted),
-            transports_remove_tx.clone(),
+            Arc::clone(&transports),
         );
         Self::spawn_consume_client_recv_buf_task(
             transport_id,
@@ -122,21 +114,13 @@ impl Transport {
                     match client_endpoint_state {
                         ClientEndpointState::Tcp(State::Closed) => {
                             // The tcp connection is closed we should remove the transport from the repository because of no data will come again.
-                            if let Err(e) =
-                                transports_remove_tx.send(transport_id).await
-                            {
-                                error!(">>>> Transport {transport_id} fail to send remove tcp transport message because of error: {e:?}");
-                            };
+                            transports.lock().await.remove(&transport_id);
                             info!("###### Transport {transport_id} tcp connection in Closed state, remove it from repository.");
                             return Ok(());
                         }
                         ClientEndpointState::Udp(false) => {
                             // The udp connection is closed, we should remove the transport from the repository because of no data will come again.
-                            if let Err(e) =
-                                transports_remove_tx.send(transport_id).await
-                            {
-                                error!(">>>> Transport {transport_id} fail to send remove udp transport message because of error: {e:?}")
-                            };
+                            transports.lock().await.remove(&transport_id);
                             info!("###### Transport {transport_id} udp connection is closed, remove it from repository.");
                             return Ok(());
                         }
@@ -150,11 +134,7 @@ impl Transport {
                 Err(e) => {
                     error!(">>>> Transport {transport_id} error happen when receive client data from smoltcp stack, abort the connection, and remove the tcp connection from the repository: {e:?}");
                     client_endpoint.abort().await;
-                    if let Err(e) =
-                        transports_remove_tx.send(transport_id).await
-                    {
-                        error!(">>>> Transport {transport_id} fail to send remove transport message because of error: {e:?}");
-                    };
+                    transports.lock().await.remove(&transport_id);
                     return Err(AgentError::ClientEndpoint(
                         ClientEndpointError::Other(anyhow!(e)),
                     ));
@@ -170,7 +150,7 @@ impl Transport {
         client_endpoint: Arc<ClientEndpoint<'b>>,
         remote_endpoint: Arc<RemoteEndpoint>,
         remote_data_exhausted: Arc<AtomicBool>,
-        transports_remove_tx: Sender<TransportId>,
+        transports: Arc<Mutex<Transports>>,
     ) where
         'b: 'static,
     {
@@ -191,11 +171,7 @@ impl Transport {
                         error!(">>>> Transport {transport_id} error happen on read remote data: {e:?}");
                         client_endpoint.abort().await;
                         remote_endpoint.close().await;
-                        if let Err(e) =
-                            transports_remove_tx.send(transport_id).await
-                        {
-                            error!(">>>> Transport {transport_id} fail to send remove transport message because of error: {e:?}");
-                        };
+                        transports.lock().await.remove(&transport_id);
                         return;
                     }
                 }

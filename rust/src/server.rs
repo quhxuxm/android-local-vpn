@@ -7,7 +7,6 @@ use std::{
     os::fd::FromRawFd,
 };
 
-use anyhow::Error as AnyhowError;
 use anyhow::Result;
 use log::{debug, error, info};
 
@@ -83,7 +82,6 @@ impl PpaassVpnServer {
                 ppaass_server_config,
             )
             .await;
-            Ok::<(), AnyhowError>(())
         });
         runtime.spawn(async move {
             while let Some(client_output_packet) = client_output_rx.recv().await {
@@ -146,8 +144,7 @@ impl PpaassVpnServer {
                 }
             };
 
-            let mut transports_lock = transports.lock().await;
-            match transports_lock.entry(transport_id) {
+            match transports.lock().await.entry(transport_id) {
                 Entry::Occupied(entry) => {
                     debug!(">>>> Found existing transport {transport_id}.");
                     if entry.get().send(client_data.to_vec()).await.is_err() {
@@ -156,15 +153,12 @@ impl PpaassVpnServer {
                     };
                 }
                 Entry::Vacant(entry) => {
-                    let (transport, client_input_tx) = Transport::new(
-                        transport_id,
-                        client_output_tx.clone(),
-                        Arc::clone(&transports),
-                    );
-
+                    let (transport, client_input_tx) =
+                        Transport::new(transport_id, client_output_tx.clone());
+                    let transports = Arc::clone(&transports);
                     tokio::spawn(async move {
                         if let Err(e) = transport
-                            .exec(agent_rsa_crypto_fetcher, config)
+                            .exec(agent_rsa_crypto_fetcher, config, transports)
                             .await
                         {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");

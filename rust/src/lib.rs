@@ -81,9 +81,9 @@ pub unsafe extern "C" fn Java_com_ppaass_agent_vpn_LocalVpnService_onStartVpn(
         .with_max_level(LevelFilter::Info)
         .with_tag("PPAASS-VPN-RUST");
     android_logger::init_once(android_logger_config);
-    std::panic::set_hook(Box::new(|panic_info| {
-        error!("*** Panic happen on ppaass vpn server:\n{panic_info:?}");
-    }));
+    // std::panic::set_hook(Box::new(|panic_info| {
+    //     error!("*** Panic happen on ppaass vpn server:\n{panic_info:?}");
+    // }));
     let agent_private_key = jni_env
         .convert_byte_array(agent_private_key)
         .expect("Fail to read agent private key bytes from java object");
