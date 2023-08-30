@@ -1,4 +1,4 @@
-use log::debug;
+use log::trace;
 use smoltcp::time::Instant;
 use smoltcp::{
     phy::{self, Device, DeviceCapabilities, Medium},
@@ -81,7 +81,7 @@ impl phy::RxToken for RxToken {
         F: FnOnce(&mut [u8]) -> R,
     {
         let result = f(&mut self.buffer);
-        debug!(
+        trace!(
             ">>>> Transportation {} vpn receive rx token from device:{}",
             self.trans_id,
             PrettyPrinter::<Ipv4Packet<&'static [u8]>>::new("", &self.buffer)
@@ -102,7 +102,7 @@ impl<'a> phy::TxToken for TxToken<'a> {
     {
         let mut buffer = vec![0; len];
         let result = f(&mut buffer);
-        debug!(
+        trace!(
             "<<<< Transportation {} vpn send tx token to device:{}",
             self.trans_id,
             PrettyPrinter::<Ipv4Packet<&'static [u8]>>::new("", &buffer)

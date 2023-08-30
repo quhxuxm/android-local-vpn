@@ -213,9 +213,14 @@ impl RemoteEndpoint {
                 recv_buffer.1.notify_waiters();
                 close_remote_tcp(*transport_id, proxy_connection_write).await;
             }
-            Self::Udp { recv_buffer, .. } => {
+            Self::Udp {
+                transport_id,
+                recv_buffer,
+                proxy_connection_write,
+                ..
+            } => {
                 recv_buffer.1.notify_waiters();
-                close_remote_udp().await;
+                close_remote_udp(*transport_id, proxy_connection_write).await;
             }
         }
     }

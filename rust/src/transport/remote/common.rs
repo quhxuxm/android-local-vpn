@@ -12,7 +12,7 @@ use crate::{
 use anyhow::anyhow;
 use dns_parser::Packet as DnsPacket;
 use futures_util::{SinkExt, StreamExt};
-use log::{debug, error};
+use log::{debug, error, trace};
 use ppaass_common::{
     generate_uuid,
     proxy::PpaassProxyConnection,
@@ -44,12 +44,12 @@ pub(crate) async fn write_to_remote_udp(
             config.get_user_token(),
             Some(generate_uuid().into_bytes()),
         );
-    debug!(
+    trace!(
         ">>>> Transport {transport_id}, [UDP PROCESS] send udp data to remote: {}",
         pretty_hex::pretty_hex(&data)
     );
     if let Ok(dns_request) = DnsPacket::parse(&data) {
-        debug!(">>>> Transport {transport_id}, [UDP PROCESS] read dns request from client: {dns_request:?}")
+        trace!(">>>> Transport {transport_id}, [UDP PROCESS] read dns request from client: {dns_request:?}")
     };
 
     let data_len = data.len();
@@ -105,12 +105,12 @@ pub(crate) async fn read_from_remote_udp(
                 data: udp_relay_data,
                 ..
             } = proxy_message_payload.data.try_into()?;
-            debug!(
+            trace!(
                 "<<<< Transport {transport_id}, [UDP PROCESS] read remote udp data to remote receive buffer: {}",
                 pretty_hex::pretty_hex(&udp_relay_data)
             );
             if let Ok(dns_response) = DnsPacket::parse(&udp_relay_data) {
-                debug!("<<<< Transport {transport_id}, [UDP PROCESS] read dns response from remote: {dns_response:?}")
+                trace!("<<<< Transport {transport_id}, [UDP PROCESS] read dns response from remote: {dns_response:?}")
             };
             recv_buffer
                 .0
@@ -122,7 +122,6 @@ pub(crate) async fn read_from_remote_udp(
         }
         Some(Err(e)) => {
             error!("<<<< Transport {transport_id} fail to read remote udp data because of error: {e:?}");
-
             recv_buffer.1.notify_waiters();
             Err(e.into())
         }
@@ -147,7 +146,7 @@ pub(crate) async fn read_from_remote_tcp(
                 data: tcp_relay_data,
                 ..
             } = proxy_message_payload.data.as_slice().try_into()?;
-            debug!(
+            trace!(
                 "<<<< Transport {transport_id} read remote tcp data to remote endpoint receive buffer: {}",
                 pretty_hex::pretty_hex(&tcp_relay_data)
             );
@@ -322,9 +321,19 @@ pub(crate) async fn close_remote_tcp(
     let mut proxy_connection_write = proxy_connection_write.lock().await;
     if let Err(e) = proxy_connection_write.close().await {
         error!(
-            ">>>> Transport {transport_id} fail to close remote endpoint because of error: {e:?}"
+            ">>>> Transport {transport_id} fail to close tcp remote endpoint because of error: {e:?}"
         )
     };
 }
 
-pub(crate) async fn close_remote_udp() {}
+pub(crate) async fn close_remote_udp(
+    transport_id: TransportId,
+    proxy_connection_write: &Mutex<ProxyConnectionWrite>,
+) {
+    let mut proxy_connection_write = proxy_connection_write.lock().await;
+    if let Err(e) = proxy_connection_write.close().await {
+        error!(
+            ">>>> Transport {transport_id} fail to close udp remote endpoint because of error: {e:?}"
+        )
+    };
+}

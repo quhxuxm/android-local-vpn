@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use log::{debug, error};
+use log::{debug, error, info};
 
 use smoltcp::socket::tcp::State;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -109,7 +109,7 @@ impl Transport {
             Arc::clone(&remote_endpoint),
             Arc::clone(&self.remote_data_exhausted),
         );
-        debug!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
+        info!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
         while let Some(client_data) = self.client_input_rx.recv().await {
             // Push the data into smoltcp stack.
             match client_endpoint.receive_from_client(client_data).await {
