@@ -9,11 +9,6 @@ use ppaass_common::{
 use crate::{error::RemoteEndpointError, transport::TransportId};
 use crate::{JAVA_VPN_JVM, JAVA_VPN_SERVICE_OBJ};
 
-pub(crate) struct ClientOutputPacket {
-    pub transport_id: TransportId,
-    pub data: Vec<u8>,
-}
-
 pub(crate) fn protect_socket(
     transport_id: TransportId,
     socket_fd: i32,
@@ -39,15 +34,16 @@ pub(crate) fn protect_socket(
             },
         )?
     };
-    let mut jni_env = java_vm.attach_current_thread_permanently().map_err(
-        |e| RemoteEndpointError::ProtectRemoteSocket {
-            transport_id,
-            socket_fd,
-            message: format!(
+    let mut jni_env =
+        java_vm.attach_current_thread_permanently().map_err(|e| {
+            RemoteEndpointError::ProtectRemoteSocket {
+                transport_id,
+                socket_fd,
+                message: format!(
                 "Can not attach current java thread because of error: {e:?}"
             ),
-        },
-    )?;
+            }
+        })?;
     let protect_result = jni_env
         .call_method(
             java_vpn_service_obj,

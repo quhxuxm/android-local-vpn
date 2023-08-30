@@ -1,4 +1,4 @@
-use std::{fs::File, io::Write, sync::Arc};
+use std::{fs::File, sync::Arc};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
@@ -10,16 +10,13 @@ use std::{
 use anyhow::Result;
 use log::{debug, error, info};
 
+use tokio::task::yield_now;
 use tokio::{
     runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
-    sync::{mpsc::Sender, Mutex},
+    sync::Mutex,
 };
-use tokio::{sync::mpsc::channel, task::yield_now};
 
-use crate::{
-    config::PpaassVpnServerConfig, transport::Transports,
-    util::ClientOutputPacket,
-};
+use crate::{config::PpaassVpnServerConfig, transport::Transports};
 use crate::{
     transport::{Transport, TransportId},
     util::AgentRsaCryptoFetcher,
@@ -67,8 +64,6 @@ impl PpaassVpnServer {
         let client_file_read =
             Arc::new(Mutex::new(unsafe { File::from_raw_fd(file_descriptor) }));
         let client_file_write = Arc::clone(&client_file_read);
-        let (client_output_tx, mut client_output_rx) =
-            channel::<ClientOutputPacket>(1024);
 
         let ppaass_server_config = self.config;
         let closed = Arc::clone(&self.closed);
@@ -77,19 +72,11 @@ impl PpaassVpnServer {
             Self::start_handle_client_rx(
                 client_file_read,
                 closed,
-                client_output_tx,
+                client_file_write,
                 agent_rsa_crypto_fetcher,
                 ppaass_server_config,
             )
             .await;
-        });
-        runtime.spawn(async move {
-            while let Some(client_output_packet) = client_output_rx.recv().await {
-                let transport_id = client_output_packet.transport_id;
-                if let Err(e) = client_file_write.lock().await.write_all(&client_output_packet.data) {
-                    error!("<<<< Transport {transport_id} fail to write client output packet because of error: {e:?}");
-                };
-            }
         });
 
         self.runtime = Some(runtime);
@@ -101,7 +88,7 @@ impl PpaassVpnServer {
     async fn start_handle_client_rx(
         client_file_read: Arc<Mutex<File>>,
         closed: Arc<AtomicBool>,
-        client_output_tx: Sender<ClientOutputPacket>,
+        client_file_write: Arc<Mutex<File>>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
     ) {
@@ -153,8 +140,10 @@ impl PpaassVpnServer {
                     };
                 }
                 Entry::Vacant(entry) => {
-                    let (transport, client_input_tx) =
-                        Transport::new(transport_id, client_output_tx.clone());
+                    let (transport, client_input_tx) = Transport::new(
+                        transport_id,
+                        Arc::clone(&client_file_write),
+                    );
                     let transports = Arc::clone(&transports);
                     tokio::spawn(async move {
                         if let Err(e) = transport

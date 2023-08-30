@@ -2,11 +2,14 @@ mod client;
 mod remote;
 mod value;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::{
+    fs::File,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use anyhow::{anyhow, Result};
-use log::{debug, error, info};
+use log::{debug, error};
 
 use smoltcp::socket::tcp::State;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -19,7 +22,6 @@ pub(crate) use self::value::Transports;
 use crate::{
     config::PpaassVpnServerConfig,
     error::{AgentError, ClientEndpointError, RemoteEndpointError},
-    util::ClientOutputPacket,
 };
 use crate::{transport::remote::RemoteEndpoint, util::AgentRsaCryptoFetcher};
 use client::ClientEndpointState;
@@ -27,7 +29,7 @@ use client::ClientEndpointState;
 #[derive(Debug)]
 pub(crate) struct Transport {
     transport_id: TransportId,
-    client_output_tx: Sender<ClientOutputPacket>,
+    client_file_write: Arc<Mutex<File>>,
     client_input_rx: Receiver<Vec<u8>>,
     remote_data_exhausted: Arc<AtomicBool>,
 }
@@ -35,13 +37,13 @@ pub(crate) struct Transport {
 impl Transport {
     pub(crate) fn new(
         transport_id: TransportId,
-        client_output_tx: Sender<ClientOutputPacket>,
+        client_file_write: Arc<Mutex<File>>,
     ) -> (Self, Sender<Vec<u8>>) {
         let (client_input_tx, client_input_rx) = channel::<Vec<u8>>(1024);
         (
             Self {
                 transport_id,
-                client_output_tx,
+                client_file_write,
                 client_input_rx,
                 remote_data_exhausted: Arc::new(AtomicBool::new(false)),
             },
@@ -58,7 +60,7 @@ impl Transport {
         let transport_id = self.transport_id;
         let client_endpoint = match ClientEndpoint::new(
             self.transport_id,
-            self.client_output_tx,
+            self.client_file_write,
             config,
         ) {
             Ok(client_endpoint) => client_endpoint,
@@ -109,7 +111,7 @@ impl Transport {
             Arc::clone(&remote_endpoint),
             Arc::clone(&self.remote_data_exhausted),
         );
-        info!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
+        debug!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
         while let Some(client_data) = self.client_input_rx.recv().await {
             // Push the data into smoltcp stack.
             match client_endpoint.receive_from_client(client_data).await {

@@ -1,6 +1,6 @@
 mod common;
 
-use std::{collections::VecDeque, future::Future, sync::Arc};
+use std::{collections::VecDeque, fs::File, future::Future, sync::Arc};
 
 use anyhow::Result;
 
@@ -10,10 +10,10 @@ use smoltcp::{
     iface::Interface, socket::tcp::Socket as SmoltcpTcpSocket,
     socket::tcp::State,
 };
-use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, Notify, RwLock};
+use tokio::sync::{Mutex, MutexGuard, Notify, RwLock};
 
+use crate::config::PpaassVpnServerConfig;
 use crate::transport::client::common::abort_client_tcp;
-use crate::{config::PpaassVpnServerConfig, util::ClientOutputPacket};
 use crate::{device::SmoltcpDevice, error::RemoteEndpointError};
 use crate::{error::ClientEndpointError, transport::ControlProtocol};
 
@@ -83,7 +83,7 @@ pub(crate) enum ClientEndpoint<'buf> {
         ctl: ClientEndpointCtl<'buf>,
         smoltcp_socket_handle: SocketHandle,
         recv_buffer: Arc<ClientTcpRecvBuf>,
-        client_output_tx: Sender<ClientOutputPacket>,
+        client_file_write: Arc<Mutex<File>>,
         _config: &'static PpaassVpnServerConfig,
     },
     Udp {
@@ -91,7 +91,7 @@ pub(crate) enum ClientEndpoint<'buf> {
         smoltcp_socket_handle: SocketHandle,
         ctl: ClientEndpointCtl<'buf>,
         recv_buffer: Arc<ClientUdpRecvBuf>,
-        client_output_tx: Sender<ClientOutputPacket>,
+        client_file_write: Arc<Mutex<File>>,
         _config: &'static PpaassVpnServerConfig,
     },
 }
@@ -99,15 +99,15 @@ pub(crate) enum ClientEndpoint<'buf> {
 impl<'buf> ClientEndpoint<'buf> {
     pub(crate) fn new(
         transport_id: TransportId,
-        client_output_tx: Sender<ClientOutputPacket>,
+        client_file_write: Arc<Mutex<File>>,
         config: &'static PpaassVpnServerConfig,
     ) -> Result<ClientEndpoint<'_>, ClientEndpointError> {
         match transport_id.control_protocol {
             ControlProtocol::Tcp => {
-                new_tcp(transport_id, client_output_tx, config)
+                new_tcp(transport_id, client_file_write, config)
             }
             ControlProtocol::Udp => {
-                new_udp(transport_id, client_output_tx, config)
+                new_udp(transport_id, client_file_write, config)
             }
         }
     }
@@ -206,7 +206,7 @@ impl<'buf> ClientEndpoint<'buf> {
                 transport_id,
                 smoltcp_socket_handle,
                 ctl,
-                client_output_tx,
+                client_file_write,
                 ..
             } => {
                 send_to_client_tcp(
@@ -214,7 +214,7 @@ impl<'buf> ClientEndpoint<'buf> {
                     *smoltcp_socket_handle,
                     data,
                     *transport_id,
-                    client_output_tx,
+                    Arc::clone(client_file_write),
                 )
                 .await
             }
@@ -222,7 +222,7 @@ impl<'buf> ClientEndpoint<'buf> {
                 transport_id,
                 smoltcp_socket_handle,
                 ctl,
-                client_output_tx,
+                client_file_write,
                 ..
             } => {
                 send_to_client_udp(
@@ -230,7 +230,7 @@ impl<'buf> ClientEndpoint<'buf> {
                     *smoltcp_socket_handle,
                     *transport_id,
                     data,
-                    client_output_tx,
+                    Arc::clone(client_file_write),
                 )
                 .await
             }
@@ -246,7 +246,7 @@ impl<'buf> ClientEndpoint<'buf> {
                 transport_id,
                 smoltcp_socket_handle,
                 ctl,
-                client_output_tx,
+                client_file_write,
                 recv_buffer,
                 ..
             } => {
@@ -255,7 +255,7 @@ impl<'buf> ClientEndpoint<'buf> {
                     client_data,
                     *smoltcp_socket_handle,
                     *transport_id,
-                    client_output_tx,
+                    Arc::clone(client_file_write),
                     recv_buffer,
                 )
                 .await
@@ -264,7 +264,7 @@ impl<'buf> ClientEndpoint<'buf> {
                 transport_id,
                 smoltcp_socket_handle,
                 ctl,
-                client_output_tx,
+                client_file_write,
                 recv_buffer,
                 ..
             } => {
@@ -273,7 +273,7 @@ impl<'buf> ClientEndpoint<'buf> {
                     client_data,
                     *smoltcp_socket_handle,
                     *transport_id,
-                    client_output_tx,
+                    Arc::clone(client_file_write),
                     recv_buffer,
                 )
                 .await
@@ -287,7 +287,7 @@ impl<'buf> ClientEndpoint<'buf> {
                 transport_id,
                 smoltcp_socket_handle,
                 ctl,
-                client_output_tx,
+                client_file_write,
                 recv_buffer,
                 ..
             } => {
@@ -295,7 +295,7 @@ impl<'buf> ClientEndpoint<'buf> {
                     ctl,
                     *smoltcp_socket_handle,
                     *transport_id,
-                    client_output_tx,
+                    Arc::clone(client_file_write),
                 )
                 .await;
                 recv_buffer.1.notify_waiters();
@@ -303,11 +303,16 @@ impl<'buf> ClientEndpoint<'buf> {
             Self::Udp {
                 transport_id,
                 ctl,
-                client_output_tx,
+                client_file_write,
                 recv_buffer,
                 ..
             } => {
-                close_client_udp(ctl, *transport_id, client_output_tx).await;
+                close_client_udp(
+                    ctl,
+                    *transport_id,
+                    Arc::clone(client_file_write),
+                )
+                .await;
                 recv_buffer.1.notify_waiters();
             }
         }
@@ -318,7 +323,7 @@ impl<'buf> ClientEndpoint<'buf> {
                 transport_id,
                 smoltcp_socket_handle,
                 ctl,
-                client_output_tx,
+                client_file_write,
                 recv_buffer,
                 ..
             } => {
@@ -326,7 +331,7 @@ impl<'buf> ClientEndpoint<'buf> {
                     ctl,
                     *smoltcp_socket_handle,
                     *transport_id,
-                    client_output_tx,
+                    Arc::clone(client_file_write),
                 )
                 .await;
                 recv_buffer.1.notify_waiters();
@@ -334,11 +339,16 @@ impl<'buf> ClientEndpoint<'buf> {
             Self::Udp {
                 transport_id,
                 ctl,
-                client_output_tx,
+                client_file_write,
                 recv_buffer,
                 ..
             } => {
-                close_client_udp(ctl, *transport_id, client_output_tx).await;
+                close_client_udp(
+                    ctl,
+                    *transport_id,
+                    Arc::clone(client_file_write),
+                )
+                .await;
                 recv_buffer.1.notify_waiters();
             }
         }
