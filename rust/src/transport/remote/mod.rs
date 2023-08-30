@@ -210,28 +210,25 @@ impl RemoteEndpoint {
                 recv_buffer,
                 ..
             } => {
-                recv_buffer.1.notify_waiters();
                 close_remote_tcp(*transport_id, proxy_connection_write).await;
+                recv_buffer.1.notify_waiters();
             }
             Self::Udp {
                 transport_id,
-                recv_buffer,
                 proxy_connection_write,
+                recv_buffer,
                 ..
             } => {
-                recv_buffer.1.notify_waiters();
                 close_remote_udp(*transport_id, proxy_connection_write).await;
+                recv_buffer.1.notify_waiters();
             }
         }
     }
+
     pub(crate) async fn awaiting_recv_buf(&self) {
         match self {
-            RemoteEndpoint::Tcp { recv_buffer, .. } => {
-                recv_buffer.1.notified().await
-            }
-            RemoteEndpoint::Udp { recv_buffer, .. } => {
-                recv_buffer.1.notified().await
-            }
+            Self::Tcp { recv_buffer, .. } => recv_buffer.1.notified().await,
+            Self::Udp { recv_buffer, .. } => recv_buffer.1.notified().await,
         }
     }
 }

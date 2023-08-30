@@ -32,6 +32,11 @@ impl SmoltcpDevice {
     pub(crate) fn pop_tx(&mut self) -> Option<Vec<u8>> {
         self.tx_queue.pop_front()
     }
+
+    pub(crate) fn destory(&mut self) {
+        self.rx_queue.clear();
+        self.tx_queue.clear();
+    }
 }
 
 impl Device for SmoltcpDevice {

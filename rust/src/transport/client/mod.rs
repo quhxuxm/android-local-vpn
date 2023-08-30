@@ -34,16 +34,16 @@ pub(crate) struct ClientEndpointCtlLockGuard<'lock, 'buf> {
 }
 
 pub(crate) struct ClientEndpointCtl<'buf> {
-    smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
-    smoltcp_iface: Arc<Mutex<Interface>>,
-    smoltcp_device: Arc<Mutex<SmoltcpDevice>>,
+    smoltcp_socket_set: Mutex<SocketSet<'buf>>,
+    smoltcp_iface: Mutex<Interface>,
+    smoltcp_device: Mutex<SmoltcpDevice>,
 }
 
 impl<'buf> ClientEndpointCtl<'buf> {
     fn new(
-        smoltcp_socket_set: Arc<Mutex<SocketSet<'buf>>>,
-        smoltcp_iface: Arc<Mutex<Interface>>,
-        smoltcp_device: Arc<Mutex<SmoltcpDevice>>,
+        smoltcp_socket_set: Mutex<SocketSet<'buf>>,
+        smoltcp_iface: Mutex<Interface>,
+        smoltcp_device: Mutex<SmoltcpDevice>,
     ) -> Self {
         Self {
             smoltcp_socket_set,
@@ -303,12 +303,14 @@ impl<'buf> ClientEndpoint<'buf> {
             Self::Udp {
                 transport_id,
                 ctl,
+                smoltcp_socket_handle,
                 client_file_write,
                 recv_buffer,
                 ..
             } => {
                 close_client_udp(
                     ctl,
+                    *smoltcp_socket_handle,
                     *transport_id,
                     Arc::clone(client_file_write),
                 )
@@ -339,12 +341,14 @@ impl<'buf> ClientEndpoint<'buf> {
             Self::Udp {
                 transport_id,
                 ctl,
+                smoltcp_socket_handle,
                 client_file_write,
                 recv_buffer,
                 ..
             } => {
                 close_client_udp(
                     ctl,
+                    *smoltcp_socket_handle,
                     *transport_id,
                     Arc::clone(client_file_write),
                 )
@@ -356,12 +360,8 @@ impl<'buf> ClientEndpoint<'buf> {
 
     pub(crate) async fn awaiting_recv_buf(&self) {
         match self {
-            ClientEndpoint::Tcp { recv_buffer, .. } => {
-                recv_buffer.1.notified().await
-            }
-            ClientEndpoint::Udp { recv_buffer, .. } => {
-                recv_buffer.1.notified().await
-            }
+            Self::Tcp { recv_buffer, .. } => recv_buffer.1.notified().await,
+            Self::Udp { recv_buffer, .. } => recv_buffer.1.notified().await,
         }
     }
 }

@@ -117,9 +117,9 @@ pub(crate) fn new_tcp(
     let smoltcp_tcp_socket = create_smoltcp_tcp_socket(transport_id, config)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_tcp_socket);
     let ctl = ClientEndpointCtl::new(
-        Arc::new(Mutex::new(smoltcp_socket_set)),
-        Arc::new(Mutex::new(smoltcp_iface)),
-        Arc::new(Mutex::new(smoltcp_device)),
+        Mutex::new(smoltcp_socket_set),
+        Mutex::new(smoltcp_iface),
+        Mutex::new(smoltcp_device),
     );
     Ok(ClientEndpoint::Tcp {
         transport_id,
@@ -147,9 +147,9 @@ pub(crate) fn new_udp(
     let smoltcp_udp_socket = create_smoltcp_udp_socket(transport_id)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_udp_socket);
     let ctl = ClientEndpointCtl::new(
-        Arc::new(Mutex::new(smoltcp_socket_set)),
-        Arc::new(Mutex::new(smoltcp_iface)),
-        Arc::new(Mutex::new(smoltcp_device)),
+        Mutex::new(smoltcp_socket_set),
+        Mutex::new(smoltcp_iface),
+        Mutex::new(smoltcp_device),
     );
     Ok(ClientEndpoint::Udp {
         transport_id,
@@ -207,7 +207,10 @@ pub(crate) async fn abort_client_tcp(
         client_file_write,
     )
     .await;
+    smoltcp_socket_set.remove(smoltcp_socket_handle);
+    smoltcp_device.destory();
 }
+
 pub(crate) async fn close_client_tcp(
     ctl: &ClientEndpointCtl<'_>,
     smoltcp_socket_handle: SocketHandle,
@@ -230,10 +233,13 @@ pub(crate) async fn close_client_tcp(
         client_file_write,
     )
     .await;
+    smoltcp_socket_set.remove(smoltcp_socket_handle);
+    smoltcp_device.destory();
 }
 
 pub(crate) async fn close_client_udp(
     ctl: &ClientEndpointCtl<'_>,
+    smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_file_write: Arc<Mutex<File>>,
 ) {
@@ -251,6 +257,8 @@ pub(crate) async fn close_client_udp(
         client_file_write,
     )
     .await;
+    smoltcp_socket_set.remove(smoltcp_socket_handle);
+    smoltcp_device.destory();
 }
 
 pub(crate) async fn send_to_client_tcp(

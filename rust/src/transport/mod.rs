@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use log::{debug, error};
+use log::{debug, error, info};
 
 use smoltcp::socket::tcp::State;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -32,6 +32,7 @@ pub(crate) struct Transport {
     client_file_write: Arc<Mutex<File>>,
     client_input_rx: Receiver<Vec<u8>>,
     remote_data_exhausted: Arc<AtomicBool>,
+    closed: Arc<AtomicBool>,
 }
 
 impl Transport {
@@ -46,6 +47,7 @@ impl Transport {
                 client_file_write,
                 client_input_rx,
                 remote_data_exhausted: Arc::new(AtomicBool::new(false)),
+                closed: Arc::new(AtomicBool::new(false)),
             },
             client_input_tx,
         )
@@ -98,18 +100,21 @@ impl Transport {
             Arc::clone(&remote_endpoint),
             Arc::clone(&self.remote_data_exhausted),
             Arc::clone(&transports),
+            Arc::clone(&self.closed),
         );
         Self::spawn_consume_client_recv_buf_task(
             transport_id,
             Arc::clone(&remote_endpoint),
             Arc::clone(&client_endpoint),
             Arc::clone(&transports),
+            Arc::clone(&self.closed),
         );
         Self::spawn_consume_remote_recv_buf_task(
             transport_id,
             Arc::clone(&client_endpoint),
             Arc::clone(&remote_endpoint),
             Arc::clone(&self.remote_data_exhausted),
+            Arc::clone(&self.closed),
         );
         debug!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
         while let Some(client_data) = self.client_input_rx.recv().await {
@@ -155,6 +160,15 @@ impl Transport {
                 }
             };
         }
+        //Quit task loop
+        self.closed.swap(true, Ordering::Relaxed);
+        // Close client socket
+        client_endpoint.close().await;
+        // Close remote socket
+        remote_endpoint.close().await;
+        let mut transports = transports.lock().await;
+        transports.remove(&transport_id);
+        info!("#### Transport {transport_id} quit grace fully, current transport number: {}", transports.len());
         Ok(())
     }
 
@@ -165,20 +179,21 @@ impl Transport {
         remote_endpoint: Arc<RemoteEndpoint>,
         remote_data_exhausted: Arc<AtomicBool>,
         transports: Arc<Mutex<Transports>>,
+        closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
     {
         tokio::spawn(async move {
-            loop {
+            while !closed.load(Ordering::Relaxed) {
                 match remote_endpoint.read_from_remote().await {
-                    Ok(false) =>
-                    // Remote endpoint still have data to read
-                    {
-                        continue
+                    Ok(false) => {
+                        // Remote endpoint still have data to read
+                        continue;
                     }
                     Ok(true) => {
                         // No data from remote endpoint anymore
                         remote_data_exhausted.swap(true, Ordering::Relaxed);
+
                         return;
                     }
                     Err(e) => {
@@ -216,12 +231,13 @@ impl Transport {
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
         transports: Arc<Mutex<Transports>>,
+        closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
     {
         // Spawn a task for output data to client
         tokio::spawn(async move {
-            loop {
+            while !closed.load(Ordering::Relaxed) {
                 client_endpoint.awaiting_recv_buf().await;
                 // Send the client endpoint receive buffer to remote
                 if let Err(e) = client_endpoint
@@ -245,6 +261,7 @@ impl Transport {
                     | ClientEndpointState::Tcp(State::CloseWait)) => {
                         // No more tcp data will send to remote, close the remote endpoint.
                         debug!("###### Transport {transport_id} tcp client endpoint in {state:?} state, close the remote endpoint because of no client data anymore.");
+
                         remote_endpoint.close().await;
                         return;
                     }
@@ -253,6 +270,7 @@ impl Transport {
                     ) => {
                         // No more udp data will send to remote, close the remote endpoint.
                         debug!("###### Transport {transport_id} udp client endpoint closed, close the remote endpoint because of no client data anymore.");
+
                         remote_endpoint.close().await;
                         return;
                     }
@@ -287,12 +305,13 @@ impl Transport {
         client_endpoint: Arc<ClientEndpoint<'b>>,
         remote_endpoint: Arc<RemoteEndpoint>,
         remote_data_exhausted: Arc<AtomicBool>,
+        closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
     {
         // Spawn a task for output data to client
         tokio::spawn(async move {
-            loop {
+            while !closed.load(Ordering::Relaxed) {
                 remote_endpoint.awaiting_recv_buf().await;
                 // Send the remote endpoint receive buffer to client
                 if let Err(e) = remote_endpoint
@@ -309,6 +328,7 @@ impl Transport {
                 if remote_data_exhausted.load(Ordering::Relaxed) {
                     // Remote date exhausted, close the client endpoint.
                     client_endpoint.close().await;
+                    return;
                 }
             }
         });
