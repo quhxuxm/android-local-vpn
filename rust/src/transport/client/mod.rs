@@ -66,9 +66,15 @@ impl<'buf> ClientEndpointCtl<'buf> {
 }
 
 #[derive(Debug)]
+pub(crate) enum ClientEndpointUdpState {
+    Open,
+    Closed,
+}
+
+#[derive(Debug)]
 pub(crate) enum ClientEndpointState {
     Tcp(State),
-    Udp(bool),
+    Udp(ClientEndpointUdpState),
 }
 
 pub(crate) enum ClientEndpoint<'buf> {
@@ -132,7 +138,11 @@ impl<'buf> ClientEndpoint<'buf> {
                 } = ctl.lock().await;
                 let smoltcp_socket = smoltcp_socket_set
                     .get_mut::<SmoltcpUdpSocket>(*smoltcp_socket_handle);
-                ClientEndpointState::Udp(smoltcp_socket.is_open())
+                ClientEndpointState::Udp(if smoltcp_socket.is_open() {
+                    ClientEndpointUdpState::Open
+                } else {
+                    ClientEndpointUdpState::Closed
+                })
             }
         }
     }

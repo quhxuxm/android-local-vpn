@@ -1,4 +1,4 @@
-use log::{error, info};
+use log::error;
 use std::{collections::VecDeque, sync::Arc};
 
 use crate::{
@@ -350,10 +350,6 @@ pub(crate) async fn recv_from_client_tcp(
     {
         let smoltcp_tcp_socket = smoltcp_socket_set
             .get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
-        info!(
-            ">>>> Transport {transport_id} client endpoint state: {}",
-            smoltcp_tcp_socket.state()
-        );
         while smoltcp_tcp_socket.may_recv() {
             let mut tcp_data = [0u8; 65536];
             let tcp_data = match smoltcp_tcp_socket.recv_slice(&mut tcp_data) {

@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use log::{debug, error, info};
+use log::{debug, error};
 
 use smoltcp::socket::tcp::State;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
 
-use self::client::ClientEndpoint;
+use self::client::{ClientEndpoint, ClientEndpointUdpState};
 pub(crate) use self::value::ControlProtocol;
 pub(crate) use self::value::TransportId;
 pub(crate) use self::value::Transports;
@@ -61,13 +61,15 @@ impl Transport {
             self.client_output_tx,
             config,
         ) {
-            Ok(client_endpoint_result) => client_endpoint_result,
+            Ok(client_endpoint) => client_endpoint,
             Err(e) => {
-                transports.lock().await.remove(&transport_id);
+                let mut transports = transports.lock().await;
+                transports.remove(&transport_id);
+                error!("###### Transport {transport_id} fail to initialize client endpoint remove it from repository, current transport number: {}, error: {e:?}", transports.len());
                 return Err(e.into());
             }
         };
-        debug!(">>>> Transport {transport_id} success create client endpoint.");
+
         let remote_endpoint = match RemoteEndpoint::new(
             transport_id,
             agent_rsa_crypto_fetcher,
@@ -75,13 +77,16 @@ impl Transport {
         )
         .await
         {
-            Ok(remote_endpoint_result) => remote_endpoint_result,
+            Ok(remote_endpoint) => remote_endpoint,
             Err(e) => {
-                transports.lock().await.remove(&transport_id);
+                client_endpoint.abort().await;
+                let mut transports = transports.lock().await;
+                transports.remove(&transport_id);
+                error!("###### Transport {transport_id} fail to initialize remote endpoint, abort client endpoint and remove it from repository, current transport number: {}, error: {e:?}", transports.len());
                 return Err(e.into());
             }
         };
-        debug!(">>>> Transport {transport_id} success create remote endpoint.");
+
         let client_endpoint = Arc::new(client_endpoint);
         let remote_endpoint = Arc::new(remote_endpoint);
 
@@ -96,6 +101,7 @@ impl Transport {
             transport_id,
             Arc::clone(&remote_endpoint),
             Arc::clone(&client_endpoint),
+            Arc::clone(&transports),
         );
         Self::spawn_consume_remote_recv_buf_task(
             transport_id,
@@ -103,7 +109,7 @@ impl Transport {
             Arc::clone(&remote_endpoint),
             Arc::clone(&self.remote_data_exhausted),
         );
-
+        debug!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
         while let Some(client_data) = self.client_input_rx.recv().await {
             // Push the data into smoltcp stack.
             match client_endpoint.receive_from_client(client_data).await {
@@ -114,27 +120,33 @@ impl Transport {
                     match client_endpoint_state {
                         ClientEndpointState::Tcp(State::Closed) => {
                             // The tcp connection is closed we should remove the transport from the repository because of no data will come again.
-                            transports.lock().await.remove(&transport_id);
-                            info!("###### Transport {transport_id} tcp connection in Closed state, remove it from repository.");
+                            let mut transports = transports.lock().await;
+                            transports.remove(&transport_id);
+                            debug!("###### Transport {transport_id} tcp connection in Closed state, remove it from repository, current transport number: {}.", transports.len());
                             return Ok(());
                         }
-                        ClientEndpointState::Udp(false) => {
+                        ClientEndpointState::Udp(
+                            ClientEndpointUdpState::Closed,
+                        ) => {
                             // The udp connection is closed, we should remove the transport from the repository because of no data will come again.
-                            transports.lock().await.remove(&transport_id);
-                            info!("###### Transport {transport_id} udp connection is closed, remove it from repository.");
+                            let mut transports = transports.lock().await;
+                            transports.remove(&transport_id);
+                            debug!("###### Transport {transport_id} udp connection is closed, remove it from repository, current transport number: {}.", transports.len());
+
                             return Ok(());
                         }
-                        _ =>
-                        //For other case we just continue, even for tcp CloseWait and LastAck because of the smoltcp stack should handle the tcp packet.
-                        {
-                            continue
+                        state => {
+                            //For other case we just continue, even for tcp CloseWait and LastAck because of the smoltcp stack should handle the tcp packet.
+                            debug!("###### Transport {transport_id} client endpoint in {state:?} state, continue to receive client data");
+                            continue;
                         }
                     }
                 }
                 Err(e) => {
-                    error!(">>>> Transport {transport_id} error happen when receive client data from smoltcp stack, abort the connection, and remove the tcp connection from the repository: {e:?}");
                     client_endpoint.abort().await;
-                    transports.lock().await.remove(&transport_id);
+                    let mut transports = transports.lock().await;
+                    transports.remove(&transport_id);
+                    error!("###### Transport {transport_id} error happen, remove it from repository, current transport number: {}, error: {e:?}.", transports.len());
                     return Err(AgentError::ClientEndpoint(
                         ClientEndpointError::Other(anyhow!(e)),
                     ));
@@ -168,10 +180,11 @@ impl Transport {
                         return;
                     }
                     Err(e) => {
-                        error!(">>>> Transport {transport_id} error happen on read remote data: {e:?}");
                         client_endpoint.abort().await;
                         remote_endpoint.close().await;
-                        transports.lock().await.remove(&transport_id);
+                        let mut transports = transports.lock().await;
+                        transports.remove(&transport_id);
+                        error!("###### Transport {transport_id} error happen on read remote data, abort client endpoint and close remote endpoint, remove it from repository, current transport number: {}, error: {e:?}", transports.len());
                         return;
                     }
                 }
@@ -200,6 +213,7 @@ impl Transport {
         transport_id: TransportId,
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
+        transports: Arc<Mutex<Transports>>,
     ) where
         'b: 'static,
     {
@@ -215,25 +229,35 @@ impl Transport {
                     )
                     .await
                 {
-                    error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer because of error: {e:?}");
+                    client_endpoint.abort().await;
                     remote_endpoint.close().await;
+                    let mut transports = transports.lock().await;
+                    transports.remove(&transport_id);
+                    error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer, close remote endpoint and abort client endpoint, remove it from repository, current transport number: {}, error: {e:?}", transports.len());
                     return;
                 };
 
                 match client_endpoint.get_state().await {
-                    state @ ClientEndpointState::Tcp(State::CloseWait)
-                    | state @ ClientEndpointState::Tcp(State::LastAck)
-                    | state @ ClientEndpointState::Tcp(State::Closed) => {
+                    state @ (ClientEndpointState::Tcp(State::Closed)
+                    | ClientEndpointState::Tcp(State::TimeWait)
+                    | ClientEndpointState::Tcp(State::CloseWait)) => {
                         // No more tcp data will send to remote, close the remote endpoint.
-                        info!("###### Transport {transport_id} tcp client endpoint in {state:?} state, close the remote endpoint because of no client data anymore.");
+                        debug!("###### Transport {transport_id} tcp client endpoint in {state:?} state, close the remote endpoint because of no client data anymore.");
                         remote_endpoint.close().await;
+                        return;
                     }
-                    ClientEndpointState::Udp(false) => {
+                    ClientEndpointState::Udp(
+                        ClientEndpointUdpState::Closed,
+                    ) => {
                         // No more udp data will send to remote, close the remote endpoint.
-                        info!("###### Transport {transport_id} udp client endpoint closed, close the remote endpoint because of no client data anymore.");
+                        debug!("###### Transport {transport_id} udp client endpoint closed, close the remote endpoint because of no client data anymore.");
                         remote_endpoint.close().await;
+                        return;
                     }
-                    _ => continue,
+                    state => {
+                        debug!("###### Transport {transport_id} client endpoint in {state:?} state, continue to receive client data");
+                        continue;
+                    }
                 }
             }
         });
