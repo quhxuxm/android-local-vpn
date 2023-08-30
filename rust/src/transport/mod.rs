@@ -2,11 +2,8 @@ mod client;
 mod remote;
 mod value;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::{
-    fs::File,
-    sync::atomic::{AtomicBool, Ordering},
-};
 
 use anyhow::{anyhow, Result};
 use log::{debug, error, info};
@@ -16,6 +13,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
 
 use self::client::{ClientEndpoint, ClientEndpointUdpState};
+pub(crate) use self::value::ClientOutputPacket;
 pub(crate) use self::value::ControlProtocol;
 pub(crate) use self::value::TransportId;
 pub(crate) use self::value::Transports;
@@ -29,7 +27,7 @@ use client::ClientEndpointState;
 #[derive(Debug)]
 pub(crate) struct Transport {
     transport_id: TransportId,
-    client_file_write: Arc<Mutex<File>>,
+    client_output_tx: Sender<ClientOutputPacket>,
     client_input_rx: Receiver<Vec<u8>>,
     remote_data_exhausted: Arc<AtomicBool>,
     closed: Arc<AtomicBool>,
@@ -38,13 +36,13 @@ pub(crate) struct Transport {
 impl Transport {
     pub(crate) fn new(
         transport_id: TransportId,
-        client_file_write: Arc<Mutex<File>>,
+        client_output_tx: Sender<ClientOutputPacket>,
     ) -> (Self, Sender<Vec<u8>>) {
         let (client_input_tx, client_input_rx) = channel::<Vec<u8>>(1024);
         (
             Self {
                 transport_id,
-                client_file_write,
+                client_output_tx,
                 client_input_rx,
                 remote_data_exhausted: Arc::new(AtomicBool::new(false)),
                 closed: Arc::new(AtomicBool::new(false)),
@@ -62,7 +60,7 @@ impl Transport {
         let transport_id = self.transport_id;
         let client_endpoint = match ClientEndpoint::new(
             self.transport_id,
-            self.client_file_write,
+            self.client_output_tx,
             config,
         ) {
             Ok(client_endpoint) => client_endpoint,

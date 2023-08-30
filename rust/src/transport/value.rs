@@ -9,6 +9,11 @@ use std::net::SocketAddr;
 
 pub(crate) type Transports = HashMap<TransportId, Sender<Vec<u8>>>;
 
+pub(crate) struct ClientOutputPacket {
+    pub transport_id: TransportId,
+    pub data: Vec<u8>,
+}
+
 /// The transport protocol, TCP and UDP
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub(crate) enum ControlProtocol {
