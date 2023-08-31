@@ -10,7 +10,7 @@ use smoltcp::{
     iface::Interface, socket::tcp::Socket as SmoltcpTcpSocket,
     socket::tcp::State,
 };
-use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, Notify, RwLock};
+use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, RwLock};
 
 use crate::config::PpaassVpnServerConfig;
 use crate::transport::client::common::abort_client_tcp;
@@ -24,8 +24,8 @@ use self::common::{
 
 use super::{remote::RemoteEndpoint, ClientOutputPacket, TransportId};
 
-pub(crate) type ClientTcpRecvBuf = (RwLock<VecDeque<u8>>, Notify);
-pub(crate) type ClientUdpRecvBuf = (RwLock<VecDeque<Vec<u8>>>, Notify);
+pub(crate) type ClientTcpRecvBuf = RwLock<VecDeque<u8>>;
+pub(crate) type ClientUdpRecvBuf = RwLock<VecDeque<Vec<u8>>>;
 
 pub(crate) struct ClientEndpointCtlLockGuard<'lock, 'buf> {
     pub(crate) smoltcp_socket_set: MutexGuard<'lock, SocketSet<'buf>>,
@@ -162,10 +162,10 @@ impl<'buf> ClientEndpoint<'buf> {
                 recv_buffer,
                 ..
             } => {
-                if recv_buffer.0.read().await.len() == 0 {
+                if recv_buffer.read().await.len() == 0 {
                     return Ok(());
                 }
-                let mut recv_buffer = recv_buffer.0.write().await;
+                let mut recv_buffer = recv_buffer.write().await;
                 let recv_buffer_data = recv_buffer.make_contiguous().to_vec();
                 let consume_size =
                     consume_fn(*transport_id, recv_buffer_data, remote).await?;
@@ -177,10 +177,10 @@ impl<'buf> ClientEndpoint<'buf> {
                 recv_buffer,
                 ..
             } => {
-                if recv_buffer.0.read().await.len() == 0 {
+                if recv_buffer.read().await.len() == 0 {
                     return Ok(());
                 }
-                let mut recv_buffer = recv_buffer.0.write().await;
+                let mut recv_buffer = recv_buffer.write().await;
                 let mut consume_size = 0;
                 for udp_data in recv_buffer.iter() {
                     consume_fn(
@@ -288,7 +288,6 @@ impl<'buf> ClientEndpoint<'buf> {
                 smoltcp_socket_handle,
                 ctl,
                 client_output_tx,
-                recv_buffer,
                 ..
             } => {
                 abort_client_tcp(
@@ -298,24 +297,14 @@ impl<'buf> ClientEndpoint<'buf> {
                     client_output_tx,
                 )
                 .await;
-                recv_buffer.1.notify_waiters();
             }
             Self::Udp {
                 transport_id,
                 ctl,
-                smoltcp_socket_handle,
                 client_output_tx,
-                recv_buffer,
                 ..
             } => {
-                close_client_udp(
-                    ctl,
-                    *smoltcp_socket_handle,
-                    *transport_id,
-                    client_output_tx,
-                )
-                .await;
-                recv_buffer.1.notify_waiters();
+                close_client_udp(ctl, *transport_id, client_output_tx).await;
             }
         }
     }
@@ -326,7 +315,6 @@ impl<'buf> ClientEndpoint<'buf> {
                 smoltcp_socket_handle,
                 ctl,
                 client_output_tx,
-                recv_buffer,
                 ..
             } => {
                 close_client_tcp(
@@ -336,32 +324,46 @@ impl<'buf> ClientEndpoint<'buf> {
                     client_output_tx,
                 )
                 .await;
-                recv_buffer.1.notify_waiters();
             }
             Self::Udp {
                 transport_id,
                 ctl,
-                smoltcp_socket_handle,
                 client_output_tx,
-                recv_buffer,
                 ..
             } => {
-                close_client_udp(
-                    ctl,
-                    *smoltcp_socket_handle,
-                    *transport_id,
-                    client_output_tx,
-                )
-                .await;
-                recv_buffer.1.notify_waiters();
+                close_client_udp(ctl, *transport_id, client_output_tx).await;
             }
         }
     }
 
-    pub(crate) async fn awaiting_recv_buf(&self) {
+    pub(crate) async fn destory(&self) {
         match self {
-            Self::Tcp { recv_buffer, .. } => recv_buffer.1.notified().await,
-            Self::Udp { recv_buffer, .. } => recv_buffer.1.notified().await,
+            Self::Tcp {
+                smoltcp_socket_handle,
+                ctl,
+                ..
+            } => {
+                let ClientEndpointCtlLockGuard {
+                    mut smoltcp_socket_set,
+                    mut smoltcp_device,
+                    ..
+                } = ctl.lock().await;
+                smoltcp_socket_set.remove(*smoltcp_socket_handle);
+                smoltcp_device.destory();
+            }
+            Self::Udp {
+                ctl,
+                smoltcp_socket_handle,
+                ..
+            } => {
+                let ClientEndpointCtlLockGuard {
+                    mut smoltcp_socket_set,
+                    mut smoltcp_device,
+                    ..
+                } = ctl.lock().await;
+                smoltcp_socket_set.remove(*smoltcp_socket_handle);
+                smoltcp_device.destory();
+            }
         }
     }
 }

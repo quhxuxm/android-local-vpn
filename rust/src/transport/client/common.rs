@@ -28,7 +28,7 @@ use smoltcp::socket::udp::{
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
 use smoltcp::iface::SocketSet;
-use tokio::sync::{mpsc::Sender, Mutex, Notify, RwLock};
+use tokio::sync::{mpsc::Sender, Mutex, RwLock};
 
 use super::{
     ClientEndpoint, ClientEndpointCtl, ClientEndpointCtlLockGuard,
@@ -125,12 +125,9 @@ pub(crate) fn new_tcp(
         transport_id,
         smoltcp_socket_handle,
         ctl,
-        recv_buffer: Arc::new((
-            RwLock::new(VecDeque::with_capacity(
-                config.get_client_endpoint_tcp_recv_buffer_size(),
-            )),
-            Notify::new(),
-        )),
+        recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(
+            config.get_client_endpoint_tcp_recv_buffer_size(),
+        ))),
         client_output_tx,
         _config: config,
     })
@@ -155,12 +152,9 @@ pub(crate) fn new_udp(
         transport_id,
         smoltcp_socket_handle,
         ctl,
-        recv_buffer: Arc::new((
-            RwLock::new(VecDeque::with_capacity(
-                config.get_client_endpoint_udp_recv_buffer_size(),
-            )),
-            Notify::new(),
-        )),
+        recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(
+            config.get_client_endpoint_udp_recv_buffer_size(),
+        ))),
         client_output_tx,
         _config: config,
     })
@@ -210,8 +204,6 @@ pub(crate) async fn abort_client_tcp(
         client_output_tx,
     )
     .await;
-    smoltcp_socket_set.remove(smoltcp_socket_handle);
-    smoltcp_device.destory();
 }
 
 pub(crate) async fn close_client_tcp(
@@ -236,13 +228,10 @@ pub(crate) async fn close_client_tcp(
         client_output_tx,
     )
     .await;
-    smoltcp_socket_set.remove(smoltcp_socket_handle);
-    smoltcp_device.destory();
 }
 
 pub(crate) async fn close_client_udp(
     ctl: &ClientEndpointCtl<'_>,
-    smoltcp_socket_handle: SocketHandle,
     transport_id: TransportId,
     client_output_tx: &Sender<ClientOutputPacket>,
 ) {
@@ -260,8 +249,6 @@ pub(crate) async fn close_client_udp(
         client_output_tx,
     )
     .await;
-    smoltcp_socket_set.remove(smoltcp_socket_handle);
-    smoltcp_device.destory();
 }
 
 pub(crate) async fn send_to_client_tcp(
@@ -364,13 +351,12 @@ pub(crate) async fn recv_from_client_tcp(
                     error!(
                         ">>>> Transport {transport_id} fail to receive tcp data from smoltcp because of error: {e:?}"
                     );
-                    recv_buffer.1.notify_waiters();
+
                     return Err(ClientEndpointError::SmoltcpTcpReceiveError(e));
                 }
             };
-            recv_buffer.0.write().await.extend(tcp_data);
+            recv_buffer.write().await.extend(tcp_data);
         }
-        recv_buffer.1.notify_waiters();
     }
     Ok(())
 }
@@ -412,14 +398,12 @@ pub(crate) async fn recv_from_client_udp(
                     error!(
                         ">>>> Transport {transport_id} fail to receive udp data from smoltcp because of error: {e:?}"
                     );
-                    recv_buffer.1.notify_waiters();
+
                     return Err(ClientEndpointError::SmoltcpUdpReceiveError(e));
                 }
             };
-            recv_buffer.0.write().await.push_back(udp_data.to_vec());
+            recv_buffer.write().await.push_back(udp_data.to_vec());
         }
-
-        recv_buffer.1.notify_waiters();
     }
     Ok(())
 }

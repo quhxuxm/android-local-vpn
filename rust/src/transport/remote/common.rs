@@ -25,7 +25,7 @@ use ppaass_common::{
 use tokio::sync::RwLock;
 use tokio::{
     net::{TcpSocket, TcpStream},
-    sync::{Mutex, Notify},
+    sync::Mutex,
 };
 
 use super::{
@@ -93,10 +93,7 @@ pub(crate) async fn read_from_remote_udp(
     recv_buffer: &RemoteUdpRecvBuf,
 ) -> Result<bool, RemoteEndpointError> {
     match proxy_connection_read.lock().await.next().await {
-        None => {
-            recv_buffer.1.notify_waiters();
-            Ok(true)
-        }
+        None => Ok(true),
         Some(Ok(PpaassProxyMessage {
             payload: proxy_message_payload,
             ..
@@ -112,17 +109,13 @@ pub(crate) async fn read_from_remote_udp(
             if let Ok(dns_response) = DnsPacket::parse(&udp_relay_data) {
                 trace!("<<<< Transport {transport_id}, [UDP PROCESS] read dns response from remote: {dns_response:?}")
             };
-            recv_buffer
-                .0
-                .write()
-                .await
-                .push_back(udp_relay_data.to_vec());
-            recv_buffer.1.notify_waiters();
+            recv_buffer.write().await.push_back(udp_relay_data.to_vec());
+
             Ok(false)
         }
         Some(Err(e)) => {
             error!("<<<< Transport {transport_id} fail to read remote udp data because of error: {e:?}");
-            recv_buffer.1.notify_waiters();
+
             Err(e.into())
         }
     }
@@ -134,10 +127,7 @@ pub(crate) async fn read_from_remote_tcp(
     recv_buffer: &RemoteTcpRecvBuf,
 ) -> Result<bool, RemoteEndpointError> {
     match proxy_connection_read.lock().await.next().await {
-        None => {
-            recv_buffer.1.notify_waiters();
-            Ok(true)
-        }
+        None => Ok(true),
         Some(Ok(PpaassProxyMessage {
             payload: proxy_message_payload,
             ..
@@ -150,13 +140,13 @@ pub(crate) async fn read_from_remote_tcp(
                 "<<<< Transport {transport_id} read remote tcp data to remote endpoint receive buffer: {}",
                 pretty_hex::pretty_hex(&tcp_relay_data)
             );
-            recv_buffer.0.write().await.extend(tcp_relay_data);
-            recv_buffer.1.notify_waiters();
+            recv_buffer.write().await.extend(tcp_relay_data);
+
             Ok(false)
         }
         Some(Err(e)) => {
             error!("<<<< Transport {transport_id} fail to read remote tcp data because of error: {e:?}");
-            recv_buffer.1.notify_waiters();
+
             Err(e.into())
         }
     }
@@ -187,10 +177,7 @@ pub(crate) async fn new_tcp(
         transport_id,
         proxy_connection_read: Mutex::new(proxy_connection_read),
         proxy_connection_write: Mutex::new(proxy_connection_write),
-        recv_buffer: Arc::new((
-            RwLock::new(VecDeque::with_capacity(65536)),
-            Notify::new(),
-        )),
+        recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(65536))),
         config,
     })
 }
@@ -220,10 +207,7 @@ pub(crate) async fn new_udp(
         transport_id,
         proxy_connection_read: Mutex::new(proxy_connection_read),
         proxy_connection_write: Mutex::new(proxy_connection_write),
-        recv_buffer: Arc::new((
-            RwLock::new(VecDeque::with_capacity(65536)),
-            Notify::new(),
-        )),
+        recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(65536))),
         config,
     })
 }

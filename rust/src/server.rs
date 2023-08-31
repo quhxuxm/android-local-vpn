@@ -120,7 +120,7 @@ impl PpaassVpnServer {
                 {
                     let mut transports = transports.lock().await;
                     transports.remove(&transport_id);
-                    debug!("###### Remove transport {transport_id}, current transport number: {}", transports.len())
+                    info!("###### Remove transport {transport_id}, current transport number: {}", transports.len())
                 }
             });
         }
