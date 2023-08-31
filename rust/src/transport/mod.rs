@@ -166,6 +166,9 @@ impl Transport {
                 }
             };
         }
+        client_endpoint.abort().await;
+        client_endpoint.destory().await;
+        remote_endpoint.close().await;
         Ok(())
     }
 
