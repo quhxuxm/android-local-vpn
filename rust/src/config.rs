@@ -15,7 +15,7 @@ impl PpaassVpnServerConfig {
         Self {
             user_token: "user1".to_string(),
             proxy_address: "64.176.193.76:80".to_string(),
-            thread_number: 32,
+            thread_number: 256,
             proxy_connection_buffer_size: 65536,
             smoltcp_tcp_rx_buffer_size: 65536,
             smoltcp_tcp_tx_buffer_size: 65536,
