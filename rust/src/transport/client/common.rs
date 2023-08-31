@@ -85,17 +85,16 @@ pub(crate) fn create_smoltcp_tcp_socket<'a>(
 
 pub(crate) fn create_smoltcp_udp_socket<'a>(
     trans_id: TransportId,
+    config: &PpaassVpnServerConfig,
 ) -> Result<SmoltcpUdpSocket<'a>> {
     let mut socket = SmoltcpUdpSocket::new(
         SmoltcpUdpSocketBuffer::new(
-            // vec![UdpPacketMetadata::EMPTY, UdpPacketMetadata::EMPTY],
-            vec![SmoltcpUdpPacketMetadata::EMPTY; 1024 * 1024],
-            vec![0; 1024 * 1024],
+            vec![SmoltcpUdpPacketMetadata::EMPTY; 32],
+            vec![0; config.get_smoltcp_tcp_rx_buffer_size() * 32],
         ),
         SmoltcpUdpSocketBuffer::new(
-            // vec![UdpPacketMetadata::EMPTY, UdpPacketMetadata::EMPTY],
-            vec![SmoltcpUdpPacketMetadata::EMPTY; 1024 * 1024],
-            vec![0; 1024 * 1024],
+            vec![SmoltcpUdpPacketMetadata::EMPTY; 32],
+            vec![0; config.get_smoltcp_tcp_rx_buffer_size() * 32],
         ),
     );
     socket.bind(trans_id.destination).map_err(|e| {
@@ -141,7 +140,7 @@ pub(crate) fn new_udp(
     let (smoltcp_iface, smoltcp_device) =
         prepare_smoltcp_iface_and_device(transport_id)?;
     let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1));
-    let smoltcp_udp_socket = create_smoltcp_udp_socket(transport_id)?;
+    let smoltcp_udp_socket = create_smoltcp_udp_socket(transport_id, config)?;
     let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_udp_socket);
     let ctl = ClientEndpointCtl::new(
         Mutex::new(smoltcp_socket_set),

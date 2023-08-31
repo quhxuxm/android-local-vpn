@@ -110,12 +110,10 @@ pub(crate) async fn read_from_remote_udp(
                 trace!("<<<< Transport {transport_id}, [UDP PROCESS] read dns response from remote: {dns_response:?}")
             };
             recv_buffer.write().await.push_back(udp_relay_data.to_vec());
-
             Ok(false)
         }
         Some(Err(e)) => {
             error!("<<<< Transport {transport_id} fail to read remote udp data because of error: {e:?}");
-
             Err(e.into())
         }
     }

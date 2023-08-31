@@ -128,8 +128,8 @@ impl<'buf> ClientEndpoint<'buf> {
                 ClientEndpointState::Tcp(smoltcp_socket.state())
             }
             ClientEndpoint::Udp {
-                smoltcp_socket_handle,
                 ctl,
+                smoltcp_socket_handle,
                 ..
             } => {
                 let ClientEndpointCtlLockGuard {
@@ -237,6 +237,8 @@ impl<'buf> ClientEndpoint<'buf> {
         }
     }
 
+    /// The client tcp & udp packet will go through smoltcp stack
+    /// and change the client endpoint state
     pub(crate) async fn receive_from_client(
         &self,
         client_data: Vec<u8>,

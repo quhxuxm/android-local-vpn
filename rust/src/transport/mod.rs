@@ -5,7 +5,7 @@ mod value;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use log::{debug, error};
+use log::{debug, error, trace};
 
 use smoltcp::socket::tcp::State;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -105,6 +105,9 @@ impl Transport {
                     match client_endpoint_state {
                         ClientEndpointState::Tcp(State::Closed) => {
                             // The tcp connection is closed we should remove the transport from the repository because of no data will come again.
+                            debug!(
+                                ">>>> Transport {transport_id} is TCP protocol in [Closed] state, destory client endpoint and remove the transport."
+                            );
                             client_endpoint.destory().await;
                             if let Err(e) =
                                 remove_transports_tx.send(transport_id).await
@@ -117,6 +120,9 @@ impl Transport {
                             ClientEndpointUdpState::Closed,
                         ) => {
                             // The udp connection is closed, we should remove the transport from the repository because of no data will come again.
+                            debug!(
+                                ">>>> Transport {transport_id} is UDP protocol in [Closed] state, destory client endpoint and remove the transport."
+                            );
                             client_endpoint.destory().await;
                             if let Err(e) =
                                 remove_transports_tx.send(transport_id).await
@@ -185,13 +191,16 @@ impl Transport {
                         {
                             error!(">>>> Transport {transport_id} fail to consume remote endpoint receive buffer because of error, close client endpoint: {e:?}");
                             client_endpoint.close().await;
+                            remote_endpoint.close().await;
                             return;
                         };
                         if exhausted {
                             // Remote date exhausted, close the client endpoint.
                             client_endpoint.close().await;
+                            remote_endpoint.close().await;
                             return;
                         }
+                        debug!(">>>> Transport {transport_id} keep reading remote data.");
                         continue;
                     }
                     Err(e) => {
@@ -214,7 +223,7 @@ impl Transport {
         data: Vec<u8>,
         remote_endpoint: Arc<RemoteEndpoint>,
     ) -> Result<usize, RemoteEndpointError> {
-        debug!(
+        trace!(
             ">>>> Transport {transport_id} write data to remote: {}",
             pretty_hex::pretty_hex(&data)
         );
@@ -230,7 +239,7 @@ impl Transport {
         data: Vec<u8>,
         client_endpoint: Arc<ClientEndpoint<'_>>,
     ) -> Result<usize, ClientEndpointError> {
-        debug!(
+        trace!(
             ">>>> Transport {transport_id} write data to smoltcp: {}",
             pretty_hex::pretty_hex(&data)
         );
