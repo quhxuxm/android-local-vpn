@@ -2,7 +2,6 @@ use std::{fs::File, io::Write, sync::Arc};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
-    collections::hash_map::Entry,
     io::{ErrorKind, Read},
     os::fd::FromRawFd,
 };
@@ -72,6 +71,7 @@ impl PpaassVpnServer {
 
         let ppaass_server_config = self.config;
         let closed = Arc::clone(&self.closed);
+
         runtime.spawn(async move {
             while let Some(client_output_packet) = client_output_rx.recv().await
             {
@@ -110,8 +110,20 @@ impl PpaassVpnServer {
         config: &'static PpaassVpnServerConfig,
     ) {
         let transports = Arc::new(Mutex::new(Transports::default()));
+        let (remove_transports_tx, mut remove_transports_rx) =
+            channel::<TransportId>(1024);
         let mut client_rx_buffer = [0u8; 65536];
-
+        {
+            let transports = Arc::clone(&transports);
+            tokio::spawn(async move {
+                while let Some(transport_id) = remove_transports_rx.recv().await
+                {
+                    let mut transports = transports.lock().await;
+                    transports.remove(&transport_id);
+                    debug!("###### Remove transport {transport_id}, current transport number: {}", transports.len())
+                }
+            });
+        }
         loop {
             if closed.load(Ordering::Relaxed) {
                 info!("Close vpn server, going to quite.");
@@ -144,35 +156,25 @@ impl PpaassVpnServer {
                     continue;
                 }
             };
-
-            match transports.lock().await.entry(transport_id) {
-                Entry::Occupied(entry) => {
-                    debug!(">>>> Found existing transport {transport_id}.");
-                    if entry.get().send(client_data.to_vec()).await.is_err() {
-                        error!("Transport {transport_id} closed already, can not send client data to transport");
-                        entry.remove();
-                    };
-                }
-                Entry::Vacant(entry) => {
+            let mut transports = transports.lock().await;
+            let client_input_tx= transports.entry(transport_id).or_insert_with(||{
                     let (transport, client_input_tx) =
                         Transport::new(transport_id, client_output_tx.clone());
-                    let transports = Arc::clone(&transports);
+                    let remove_transports_tx=remove_transports_tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = transport
-                            .exec(agent_rsa_crypto_fetcher, config, transports)
+                            .exec(agent_rsa_crypto_fetcher, config, remove_transports_tx)
                             .await
                         {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
                         };
                     });
-                    if client_input_tx.send(client_data.to_vec()).await.is_err()
-                    {
-                        error!("Transport {transport_id} closed already, can not send client data to transport");
-                        continue;
-                    };
-                    entry.insert(client_input_tx);
-                }
-            }
+                    client_input_tx
+            });
+            if let Err(e) = client_input_tx.send(client_data.to_vec()).await {
+                error!("Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
+                transports.remove(&transport_id);
+            };
         }
         error!("****** Server quite because of unknown reason ****** ");
     }

@@ -6,11 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use log::{debug, error, info};
+use log::{debug, error};
 
 use smoltcp::socket::tcp::State;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::sync::Mutex;
 
 use self::client::{ClientEndpoint, ClientEndpointUdpState};
 pub(crate) use self::value::ClientOutputPacket;
@@ -55,7 +54,7 @@ impl Transport {
         mut self,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
-        transports: Arc<Mutex<Transports>>,
+        remove_transports_tx: Sender<TransportId>,
     ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
         let client_endpoint = match ClientEndpoint::new(
@@ -65,9 +64,9 @@ impl Transport {
         ) {
             Ok(client_endpoint) => client_endpoint,
             Err(e) => {
-                let mut transports = transports.lock().await;
-                transports.remove(&transport_id);
-                error!("###### Transport {transport_id} fail to initialize client endpoint remove it from repository, current transport number: {}, error: {e:?}", transports.len());
+                if let Err(e) = remove_transports_tx.send(transport_id).await {
+                    error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
+                };
                 return Err(e.into());
             }
         };
@@ -81,10 +80,11 @@ impl Transport {
         {
             Ok(remote_endpoint) => remote_endpoint,
             Err(e) => {
+                error!(">>>> Transport {transport_id} error happen when initialize the remote endpoint because of the error: {e:?}");
                 client_endpoint.abort().await;
-                let mut transports = transports.lock().await;
-                transports.remove(&transport_id);
-                error!("###### Transport {transport_id} fail to initialize remote endpoint, abort client endpoint and remove it from repository, current transport number: {}, error: {e:?}", transports.len());
+                if let Err(e) = remove_transports_tx.send(transport_id).await {
+                    error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
+                };
                 return Err(e.into());
             }
         };
@@ -97,14 +97,14 @@ impl Transport {
             Arc::clone(&client_endpoint),
             Arc::clone(&remote_endpoint),
             Arc::clone(&self.remote_data_exhausted),
-            Arc::clone(&transports),
+            remove_transports_tx.clone(),
             Arc::clone(&self.closed),
         );
         Self::spawn_consume_client_recv_buf_task(
             transport_id,
             Arc::clone(&remote_endpoint),
             Arc::clone(&client_endpoint),
-            Arc::clone(&transports),
+            remove_transports_tx.clone(),
             Arc::clone(&self.closed),
         );
         Self::spawn_consume_remote_recv_buf_task(
@@ -125,18 +125,22 @@ impl Transport {
                     match client_endpoint_state {
                         ClientEndpointState::Tcp(State::Closed) => {
                             // The tcp connection is closed we should remove the transport from the repository because of no data will come again.
-                            let mut transports = transports.lock().await;
-                            transports.remove(&transport_id);
-                            debug!("###### Transport {transport_id} tcp connection in Closed state, remove it from repository, current transport number: {}.", transports.len());
+                            if let Err(e) =
+                                remove_transports_tx.send(transport_id).await
+                            {
+                                error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
+                            };
                             return Ok(());
                         }
                         ClientEndpointState::Udp(
                             ClientEndpointUdpState::Closed,
                         ) => {
                             // The udp connection is closed, we should remove the transport from the repository because of no data will come again.
-                            let mut transports = transports.lock().await;
-                            transports.remove(&transport_id);
-                            debug!("###### Transport {transport_id} udp connection is closed, remove it from repository, current transport number: {}.", transports.len());
+                            if let Err(e) =
+                                remove_transports_tx.send(transport_id).await
+                            {
+                                error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
+                            };
 
                             return Ok(());
                         }
@@ -149,9 +153,11 @@ impl Transport {
                 }
                 Err(e) => {
                     client_endpoint.abort().await;
-                    let mut transports = transports.lock().await;
-                    transports.remove(&transport_id);
-                    error!("###### Transport {transport_id} error happen, remove it from repository, current transport number: {}, error: {e:?}.", transports.len());
+                    if let Err(e) =
+                        remove_transports_tx.send(transport_id).await
+                    {
+                        error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
+                    };
                     return Err(AgentError::ClientEndpoint(
                         ClientEndpointError::Other(anyhow!(e)),
                     ));
@@ -164,9 +170,9 @@ impl Transport {
         client_endpoint.close().await;
         // Close remote socket
         remote_endpoint.close().await;
-        let mut transports = transports.lock().await;
-        transports.remove(&transport_id);
-        info!("#### Transport {transport_id} quit grace fully, current transport number: {}", transports.len());
+        if let Err(e) = remove_transports_tx.send(transport_id).await {
+            error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
+        };
         Ok(())
     }
 
@@ -176,7 +182,7 @@ impl Transport {
         client_endpoint: Arc<ClientEndpoint<'b>>,
         remote_endpoint: Arc<RemoteEndpoint>,
         remote_data_exhausted: Arc<AtomicBool>,
-        transports: Arc<Mutex<Transports>>,
+        remove_transports_tx: Sender<TransportId>,
         closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
@@ -195,11 +201,14 @@ impl Transport {
                         return;
                     }
                     Err(e) => {
+                        error!(">>>> Transport {transport_id} error happen when read from remote endpoint because of the error: {e:?}");
                         client_endpoint.abort().await;
                         remote_endpoint.close().await;
-                        let mut transports = transports.lock().await;
-                        transports.remove(&transport_id);
-                        error!("###### Transport {transport_id} error happen on read remote data, abort client endpoint and close remote endpoint, remove it from repository, current transport number: {}, error: {e:?}", transports.len());
+                        if let Err(e) =
+                            remove_transports_tx.send(transport_id).await
+                        {
+                            error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
+                        };
                         return;
                     }
                 }
@@ -228,7 +237,7 @@ impl Transport {
         transport_id: TransportId,
         remote_endpoint: Arc<RemoteEndpoint>,
         client_endpoint: Arc<ClientEndpoint<'b>>,
-        transports: Arc<Mutex<Transports>>,
+        remove_transports_tx: Sender<TransportId>,
         closed: Arc<AtomicBool>,
     ) where
         'b: 'static,
@@ -245,11 +254,14 @@ impl Transport {
                     )
                     .await
                 {
+                    error!(">>>> Transport {transport_id} error happen when consume client receive buffer because of the error: {e:?}");
                     client_endpoint.abort().await;
                     remote_endpoint.close().await;
-                    let mut transports = transports.lock().await;
-                    transports.remove(&transport_id);
-                    error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer, close remote endpoint and abort client endpoint, remove it from repository, current transport number: {}, error: {e:?}", transports.len());
+                    if let Err(e) =
+                        remove_transports_tx.send(transport_id).await
+                    {
+                        error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
+                    };
                     return;
                 };
 
