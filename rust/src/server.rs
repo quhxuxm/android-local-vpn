@@ -1,6 +1,5 @@
 use std::{fs::File, io::Write, sync::Arc};
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     io::{ErrorKind, Read},
     os::fd::FromRawFd,
@@ -11,9 +10,16 @@ use log::{debug, error, info, trace};
 
 use tokio::{
     runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
-    sync::{mpsc::Sender, Mutex},
+    sync::{
+        mpsc::Sender as MpscSender,
+        oneshot::{
+            channel as OneshotChannel, Receiver as OneshotReceiver,
+            Sender as OneshotSender,
+        },
+        Mutex,
+    },
 };
-use tokio::{sync::mpsc::channel, task::yield_now};
+use tokio::{sync::mpsc::channel as MpscChannel, task::yield_now};
 
 use crate::{
     config::PpaassVpnServerConfig,
@@ -28,7 +34,7 @@ use crate::{
 pub(crate) struct PpaassVpnServer {
     config: &'static PpaassVpnServerConfig,
     file_descriptor: i32,
-    closed: Arc<AtomicBool>,
+    stop_signal_tx: Option<OneshotSender<bool>>,
     runtime: Option<TokioRuntime>,
 }
 
@@ -40,7 +46,7 @@ impl PpaassVpnServer {
         Self {
             config,
             file_descriptor,
-            closed: Arc::new(AtomicBool::new(false)),
+            stop_signal_tx: Default::default(),
             runtime: None,
         }
     }
@@ -67,11 +73,11 @@ impl PpaassVpnServer {
         let mut client_file_write =
             unsafe { File::from_raw_fd(file_descriptor) };
         let (client_output_tx, mut client_output_rx) =
-            channel::<ClientOutputPacket>(1024);
+            MpscChannel::<ClientOutputPacket>(1024);
 
         let ppaass_server_config = self.config;
-        let closed = Arc::clone(&self.closed);
-
+        let (stop_signal_tx, stop_signal_rx) = OneshotChannel();
+        self.stop_signal_tx = Some(stop_signal_tx);
         runtime.spawn(async move {
             while let Some(client_output_packet) = client_output_rx.recv().await
             {
@@ -88,7 +94,7 @@ impl PpaassVpnServer {
             info!("Begin to handle client file data.");
             Self::start_handle_client_rx(
                 client_file_read,
-                closed,
+                stop_signal_rx,
                 client_output_tx,
                 agent_rsa_crypto_fetcher,
                 ppaass_server_config,
@@ -104,14 +110,14 @@ impl PpaassVpnServer {
 
     async fn start_handle_client_rx(
         mut client_file_read: File,
-        closed: Arc<AtomicBool>,
-        client_output_tx: Sender<ClientOutputPacket>,
+        mut stop_signal_rx: OneshotReceiver<bool>,
+        client_output_tx: MpscSender<ClientOutputPacket>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
     ) {
         let transports = Arc::new(Mutex::new(Transports::default()));
         let (remove_transports_tx, mut remove_transports_rx) =
-            channel::<TransportId>(1024);
+            MpscChannel::<TransportId>(65536);
         let mut client_rx_buffer = [0u8; 65536];
         {
             let transports = Arc::clone(&transports);
@@ -125,14 +131,15 @@ impl PpaassVpnServer {
             });
         }
         loop {
-            if closed.load(Ordering::Relaxed) {
-                info!("Close vpn server, going to quite.");
-                break;
+            if let Ok(true) = stop_signal_rx.try_recv() {
+                info!("Stop ppaass vpn server.");
+                return;
             }
+
             let client_data = match client_file_read.read(&mut client_rx_buffer)
             {
                 Ok(0) => {
-                    error!("Nothing to read from client file break the loop.");
+                    error!("Nothing to read from client file, stop ppaass vpn server.");
                     break;
                 }
                 Ok(size) => &client_rx_buffer[..size],
@@ -143,7 +150,7 @@ impl PpaassVpnServer {
                 }
                 Err(e) => {
                     error!(
-                        "Fail to read client file data because of error: {e:?}"
+                        "Fail to read client file data because of error, stop ppaass vpn server: {e:?}"
                     );
                     break;
                 }
@@ -176,16 +183,15 @@ impl PpaassVpnServer {
                 transports.remove(&transport_id);
             };
         }
-        error!("****** Server quite because of unknown reason ****** ");
     }
 
     pub(crate) fn stop(&mut self) -> Result<()> {
         debug!("Stop ppaass vpn server");
-        if let Some(runtime) = self.runtime.take() {
-            runtime.block_on(async {
-                self.closed.swap(true, Ordering::Relaxed);
-            });
-        };
+        if let Some(stop_signal_tx) = self.stop_signal_tx.take() {
+            if let Err(e) = stop_signal_tx.send(true) {
+                error!("Fail to stop ppaass vpn server because of error: {e:?}")
+            };
+        }
         Ok(())
     }
 }

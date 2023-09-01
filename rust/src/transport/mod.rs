@@ -34,7 +34,7 @@ impl Transport {
         transport_id: TransportId,
         client_output_tx: Sender<ClientOutputPacket>,
     ) -> (Self, Sender<Vec<u8>>) {
-        let (client_input_tx, client_input_rx) = channel::<Vec<u8>>(1024);
+        let (client_input_tx, client_input_rx) = channel::<Vec<u8>>(65536);
         (
             Self {
                 transport_id,
