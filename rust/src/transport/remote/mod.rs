@@ -146,13 +146,13 @@ impl RemoteEndpoint {
         }
     }
 
-    pub(crate) async fn consume_recv_buffer<'buf, F, Fut>(
+    pub(crate) async fn consume_recv_buffer<'c, 'buf, F, Fut>(
         &self,
-        remote: Arc<ClientEndpoint<'buf>>,
+        remote: &'c ClientEndpoint<'buf>,
         mut consume_fn: F,
     ) -> Result<(), ClientEndpointError>
     where
-        F: FnMut(TransportId, Vec<u8>, Arc<ClientEndpoint<'buf>>) -> Fut,
+        F: FnMut(TransportId, Vec<u8>, &'c ClientEndpoint<'buf>) -> Fut,
         Fut: Future<Output = Result<usize, ClientEndpointError>>,
     {
         match self {
@@ -185,12 +185,8 @@ impl RemoteEndpoint {
                 let mut recv_buffer = recv_buffer.write().await;
                 let mut consume_size = 0;
                 for udp_data in recv_buffer.iter() {
-                    consume_fn(
-                        *transport_id,
-                        udp_data.to_vec(),
-                        Arc::clone(&remote),
-                    )
-                    .await?;
+                    consume_fn(*transport_id, udp_data.to_vec(), remote)
+                        .await?;
                     consume_size += 1;
                 }
                 recv_buffer.drain(..consume_size);

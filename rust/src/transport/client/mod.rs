@@ -147,13 +147,13 @@ impl<'buf> ClientEndpoint<'buf> {
         }
     }
 
-    pub(crate) async fn consume_recv_buffer<F, Fut>(
+    pub(crate) async fn consume_recv_buffer<'r, F, Fut>(
         &self,
-        remote: Arc<RemoteEndpoint>,
+        remote: &'r RemoteEndpoint,
         mut consume_fn: F,
-    ) -> Result<()>
+    ) -> Result<(), RemoteEndpointError>
     where
-        F: FnMut(TransportId, Vec<u8>, Arc<RemoteEndpoint>) -> Fut,
+        F: FnMut(TransportId, Vec<u8>, &'r RemoteEndpoint) -> Fut,
         Fut: Future<Output = Result<usize, RemoteEndpointError>>,
     {
         match self {
@@ -183,12 +183,8 @@ impl<'buf> ClientEndpoint<'buf> {
                 let mut recv_buffer = recv_buffer.write().await;
                 let mut consume_size = 0;
                 for udp_data in recv_buffer.iter() {
-                    consume_fn(
-                        *transport_id,
-                        udp_data.to_vec(),
-                        Arc::clone(&remote),
-                    )
-                    .await?;
+                    consume_fn(*transport_id, udp_data.to_vec(), remote)
+                        .await?;
                     consume_size += 1;
                 }
                 recv_buffer.drain(..consume_size);
@@ -338,11 +334,12 @@ impl<'buf> ClientEndpoint<'buf> {
         }
     }
 
-    pub(crate) async fn destory(&self) {
+    pub(crate) async fn destroy(&self) {
         match self {
             Self::Tcp {
                 smoltcp_socket_handle,
                 ctl,
+                recv_buffer,
                 ..
             } => {
                 let ClientEndpointCtlLockGuard {
@@ -351,11 +348,14 @@ impl<'buf> ClientEndpoint<'buf> {
                     ..
                 } = ctl.lock().await;
                 smoltcp_socket_set.remove(*smoltcp_socket_handle);
+
                 smoltcp_device.destory();
+                recv_buffer.write().await.clear();
             }
             Self::Udp {
                 ctl,
                 smoltcp_socket_handle,
+                recv_buffer,
                 ..
             } => {
                 let ClientEndpointCtlLockGuard {
@@ -365,6 +365,7 @@ impl<'buf> ClientEndpoint<'buf> {
                 } = ctl.lock().await;
                 smoltcp_socket_set.remove(*smoltcp_socket_handle);
                 smoltcp_device.destory();
+                recv_buffer.write().await.clear();
             }
         }
     }
