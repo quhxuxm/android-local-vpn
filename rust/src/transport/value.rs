@@ -52,47 +52,79 @@ impl Display for TransportId {
     }
 }
 
-impl TransportId {
-    pub(crate) fn new(data: &[u8]) -> Result<TransportId> {
+pub(crate) enum ClientInputTransportPacket<'p> {
+    Tcp(TcpPacket<&'p [u8]>),
+    Udp(UdpPacket<&'p [u8]>),
+}
+
+pub(crate) enum ClientInputIpPacket<'p> {
+    Ipv4(ClientInputTransportPacket<'p>),
+    Ipv6(ClientInputTransportPacket<'p>),
+}
+
+pub(crate) struct ClientInputParser;
+
+impl ClientInputParser {
+    pub(crate) fn parse(
+        data: &[u8],
+    ) -> Result<(TransportId, ClientInputIpPacket<'_>)> {
         Self::parse_ipv4(data).or_else(|_| Self::parse_ipv6(data))
     }
 
-    fn parse_ipv4(data: &[u8]) -> Result<TransportId> {
-        let ip_packet = Ipv4Packet::new_checked(&data)?;
+    fn parse_ipv4(
+        data: &[u8],
+    ) -> Result<(TransportId, ClientInputIpPacket<'_>)> {
+        let ip_packet = Ipv4Packet::new_checked(data)?;
         match ip_packet.next_header() {
             IpProtocol::Tcp => {
                 let payload = ip_packet.payload();
-                let packet = TcpPacket::new_checked(payload)?;
+                let tcp_packet = TcpPacket::new_checked(payload)?;
                 let source_ip: [u8; 4] =
                     ip_packet.src_addr().as_bytes().try_into()?;
                 let destination_ip: [u8; 4] =
                     ip_packet.dst_addr().as_bytes().try_into()?;
-                Ok(TransportId {
-                    source: SocketAddr::from((source_ip, packet.src_port())),
-                    destination: SocketAddr::from((
-                        destination_ip,
-                        packet.dst_port(),
+                Ok((
+                    TransportId {
+                        source: SocketAddr::from((
+                            source_ip,
+                            tcp_packet.src_port(),
+                        )),
+                        destination: SocketAddr::from((
+                            destination_ip,
+                            tcp_packet.dst_port(),
+                        )),
+                        control_protocol: ControlProtocol::Tcp,
+                        internet_protocol: InternetProtocol::Ipv4,
+                    },
+                    ClientInputIpPacket::Ipv4(ClientInputTransportPacket::Tcp(
+                        tcp_packet,
                     )),
-                    control_protocol: ControlProtocol::Tcp,
-                    internet_protocol: InternetProtocol::Ipv4,
-                })
+                ))
             }
             IpProtocol::Udp => {
                 let payload = ip_packet.payload();
-                let packet = UdpPacket::new_checked(payload)?;
+                let udp_packet = UdpPacket::new_checked(payload)?;
                 let source_ip: [u8; 4] =
                     ip_packet.src_addr().as_bytes().try_into()?;
                 let destination_ip: [u8; 4] =
                     ip_packet.dst_addr().as_bytes().try_into()?;
-                Ok(TransportId {
-                    source: SocketAddr::from((source_ip, packet.src_port())),
-                    destination: SocketAddr::from((
-                        destination_ip,
-                        packet.dst_port(),
+                Ok((
+                    TransportId {
+                        source: SocketAddr::from((
+                            source_ip,
+                            udp_packet.src_port(),
+                        )),
+                        destination: SocketAddr::from((
+                            destination_ip,
+                            udp_packet.dst_port(),
+                        )),
+                        control_protocol: ControlProtocol::Udp,
+                        internet_protocol: InternetProtocol::Ipv4,
+                    },
+                    ClientInputIpPacket::Ipv4(ClientInputTransportPacket::Udp(
+                        udp_packet,
                     )),
-                    control_protocol: ControlProtocol::Udp,
-                    internet_protocol: InternetProtocol::Ipv4,
-                })
+                ))
             }
             _ => Err(anyhow!(
                 "Unsupported transport protocol in ipv4 packet, protocol=${:?}",
@@ -101,43 +133,59 @@ impl TransportId {
         }
     }
 
-    fn parse_ipv6(data: &[u8]) -> Result<TransportId> {
-        let ip_packet = Ipv6Packet::new_checked(&data)?;
+    fn parse_ipv6(data: &[u8]) -> Result<(TransportId, ClientInputIpPacket)> {
+        let ip_packet = Ipv6Packet::new_checked(data)?;
         let protocol = ip_packet.next_header();
         match protocol {
             IpProtocol::Tcp => {
                 let payload = ip_packet.payload();
-                let packet = TcpPacket::new_checked(payload)?;
+                let tcp_packet = TcpPacket::new_checked(payload)?;
                 let source_ip: [u8; 16] =
                     ip_packet.src_addr().as_bytes().try_into()?;
                 let destination_ip: [u8; 16] =
                     ip_packet.dst_addr().as_bytes().try_into()?;
-                Ok(TransportId {
-                    source: SocketAddr::from((source_ip, packet.src_port())),
-                    destination: SocketAddr::from((
-                        destination_ip,
-                        packet.dst_port(),
+                Ok((
+                    TransportId {
+                        source: SocketAddr::from((
+                            source_ip,
+                            tcp_packet.src_port(),
+                        )),
+                        destination: SocketAddr::from((
+                            destination_ip,
+                            tcp_packet.dst_port(),
+                        )),
+                        control_protocol: ControlProtocol::Tcp,
+                        internet_protocol: InternetProtocol::Ipv6,
+                    },
+                    ClientInputIpPacket::Ipv6(ClientInputTransportPacket::Tcp(
+                        tcp_packet,
                     )),
-                    control_protocol: ControlProtocol::Tcp,
-                    internet_protocol: InternetProtocol::Ipv6,
-                })
+                ))
             }
             IpProtocol::Udp => {
                 let payload = ip_packet.payload();
-                let packet = UdpPacket::new_checked(payload)?;
+                let udp_packet = UdpPacket::new_checked(payload)?;
                 let source_ip: [u8; 16] =
                     ip_packet.src_addr().as_bytes().try_into()?;
                 let destination_ip: [u8; 16] =
                     ip_packet.dst_addr().as_bytes().try_into()?;
-                Ok(TransportId {
-                    source: SocketAddr::from((source_ip, packet.src_port())),
-                    destination: SocketAddr::from((
-                        destination_ip,
-                        packet.dst_port(),
+                Ok((
+                    TransportId {
+                        source: SocketAddr::from((
+                            source_ip,
+                            udp_packet.src_port(),
+                        )),
+                        destination: SocketAddr::from((
+                            destination_ip,
+                            udp_packet.dst_port(),
+                        )),
+                        control_protocol: ControlProtocol::Udp,
+                        internet_protocol: InternetProtocol::Ipv6,
+                    },
+                    ClientInputIpPacket::Ipv6(ClientInputTransportPacket::Udp(
+                        udp_packet,
                     )),
-                    control_protocol: ControlProtocol::Udp,
-                    internet_protocol: InternetProtocol::Ipv6,
-                })
+                ))
             }
             _ => Err(anyhow!(
                 "Unsupported transport protocol in ipv6 packet, protocol=${:?}",

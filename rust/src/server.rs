@@ -1,4 +1,4 @@
-use std::{fs::File, io::Write, sync::Arc};
+use std::{collections::hash_map::Entry, fs::File, io::Write, sync::Arc};
 
 use std::{
     io::{ErrorKind, Read},
@@ -23,7 +23,10 @@ use tokio::{sync::mpsc::channel as MpscChannel, task::yield_now};
 
 use crate::{
     config::PpaassVpnServerConfig,
-    transport::{ClientOutputPacket, Transports},
+    transport::{
+        ClientInputIpPacket, ClientInputParser, ClientInputTransportPacket,
+        ClientOutputPacket, Transports,
+    },
 };
 use crate::{
     transport::{Transport, TransportId},
@@ -156,32 +159,76 @@ impl PpaassVpnServer {
                 }
             };
 
-            let transport_id = match TransportId::new(client_data) {
-                Ok(transport_id) => transport_id,
-                Err(e) => {
-                    error!(">>>> Fail to parse transport id because of error: {e:?}");
-                    continue;
-                }
-            };
+            let (transport_id, create_on_not_exist) =
+                match ClientInputParser::parse(client_data) {
+                    Ok((
+                        transport_id,
+                        ClientInputIpPacket::Ipv4(
+                            ClientInputTransportPacket::Tcp(tcp_packet),
+                        ),
+                    )) => (transport_id, tcp_packet.syn()),
+                    Ok((
+                        transport_id,
+                        ClientInputIpPacket::Ipv4(
+                            ClientInputTransportPacket::Udp(_),
+                        ),
+                    )) => (transport_id, true),
+                    Ok((
+                        transport_id,
+                        ClientInputIpPacket::Ipv6(
+                            ClientInputTransportPacket::Tcp(tcp_packet),
+                        ),
+                    )) => (transport_id, tcp_packet.syn()),
+                    Ok((
+                        transport_id,
+                        ClientInputIpPacket::Ipv6(
+                            ClientInputTransportPacket::Udp(_),
+                        ),
+                    )) => (transport_id, true),
+                    Err(e) => {
+                        error!(">>>> Fail to parse transport id from ip packet because of error: {e:?}");
+                        continue;
+                    }
+                };
+
             let mut transports = transports.lock().await;
-            let client_input_tx= transports.entry(transport_id).or_insert_with(||{
+            match transports.entry(transport_id) {
+                Entry::Occupied(entry) => {
+                    if let Err(e) = entry.get().send(client_data.to_vec()).await
+                    {
+                        error!(">>>> Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
+                        transports.remove(&transport_id);
+                    };
+                }
+                Entry::Vacant(entry) => {
+                    if !create_on_not_exist {
+                        error!("Incoming client input packet is not a valid handshake.");
+                        continue;
+                    }
                     let (transport, client_input_tx) =
                         Transport::new(transport_id, client_output_tx.clone());
-                    let remove_transports_tx=remove_transports_tx.clone();
+                    let remove_transports_tx = remove_transports_tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = transport
-                            .exec(agent_rsa_crypto_fetcher, config, remove_transports_tx)
+                            .exec(
+                                agent_rsa_crypto_fetcher,
+                                config,
+                                remove_transports_tx,
+                            )
                             .await
                         {
                             error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
                         };
                     });
-                    client_input_tx
-            });
-            if let Err(e) = client_input_tx.send(client_data.to_vec()).await {
-                error!("Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
-                transports.remove(&transport_id);
-            };
+                    let client_input_tx = entry.insert(client_input_tx);
+                    if let Err(e) =
+                        client_input_tx.send(client_data.to_vec()).await
+                    {
+                        error!("Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
+                        transports.remove(&transport_id);
+                    };
+                }
+            }
         }
     }
 

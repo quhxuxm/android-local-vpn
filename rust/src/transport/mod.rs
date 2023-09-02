@@ -11,6 +11,9 @@ use smoltcp::socket::tcp::State;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use self::client::{ClientEndpoint, ClientEndpointUdpState};
+pub(crate) use self::value::ClientInputIpPacket;
+pub(crate) use self::value::ClientInputParser;
+pub(crate) use self::value::ClientInputTransportPacket;
 pub(crate) use self::value::ClientOutputPacket;
 pub(crate) use self::value::ControlProtocol;
 pub(crate) use self::value::TransportId;
