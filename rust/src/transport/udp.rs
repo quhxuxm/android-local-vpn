@@ -73,6 +73,18 @@ impl UdpTransport {
         {
             Err(_) => {
                 error!("<<<< Transport {transport_id} receive udp from remote timeout in 10 seconds.");
+
+                if let Err(e) = Self::flush_client_recv_buf_to_remote(
+                    &client_endpoint,
+                    &remote_endpoint,
+                )
+                .await
+                {
+                    error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
+                };
+                remote_endpoint.close().await;
+                client_endpoint.close().await;
+                client_endpoint.destroy().await;
                 Err(RemoteEndpointError::ReceiveTimeout(10).into())
             }
             Ok(Ok(())) => {
@@ -113,8 +125,30 @@ impl UdpTransport {
                             client_endpoint.destroy().await;
                             return Err(e.into());
                         };
-                        match remote_endpoint.read_from_remote().await {
-                            Ok(_) => {
+                        match tokio::time::timeout(
+                            Duration::from_secs(10),
+                            remote_endpoint.read_from_remote(),
+                        )
+                        .await
+                        {
+                            Err(_) => {
+                                error!("<<<< Transport {transport_id} timeout in 10 seconds when receive from remote.");
+                                if let Err(e) =
+                                    Self::flush_client_recv_buf_to_remote(
+                                        &client_endpoint,
+                                        &remote_endpoint,
+                                    )
+                                    .await
+                                {
+                                    error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
+                                };
+                                remote_endpoint.close().await;
+                                client_endpoint.close().await;
+                                client_endpoint.destroy().await;
+                                Err(RemoteEndpointError::ReceiveTimeout(10)
+                                    .into())
+                            }
+                            Ok(Ok(_)) => {
                                 // Remote endpoint still have data to read
                                 if let Err(e) =
                                     Self::flush_remote_recv_buf_to_client(
@@ -130,7 +164,7 @@ impl UdpTransport {
                                 client_endpoint.destroy().await;
                                 Ok(())
                             }
-                            Err(e) => {
+                            Ok(Err(e)) => {
                                 error!("<<<< Transport {transport_id} error happen when read from remote endpoint because of the error: {e:?}");
                                 if let Err(e) =
                                     Self::flush_client_recv_buf_to_remote(

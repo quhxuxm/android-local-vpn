@@ -106,7 +106,23 @@ impl TcpTransport {
             .await
             {
                 Err(_) => {
-                    error!("<<<< Transport {transport_id} receive tcp from remote timeout in 10 seconds.");
+                    error!(">>>> Transport {transport_id} receive tcp from client timeout in 10 seconds.");
+                    if let Err(e) = Self::flush_client_recv_buf_to_remote(
+                        &client_endpoint,
+                        &remote_endpoint,
+                    )
+                    .await
+                    {
+                        error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
+                    };
+                    remote_endpoint.close().await;
+                    client_endpoint.abort().await;
+                    client_endpoint.destroy().await;
+                    if let Err(e) =
+                        remove_tcp_transports_tx.send(transport_id).await
+                    {
+                        error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
+                    };
                     return Err(RemoteEndpointError::ReceiveTimeout(10).into());
                 }
                 Ok(Ok(())) => {
@@ -200,8 +216,18 @@ impl TcpTransport {
     {
         tokio::spawn(async move {
             loop {
-                match remote_endpoint.read_from_remote().await {
-                    Ok(exhausted) => {
+                match tokio::time::timeout(
+                    Duration::from_secs(10),
+                    remote_endpoint.read_from_remote(),
+                )
+                .await
+                {
+                    Err(_) => {
+                        error!("<<<< Transport {transport_id} receive tcp from remote timeout in 10 seconds.");
+                        client_endpoint.close().await;
+                        return;
+                    }
+                    Ok(Ok(exhausted)) => {
                         // Remote endpoint still have data to read
                         if let Err(e) = Self::flush_remote_recv_buf_to_client(
                             &client_endpoint,
@@ -220,7 +246,7 @@ impl TcpTransport {
                         debug!("<<<< Transport {transport_id} keep reading remote data.");
                         continue;
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         error!("<<<< Transport {transport_id} error happen when read from remote endpoint because of the error: {e:?}");
                         client_endpoint.close().await;
                         return;

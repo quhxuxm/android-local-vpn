@@ -44,6 +44,8 @@ pub(crate) enum RemoteEndpointError {
 pub(crate) enum ClientEndpointError {
     #[error("I/O error happen: {0:?}")]
     Io(#[from] StdIoError),
+    #[error("Receive data from client timeout: {0}")]
+    ReceiveTimeout(u64),
     #[error("Smoltcp tcp listen error happen: {0:?}")]
     SmoltcpTcpListenError(#[from] SmoltcpTcpListenError),
     #[error("Smoltcp tcp receive error happen: {0:?}")]
