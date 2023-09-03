@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, os::fd::AsRawFd, sync::Arc};
+use std::{collections::VecDeque, os::fd::AsRawFd, sync::Arc, time::Duration};
 
 use crate::{
     config::PpaassVpnServerConfig,
@@ -22,6 +22,7 @@ use ppaass_common::{
     PpaassMessageProxyPayloadType, PpaassProxyMessage,
     PpaassProxyMessagePayload,
 };
+
 use tokio::sync::RwLock;
 use tokio::{
     net::{TcpSocket, TcpStream},
@@ -226,11 +227,17 @@ async fn init_proxy_connection(
     RemoteEndpointError,
 > {
     let proxy_addresses = config.get_proxy_address();
-    let proxy_tcp_stream = tcp_socket
-        .connect(proxy_addresses.parse().map_err(|e| {
+    let proxy_tcp_stream = tokio::time::timeout(
+        Duration::from_secs(10),
+        tcp_socket.connect(proxy_addresses.parse().map_err(|e| {
             anyhow!("Faill to parse proxy address because of error: {e:?}")
-        })?)
-        .await?;
+        })?),
+    )
+    .await
+    .map_err(|_| {
+        error!(">>>> Transport {transport_id} connect to proxy timeout in 10 seconds.");
+        RemoteEndpointError::ConnectionTimeout(10)
+    })??;
     let mut proxy_connection = PpaassProxyConnection::new(
         transport_id,
         proxy_tcp_stream,

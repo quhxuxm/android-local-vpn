@@ -24,6 +24,8 @@ pub(crate) enum AgentError {
 pub(crate) enum RemoteEndpointError {
     #[error("I/O error happen: {0:?}")]
     Io(#[from] StdIoError),
+    #[error("Connect to remote timeout: {0}")]
+    ConnectionTimeout(u64),
     #[error("Transport {transport_id} fail to protect remote socket fd [{socket_fd}] because of error: {message}")]
     ProtectRemoteSocket {
         transport_id: TransportId,

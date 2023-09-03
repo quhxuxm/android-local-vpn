@@ -25,13 +25,11 @@ use crate::{
     config::PpaassVpnServerConfig,
     transport::{
         ClientInputIpPacket, ClientInputParser, ClientInputTransportPacket,
-        ClientOutputPacket, Transports,
+        ClientOutputPacket, ControlProtocol, TcpTransport, Transports,
+        UdpTransport,
     },
 };
-use crate::{
-    transport::{Transport, TransportId},
-    util::AgentRsaCryptoFetcher,
-};
+use crate::{transport::TransportId, util::AgentRsaCryptoFetcher};
 
 #[derive(Debug)]
 pub(crate) struct PpaassVpnServer {
@@ -116,18 +114,19 @@ impl PpaassVpnServer {
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
     ) {
-        let transports = Arc::new(Mutex::new(Transports::default()));
-        let (remove_transports_tx, mut remove_transports_rx) =
+        let tcp_transports = Arc::new(Mutex::new(Transports::default()));
+        let (remove_tcp_transports_tx, mut remove_tcp_transports_rx) =
             MpscChannel::<TransportId>(65536);
         let mut client_rx_buffer = [0u8; 65536];
         {
-            let transports = Arc::clone(&transports);
+            let tcp_transports = Arc::clone(&tcp_transports);
             tokio::spawn(async move {
-                while let Some(transport_id) = remove_transports_rx.recv().await
+                while let Some(transport_id) =
+                    remove_tcp_transports_rx.recv().await
                 {
-                    let mut transports = transports.lock().await;
-                    transports.remove(&transport_id);
-                    info!("###### Remove transport {transport_id}, current transport number: {}", transports.len())
+                    let mut tcp_transports = tcp_transports.lock().await;
+                    tcp_transports.remove(&transport_id);
+                    info!("###### Remove tcp transport {transport_id}, current tcp transport number: {}", tcp_transports.len())
                 }
             });
         }
@@ -189,42 +188,72 @@ impl PpaassVpnServer {
                     }
                 };
 
-            let mut transports = transports.lock().await;
-            match transports.entry(transport_id) {
-                Entry::Occupied(entry) => {
-                    if let Err(e) = entry.get().send(client_data.to_vec()).await
-                    {
-                        error!(">>>> Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
-                        transports.remove(&transport_id);
-                    };
-                }
-                Entry::Vacant(entry) => {
-                    if !create_on_not_exist {
-                        error!("Incoming client input packet is not a valid handshake.");
-                        continue;
+            match transport_id.control_protocol {
+                ControlProtocol::Tcp => {
+                    let mut tcp_transports = tcp_transports.lock().await;
+                    match tcp_transports.entry(transport_id) {
+                        Entry::Occupied(entry) => {
+                            if let Err(e) =
+                                entry.get().send(client_data.to_vec()).await
+                            {
+                                error!(">>>> Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
+                                tcp_transports.remove(&transport_id);
+                            };
+                        }
+                        Entry::Vacant(entry) => {
+                            if !create_on_not_exist {
+                                error!("Incoming client input packet is not a valid handshake.");
+                                continue;
+                            }
+                            let (transport, client_input_tx) =
+                                TcpTransport::new(
+                                    transport_id,
+                                    client_output_tx.clone(),
+                                );
+                            let remove_tcp_transports_tx =
+                                remove_tcp_transports_tx.clone();
+                            tokio::spawn(async move {
+                                debug!("###### Transport {transport_id} begin to handle tcp packet.");
+                                if let Err(e) = transport
+                                    .exec(
+                                        agent_rsa_crypto_fetcher,
+                                        config,
+                                        remove_tcp_transports_tx,
+                                    )
+                                    .await
+                                {
+                                    error!("###### Transport {transport_id} fail to handle tcp packet because of error: {e:?}");
+                                    return;
+                                };
+                                debug!("###### Transport {transport_id} complete to handle tcp packet.");
+                            });
+                            let client_input_tx = entry.insert(client_input_tx);
+                            if let Err(e) =
+                                client_input_tx.send(client_data.to_vec()).await
+                            {
+                                error!("Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
+                                tcp_transports.remove(&transport_id);
+                            };
+                        }
                     }
-                    let (transport, client_input_tx) =
-                        Transport::new(transport_id, client_output_tx.clone());
-                    let remove_transports_tx = remove_transports_tx.clone();
+                }
+                ControlProtocol::Udp => {
+                    let udp_transport = UdpTransport::new(
+                        transport_id,
+                        client_output_tx.clone(),
+                    );
+                    let client_data = client_data.to_vec();
                     tokio::spawn(async move {
-                        if let Err(e) = transport
-                            .exec(
-                                agent_rsa_crypto_fetcher,
-                                config,
-                                remove_transports_tx,
-                            )
+                        debug!("###### Transport {transport_id} begin to handle udp packet.");
+                        if let Err(e) = udp_transport
+                            .exec(agent_rsa_crypto_fetcher, config, client_data)
                             .await
                         {
-                            error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
+                            error!("###### Transport {transport_id} fail to handle udp packet because of error: {e:?}");
+                            return;
                         };
+                        debug!("###### Transport {transport_id} complete to handle udp packet.");
                     });
-                    let client_input_tx = entry.insert(client_input_tx);
-                    if let Err(e) =
-                        client_input_tx.send(client_data.to_vec()).await
-                    {
-                        error!("Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
-                        transports.remove(&transport_id);
-                    };
                 }
             }
         }
