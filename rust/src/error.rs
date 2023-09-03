@@ -26,6 +26,8 @@ pub(crate) enum RemoteEndpointError {
     Io(#[from] StdIoError),
     #[error("Connect to remote timeout: {0}")]
     ConnectionTimeout(u64),
+    #[error("Receive data from remote timeout: {0}")]
+    ReceiveTimeout(u64),
     #[error("Transport {transport_id} fail to protect remote socket fd [{socket_fd}] because of error: {message}")]
     ProtectRemoteSocket {
         transport_id: TransportId,

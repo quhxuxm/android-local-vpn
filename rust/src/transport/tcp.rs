@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::anyhow;
 use log::{debug, error};
@@ -99,8 +99,17 @@ impl TcpTransport {
         debug!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
         while let Some(client_data) = self.client_input_rx.recv().await {
             // Push the data into smoltcp stack.
-            match client_endpoint.receive_from_client(client_data).await {
-                Ok(()) => {
+            match tokio::time::timeout(
+                Duration::from_secs(10),
+                client_endpoint.receive_from_client(client_data),
+            )
+            .await
+            {
+                Err(_) => {
+                    error!("<<<< Transport {transport_id} receive tcp from remote timeout in 10 seconds.");
+                    return Err(RemoteEndpointError::ReceiveTimeout(10).into());
+                }
+                Ok(Ok(())) => {
                     //Check the tcp connection state because of the ip packet just pass through the smoltcp stack
                     match client_endpoint.get_state().await {
                         ClientEndpointState::Tcp(State::Closed) => {
@@ -143,7 +152,7 @@ impl TcpTransport {
                         }
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     if let Err(e) = Self::flush_client_recv_buf_to_remote(
                         &client_endpoint,
                         &remote_endpoint,

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::anyhow;
 use log::{debug, error};
 
@@ -63,8 +65,17 @@ impl UdpTransport {
 
         debug!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
         // Push the data into smoltcp stack.
-        match client_endpoint.receive_from_client(client_data).await {
-            Ok(()) => {
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            client_endpoint.receive_from_client(client_data),
+        )
+        .await
+        {
+            Err(_) => {
+                error!("<<<< Transport {transport_id} receive udp from remote timeout in 10 seconds.");
+                Err(RemoteEndpointError::ReceiveTimeout(10).into())
+            }
+            Ok(Ok(())) => {
                 //Check the tcp connection state because of the ip packet just pass through the smoltcp stack
                 match client_endpoint.get_state().await {
                     ClientEndpointState::Udp(
@@ -139,7 +150,7 @@ impl UdpTransport {
                     }
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 if let Err(e) = Self::flush_client_recv_buf_to_remote(
                     &client_endpoint,
                     &remote_endpoint,
