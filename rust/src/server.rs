@@ -104,9 +104,7 @@ impl PpaassVpnServer {
             )
             .await;
         });
-
         self.runtime = Some(runtime);
-
         info!("Ppaass vpn server started");
         Ok(())
     }
