@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::VecDeque, time::Duration};
 
 use anyhow::anyhow;
 use log::{debug, error, trace};
@@ -41,7 +41,7 @@ impl UdpTransport {
         client_data: Vec<u8>,
     ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
-        let client_endpoint = ClientUdpEndpoint::new(
+        let mut client_endpoint = ClientUdpEndpoint::new(
             self.transport_id,
             self.client_output_tx,
             config,
@@ -75,7 +75,7 @@ impl UdpTransport {
                 error!("<<<< Transport {transport_id} receive udp from remote timeout in 10 seconds.");
 
                 if let Err(e) = Self::flush_client_recv_buf_to_remote(
-                    &client_endpoint,
+                    &mut client_endpoint,
                     &remote_endpoint,
                 )
                 .await
@@ -99,7 +99,7 @@ impl UdpTransport {
                             );
                         // Flush all the client receiver buffer data to remote.
                         if let Err(e) = Self::flush_client_recv_buf_to_remote(
-                            &client_endpoint,
+                            &mut client_endpoint,
                             &remote_endpoint,
                         )
                         .await
@@ -114,7 +114,7 @@ impl UdpTransport {
                         //For other case we just continue, even for tcp CloseWait and LastAck because of the smoltcp stack should handle the tcp packet.
                         debug!("###### Transport {transport_id} client endpoint in {state:?} state, going to read from remote.");
                         if let Err(e) = Self::flush_client_recv_buf_to_remote(
-                            &client_endpoint,
+                            &mut client_endpoint,
                             &remote_endpoint,
                         )
                         .await
@@ -135,7 +135,7 @@ impl UdpTransport {
                                 error!("<<<< Transport {transport_id} timeout in 10 seconds when receive from remote.");
                                 if let Err(e) =
                                     Self::flush_client_recv_buf_to_remote(
-                                        &client_endpoint,
+                                        &mut client_endpoint,
                                         &remote_endpoint,
                                     )
                                     .await
@@ -152,7 +152,7 @@ impl UdpTransport {
                                 // Remote endpoint still have data to read
                                 if let Err(e) =
                                     Self::flush_remote_recv_buf_to_client(
-                                        &client_endpoint,
+                                        &mut client_endpoint,
                                         &remote_endpoint,
                                     )
                                     .await
@@ -168,7 +168,7 @@ impl UdpTransport {
                                 error!("<<<< Transport {transport_id} error happen when read from remote endpoint because of the error: {e:?}");
                                 if let Err(e) =
                                     Self::flush_client_recv_buf_to_remote(
-                                        &client_endpoint,
+                                        &mut client_endpoint,
                                         &remote_endpoint,
                                     )
                                     .await
@@ -186,7 +186,7 @@ impl UdpTransport {
             }
             Ok(Err(e)) => {
                 if let Err(e) = Self::flush_client_recv_buf_to_remote(
-                    &client_endpoint,
+                    &mut client_endpoint,
                     &remote_endpoint,
                 )
                 .await
@@ -225,21 +225,22 @@ impl UdpTransport {
     /// * client: The client endpoint.
     async fn consume_remote_recv_buf_fn<'b>(
         transport_id: TransportId,
-        data: Vec<u8>,
-        client_endpoint: &ClientUdpEndpoint<'b>,
+        data: Vec<Vec<u8>>,
+        client_endpoint: &mut ClientUdpEndpoint<'b>,
     ) -> Result<usize, ClientEndpointError>
     where
         'b: 'static,
     {
-        trace!(
-            ">>>> Transport {transport_id} write data to smoltcp: {}",
-            pretty_hex::pretty_hex(&data)
-        );
-        client_endpoint.send_to_smoltcp(data).await
+        let mut consume_size = 0;
+        for data in data.into_iter() {
+            client_endpoint.send_to_smoltcp(data).await?;
+            consume_size += 1;
+        }
+        Ok(consume_size)
     }
 
     async fn flush_client_recv_buf_to_remote<'b>(
-        client_endpoint: &ClientUdpEndpoint<'b>,
+        client_endpoint: &mut ClientUdpEndpoint<'b>,
         remote_endpoint: &RemoteUdpEndpoint,
     ) -> Result<(), RemoteEndpointError>
     where
@@ -254,7 +255,7 @@ impl UdpTransport {
     }
 
     async fn flush_remote_recv_buf_to_client<'b>(
-        client_endpoint: &ClientUdpEndpoint<'b>,
+        client_endpoint: &mut ClientUdpEndpoint<'b>,
         remote_endpoint: &RemoteUdpEndpoint,
     ) -> Result<(), ClientEndpointError>
     where

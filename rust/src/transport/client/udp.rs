@@ -1,18 +1,27 @@
-use std::{collections::VecDeque, future::Future, sync::Arc};
+use std::{collections::VecDeque, future::Future};
 
 use anyhow::Result;
 
 use log::error;
-use smoltcp::socket::udp::Socket as SmoltcpUdpSocket;
+use smoltcp::{iface::Interface, socket::udp::Socket as SmoltcpUdpSocket};
 
 use smoltcp::{
     iface::{SocketHandle, SocketSet},
     phy::PacketMeta,
     socket::udp::UdpMetadata,
 };
-use tokio::sync::{mpsc::Sender, Mutex, RwLock};
+use tokio::sync::mpsc::Sender;
 
+use super::{
+    ClientEndpointState, ClientEndpointUdpState, ClientOutputPacket,
+    TransportId,
+    {
+        poll_and_transfer_smoltcp_data_to_client,
+        prepare_smoltcp_iface_and_device,
+    },
+};
 use crate::config::PpaassVpnServerConfig;
+use crate::device::SmoltcpDevice;
 use crate::error::RemoteEndpointError;
 use crate::{error::ClientEndpointError, transport::remote::RemoteUdpEndpoint};
 use smoltcp::socket::udp::{
@@ -20,22 +29,15 @@ use smoltcp::socket::udp::{
     PacketMetadata as SmoltcpUdpPacketMetadata,
 };
 
-use super::{
-    ClientEndpointCtl, ClientEndpointCtlLockGuard, ClientEndpointState,
-    ClientEndpointUdpState, ClientOutputPacket, TransportId,
-    {
-        poll_and_transfer_smoltcp_data_to_client,
-        prepare_smoltcp_iface_and_device,
-    },
-};
-
-type ClientUdpRecvBuf = RwLock<VecDeque<Vec<u8>>>;
+type ClientUdpRecvBuf = VecDeque<Vec<u8>>;
 
 pub(crate) struct ClientUdpEndpoint<'buf> {
     transport_id: TransportId,
     smoltcp_socket_handle: SocketHandle,
-    ctl: ClientEndpointCtl<'buf>,
-    recv_buffer: Arc<ClientUdpRecvBuf>,
+    smoltcp_socket_set: SocketSet<'buf>,
+    smoltcp_iface: Interface,
+    smoltcp_device: SmoltcpDevice,
+    recv_buffer: ClientUdpRecvBuf,
     client_output_tx: Sender<ClientOutputPacket>,
     _config: &'static PpaassVpnServerConfig,
 }
@@ -55,18 +57,16 @@ where
         let smoltcp_udp_socket =
             Self::create_smoltcp_udp_socket(transport_id, config)?;
         let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_udp_socket);
-        let ctl = ClientEndpointCtl::new(
-            Mutex::new(smoltcp_socket_set),
-            Mutex::new(smoltcp_iface),
-            Mutex::new(smoltcp_device),
-        );
+
         Ok(Self {
             transport_id,
             smoltcp_socket_handle,
-            ctl,
-            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(
+            smoltcp_socket_set,
+            smoltcp_iface,
+            smoltcp_device,
+            recv_buffer: VecDeque::with_capacity(
                 config.get_client_endpoint_udp_recv_buffer_size(),
-            ))),
+            ),
             client_output_tx,
             _config: config,
         })
@@ -91,12 +91,9 @@ where
     }
 
     pub(crate) async fn get_state(&self) -> ClientEndpointState {
-        let ClientEndpointCtlLockGuard {
-            mut smoltcp_socket_set,
-            ..
-        } = self.ctl.lock().await;
-        let smoltcp_socket = smoltcp_socket_set
-            .get_mut::<SmoltcpUdpSocket>(self.smoltcp_socket_handle);
+        let smoltcp_socket = self
+            .smoltcp_socket_set
+            .get::<SmoltcpUdpSocket>(self.smoltcp_socket_handle);
         ClientEndpointState::Udp(if smoltcp_socket.is_open() {
             ClientEndpointUdpState::Open
         } else {
@@ -105,7 +102,7 @@ where
     }
 
     pub(crate) async fn consume_recv_buffer<'r, F, Fut>(
-        &self,
+        &mut self,
         remote: &'r RemoteUdpEndpoint,
         mut consume_fn: F,
     ) -> Result<(), RemoteEndpointError>
@@ -113,29 +110,25 @@ where
         F: FnMut(TransportId, Vec<u8>, &'r RemoteUdpEndpoint) -> Fut,
         Fut: Future<Output = Result<usize, RemoteEndpointError>>,
     {
-        if self.recv_buffer.read().await.len() == 0 {
+        if self.recv_buffer.is_empty() {
             return Ok(());
         }
-        let mut recv_buffer = self.recv_buffer.write().await;
+
         let mut consume_size = 0;
-        for udp_data in recv_buffer.iter() {
+        for udp_data in self.recv_buffer.iter() {
             consume_fn(self.transport_id, udp_data.to_vec(), remote).await?;
             consume_size += 1;
         }
-        recv_buffer.drain(..consume_size);
+        self.recv_buffer.drain(..consume_size);
         Ok(())
     }
 
     pub(crate) async fn send_to_smoltcp(
-        &self,
+        &mut self,
         data: Vec<u8>,
     ) -> Result<usize, ClientEndpointError> {
-        let ClientEndpointCtlLockGuard {
-            mut smoltcp_socket_set,
-            mut smoltcp_iface,
-            mut smoltcp_device,
-        } = self.ctl.lock().await;
-        let smoltcp_socket = smoltcp_socket_set
+        let smoltcp_socket = self
+            .smoltcp_socket_set
             .get_mut::<SmoltcpUdpSocket>(self.smoltcp_socket_handle);
         if smoltcp_socket.can_send() {
             let mut udp_packet_meta = PacketMeta::default();
@@ -148,9 +141,9 @@ where
             smoltcp_socket.send_slice(&data, udp_meta_data)?;
             poll_and_transfer_smoltcp_data_to_client(
                 self.transport_id,
-                &mut smoltcp_socket_set,
-                &mut smoltcp_iface,
-                &mut smoltcp_device,
+                &mut self.smoltcp_socket_set,
+                &mut self.smoltcp_iface,
+                &mut self.smoltcp_device,
                 &self.client_output_tx,
             )
             .await;
@@ -162,25 +155,21 @@ where
     /// The client tcp & udp packet will go through smoltcp stack
     /// and change the client endpoint state
     pub(crate) async fn receive_from_client(
-        &self,
+        &mut self,
         client_data: Vec<u8>,
     ) -> Result<(), ClientEndpointError> {
-        let ClientEndpointCtlLockGuard {
-            mut smoltcp_socket_set,
-            mut smoltcp_iface,
-            mut smoltcp_device,
-        } = self.ctl.lock().await;
-        smoltcp_device.push_rx(client_data);
+        self.smoltcp_device.push_rx(client_data);
         if poll_and_transfer_smoltcp_data_to_client(
             self.transport_id,
-            &mut smoltcp_socket_set,
-            &mut smoltcp_iface,
-            &mut smoltcp_device,
+            &mut self.smoltcp_socket_set,
+            &mut self.smoltcp_iface,
+            &mut self.smoltcp_device,
             &self.client_output_tx,
         )
         .await
         {
-            let smoltcp_udp_socket = smoltcp_socket_set
+            let smoltcp_udp_socket = self
+                .smoltcp_socket_set
                 .get_mut::<SmoltcpUdpSocket>(self.smoltcp_socket_handle);
             if !smoltcp_udp_socket.is_open() {
                 return Ok(());
@@ -199,41 +188,30 @@ where
                         );
                     }
                 };
-                self.recv_buffer.write().await.push_back(udp_data.to_vec());
+                self.recv_buffer.push_back(udp_data.to_vec());
             }
         }
         Ok(())
     }
 
-    pub(crate) async fn abort(&self) {
+    pub(crate) async fn abort(&mut self) {
         self.close().await
     }
 
-    pub(crate) async fn close(&self) {
-        let ClientEndpointCtlLockGuard {
-            mut smoltcp_socket_set,
-            mut smoltcp_iface,
-            mut smoltcp_device,
-        } = self.ctl.lock().await;
-
+    pub(crate) async fn close(&mut self) {
         poll_and_transfer_smoltcp_data_to_client(
             self.transport_id,
-            &mut smoltcp_socket_set,
-            &mut smoltcp_iface,
-            &mut smoltcp_device,
+            &mut self.smoltcp_socket_set,
+            &mut self.smoltcp_iface,
+            &mut self.smoltcp_device,
             &self.client_output_tx,
         )
         .await;
     }
 
-    pub(crate) async fn destroy(&self) {
-        let ClientEndpointCtlLockGuard {
-            mut smoltcp_socket_set,
-            mut smoltcp_device,
-            ..
-        } = self.ctl.lock().await;
-        smoltcp_socket_set.remove(self.smoltcp_socket_handle);
-        smoltcp_device.destory();
-        self.recv_buffer.write().await.clear();
+    pub(crate) async fn destroy(&mut self) {
+        self.smoltcp_socket_set.remove(self.smoltcp_socket_handle);
+        self.smoltcp_device.destory();
+        self.recv_buffer.clear();
     }
 }

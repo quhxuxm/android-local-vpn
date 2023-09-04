@@ -171,24 +171,37 @@ impl RemoteUdpEndpoint {
         Ok(data_len)
     }
 
-    pub(crate) async fn consume_recv_buffer<'c, 'buf, F, Fut>(
+    pub(crate) async fn consume_recv_buffer<'c, 'c2, 'buf, F, Fut>(
         &self,
-        remote: &'c ClientUdpEndpoint<'buf>,
+        client: &'c mut ClientUdpEndpoint<'buf>,
         mut consume_fn: F,
     ) -> Result<(), ClientEndpointError>
     where
-        F: FnMut(TransportId, Vec<u8>, &'c ClientUdpEndpoint<'buf>) -> Fut,
+        F: FnMut(
+            TransportId,
+            Vec<Vec<u8>>,
+            &'c2 mut ClientUdpEndpoint<'buf>,
+        ) -> Fut,
         Fut: Future<Output = Result<usize, ClientEndpointError>>,
+        'buf: 'c2,
+        'buf: 'c,
+        'c: 'c2,
     {
         if self.recv_buffer.read().await.len() == 0 {
             return Ok(());
         }
         let mut recv_buffer = self.recv_buffer.write().await;
-        let mut consume_size = 0;
-        for udp_data in recv_buffer.iter() {
-            consume_fn(self.transport_id, udp_data.to_vec(), remote).await?;
-            consume_size += 1;
-        }
+
+        let mut consume_size = consume_fn(
+            self.transport_id,
+            recv_buffer.make_contiguous().to_vec(),
+            client,
+        )
+        .await?;
+        // let mut consume_size = 0;
+        // for udp_data in recv_buffer.iter() {
+        //     consume_size += 1;
+        // }
         recv_buffer.drain(..consume_size);
         Ok(())
     }
