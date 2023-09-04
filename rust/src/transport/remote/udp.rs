@@ -184,7 +184,6 @@ impl RemoteUdpEndpoint {
         ) -> Fut,
         Fut: Future<Output = Result<usize, ClientEndpointError>>,
         'buf: 'c2,
-        'buf: 'c,
         'c: 'c2,
     {
         if self.recv_buffer.read().await.len() == 0 {
@@ -192,16 +191,12 @@ impl RemoteUdpEndpoint {
         }
         let mut recv_buffer = self.recv_buffer.write().await;
 
-        let mut consume_size = consume_fn(
+        let consume_size = consume_fn(
             self.transport_id,
             recv_buffer.make_contiguous().to_vec(),
             client,
         )
         .await?;
-        // let mut consume_size = 0;
-        // for udp_data in recv_buffer.iter() {
-        //     consume_size += 1;
-        // }
         recv_buffer.drain(..consume_size);
         Ok(())
     }
