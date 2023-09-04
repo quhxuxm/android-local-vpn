@@ -16,7 +16,7 @@ use crate::error::ClientEndpointError;
 use crate::{
     config::PpaassVpnServerConfig,
     error::RemoteEndpointError,
-    transport::{client::ClientUdpEndpoint, value::InternetProtocol},
+    transport::{client::ClientUdpEndpoint, InternetProtocol},
     util::{
         protect_socket, AgentPpaassMessagePayloadEncryptionSelector,
         AgentRsaCryptoFetcher,

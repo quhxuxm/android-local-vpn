@@ -13,7 +13,7 @@ use tokio::{net::TcpStream, sync::Mutex};
 use crate::{
     config::PpaassVpnServerConfig,
     error::RemoteEndpointError,
-    transport::value::InternetProtocol,
+    transport::InternetProtocol,
     util::{
         protect_socket, AgentPpaassMessagePayloadEncryptionSelector,
         AgentRsaCryptoFetcher,
