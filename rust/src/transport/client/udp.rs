@@ -103,22 +103,28 @@ where
 
     pub(crate) async fn consume_recv_buffer<'r, F, Fut>(
         &mut self,
-        remote: &'r RemoteUdpEndpoint,
+        remote: &'r mut RemoteUdpEndpoint,
         mut consume_fn: F,
     ) -> Result<(), RemoteEndpointError>
     where
-        F: FnMut(TransportId, Vec<u8>, &'r RemoteUdpEndpoint) -> Fut,
+        F: FnMut(TransportId, Vec<Vec<u8>>, &'r mut RemoteUdpEndpoint) -> Fut,
         Fut: Future<Output = Result<usize, RemoteEndpointError>>,
     {
         if self.recv_buffer.is_empty() {
             return Ok(());
         }
 
-        let mut consume_size = 0;
-        for udp_data in self.recv_buffer.iter() {
-            consume_fn(self.transport_id, udp_data.to_vec(), remote).await?;
-            consume_size += 1;
-        }
+        let consume_size = consume_fn(
+            self.transport_id,
+            self.recv_buffer.make_contiguous().to_vec(),
+            remote,
+        )
+        .await?;
+        // let mut consume_size = 0;
+        // for udp_data in self.recv_buffer.iter() {
+        //     consume_fn(self.transport_id, udp_data.to_vec(), remote).await?;
+        //     consume_size += 1;
+        // }
         self.recv_buffer.drain(..consume_size);
         Ok(())
     }

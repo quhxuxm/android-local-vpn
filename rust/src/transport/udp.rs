@@ -47,7 +47,7 @@ impl UdpTransport {
             config,
         )?;
 
-        let remote_endpoint = match RemoteUdpEndpoint::new(
+        let mut remote_endpoint = match RemoteUdpEndpoint::new(
             transport_id,
             agent_rsa_crypto_fetcher,
             config,
@@ -76,7 +76,7 @@ impl UdpTransport {
 
                 if let Err(e) = Self::flush_client_recv_buf_to_remote(
                     &mut client_endpoint,
-                    &remote_endpoint,
+                    &mut remote_endpoint,
                 )
                 .await
                 {
@@ -100,7 +100,7 @@ impl UdpTransport {
                         // Flush all the client receiver buffer data to remote.
                         if let Err(e) = Self::flush_client_recv_buf_to_remote(
                             &mut client_endpoint,
-                            &remote_endpoint,
+                            &mut remote_endpoint,
                         )
                         .await
                         {
@@ -115,7 +115,7 @@ impl UdpTransport {
                         debug!("###### Transport {transport_id} client endpoint in {state:?} state, going to read from remote.");
                         if let Err(e) = Self::flush_client_recv_buf_to_remote(
                             &mut client_endpoint,
-                            &remote_endpoint,
+                            &mut remote_endpoint,
                         )
                         .await
                         {
@@ -136,7 +136,7 @@ impl UdpTransport {
                                 if let Err(e) =
                                     Self::flush_client_recv_buf_to_remote(
                                         &mut client_endpoint,
-                                        &remote_endpoint,
+                                        &mut remote_endpoint,
                                     )
                                     .await
                                 {
@@ -153,7 +153,7 @@ impl UdpTransport {
                                 if let Err(e) =
                                     Self::flush_remote_recv_buf_to_client(
                                         &mut client_endpoint,
-                                        &remote_endpoint,
+                                        &mut remote_endpoint,
                                     )
                                     .await
                                 {
@@ -169,7 +169,7 @@ impl UdpTransport {
                                 if let Err(e) =
                                     Self::flush_client_recv_buf_to_remote(
                                         &mut client_endpoint,
-                                        &remote_endpoint,
+                                        &mut remote_endpoint,
                                     )
                                     .await
                                 {
@@ -187,7 +187,7 @@ impl UdpTransport {
             Ok(Err(e)) => {
                 if let Err(e) = Self::flush_client_recv_buf_to_remote(
                     &mut client_endpoint,
-                    &remote_endpoint,
+                    &mut remote_endpoint,
                 )
                 .await
                 {
@@ -209,14 +209,19 @@ impl UdpTransport {
     /// * remote_endpoint: The remote endpoint.
     async fn consume_client_recv_buf_fn(
         transport_id: TransportId,
-        data: Vec<u8>,
-        remote_endpoint: &RemoteUdpEndpoint,
+        data: Vec<Vec<u8>>,
+        remote_endpoint: &mut RemoteUdpEndpoint,
     ) -> Result<usize, RemoteEndpointError> {
-        trace!(
-            ">>>> Transport {transport_id} write data to remote: {}",
-            pretty_hex::pretty_hex(&data)
-        );
-        remote_endpoint.write_to_remote(data).await
+        let mut consume_size = 0;
+        for data in data.into_iter() {
+            trace!(
+                ">>>> Transport {transport_id} write udp data to remote: {}",
+                pretty_hex::pretty_hex(&data)
+            );
+            remote_endpoint.write_to_remote(data).await?;
+            consume_size += 1;
+        }
+        Ok(consume_size)
     }
 
     /// The concrete function to forward remote receive buffer to client.
@@ -233,6 +238,10 @@ impl UdpTransport {
     {
         let mut consume_size = 0;
         for data in data.into_iter() {
+            trace!(
+                ">>>> Transport {transport_id} write udp data to smoltcp: {}",
+                pretty_hex::pretty_hex(&data)
+            );
             client_endpoint.send_to_smoltcp(data).await?;
             consume_size += 1;
         }
@@ -241,7 +250,7 @@ impl UdpTransport {
 
     async fn flush_client_recv_buf_to_remote<'b>(
         client_endpoint: &mut ClientUdpEndpoint<'b>,
-        remote_endpoint: &RemoteUdpEndpoint,
+        remote_endpoint: &mut RemoteUdpEndpoint,
     ) -> Result<(), RemoteEndpointError>
     where
         'b: 'static,
@@ -256,7 +265,7 @@ impl UdpTransport {
 
     async fn flush_remote_recv_buf_to_client<'b>(
         client_endpoint: &mut ClientUdpEndpoint<'b>,
-        remote_endpoint: &RemoteUdpEndpoint,
+        remote_endpoint: &mut RemoteUdpEndpoint,
     ) -> Result<(), ClientEndpointError>
     where
         'b: 'static,

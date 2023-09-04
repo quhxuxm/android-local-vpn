@@ -1,6 +1,5 @@
 use std::{
-    collections::VecDeque, future::Future, os::fd::AsRawFd, sync::Arc,
-    time::Duration,
+    collections::VecDeque, future::Future, os::fd::AsRawFd, time::Duration,
 };
 
 use anyhow::{anyhow, Result};
@@ -9,8 +8,8 @@ use futures_util::{SinkExt, StreamExt};
 
 use log::{error, trace};
 
-use tokio::{net::TcpSocket, sync::RwLock};
-use tokio::{net::TcpStream, sync::Mutex};
+use tokio::net::TcpSocket;
+use tokio::net::TcpStream;
 
 use crate::error::ClientEndpointError;
 use crate::{
@@ -30,13 +29,13 @@ use ppaass_common::{
     PpaassProxyMessage,
 };
 
-type RemoteUdpRecvBuf = RwLock<VecDeque<Vec<u8>>>;
+type RemoteUdpRecvBuf = VecDeque<Vec<u8>>;
 
 pub(crate) struct RemoteUdpEndpoint {
     transport_id: TransportId,
-    proxy_connection_read: Mutex<ProxyConnectionRead>,
-    proxy_connection_write: Mutex<ProxyConnectionWrite>,
-    recv_buffer: Arc<RemoteUdpRecvBuf>,
+    proxy_connection_read: ProxyConnectionRead,
+    proxy_connection_write: ProxyConnectionWrite,
+    recv_buffer: RemoteUdpRecvBuf,
     config: &'static PpaassVpnServerConfig,
 }
 
@@ -64,9 +63,9 @@ impl RemoteUdpEndpoint {
             proxy_connection.split();
         Ok(Self {
             transport_id,
-            proxy_connection_read: Mutex::new(proxy_connection_read),
-            proxy_connection_write: Mutex::new(proxy_connection_write),
-            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(65536))),
+            proxy_connection_read,
+            proxy_connection_write,
+            recv_buffer: VecDeque::with_capacity(65536),
             config,
         })
     }
@@ -109,9 +108,9 @@ impl RemoteUdpEndpoint {
     }
 
     pub(crate) async fn read_from_remote(
-        &self,
+        &mut self,
     ) -> Result<bool, RemoteEndpointError> {
-        match self.proxy_connection_read.lock().await.next().await {
+        match self.proxy_connection_read.next().await {
             None => Ok(true),
             Some(Ok(PpaassProxyMessage {
                 payload: proxy_message_payload,
@@ -127,10 +126,7 @@ impl RemoteUdpEndpoint {
                 pretty_hex::pretty_hex(&udp_relay_data)
             );
 
-                self.recv_buffer
-                    .write()
-                    .await
-                    .push_back(udp_relay_data.to_vec());
+                self.recv_buffer.push_back(udp_relay_data.to_vec());
                 Ok(false)
             }
             Some(Err(e)) => {
@@ -141,7 +137,7 @@ impl RemoteUdpEndpoint {
     }
 
     pub(crate) async fn write_to_remote(
-        &self,
+        &mut self,
         data: Vec<u8>,
     ) -> Result<usize, RemoteEndpointError> {
         let payload_encryption =
@@ -163,16 +159,12 @@ impl RemoteUdpEndpoint {
             self.transport_id.destination.into(),
             data,
         )?;
-        self.proxy_connection_write
-            .lock()
-            .await
-            .send(udp_data)
-            .await?;
+        self.proxy_connection_write.send(udp_data).await?;
         Ok(data_len)
     }
 
     pub(crate) async fn consume_recv_buffer<'c, 'c2, 'buf, F, Fut>(
-        &self,
+        &mut self,
         client: &'c mut ClientUdpEndpoint<'buf>,
         mut consume_fn: F,
     ) -> Result<(), ClientEndpointError>
@@ -186,25 +178,22 @@ impl RemoteUdpEndpoint {
         'buf: 'c2,
         'c: 'c2,
     {
-        if self.recv_buffer.read().await.len() == 0 {
+        if self.recv_buffer.is_empty() {
             return Ok(());
         }
-        let mut recv_buffer = self.recv_buffer.write().await;
 
         let consume_size = consume_fn(
             self.transport_id,
-            recv_buffer.make_contiguous().to_vec(),
+            self.recv_buffer.make_contiguous().to_vec(),
             client,
         )
         .await?;
-        recv_buffer.drain(..consume_size);
+        self.recv_buffer.drain(..consume_size);
         Ok(())
     }
 
-    pub(crate) async fn close(&self) {
-        let mut proxy_connection_write =
-            self.proxy_connection_write.lock().await;
-        if let Err(e) = proxy_connection_write.close().await {
+    pub(crate) async fn close(&mut self) {
+        if let Err(e) = self.proxy_connection_write.close().await {
             error!(">>>> Transport {} fail to close udp remote endpoint because of error: {e:?}", self.transport_id)
         };
     }
