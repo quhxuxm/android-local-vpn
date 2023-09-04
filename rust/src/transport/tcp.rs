@@ -11,7 +11,6 @@ use tokio::{
 use crate::{
     config::PpaassVpnServerConfig,
     error::{AgentError, ClientEndpointError, RemoteEndpointError},
-    transport::client::ClientEndpointState,
     util::AgentRsaCryptoFetcher,
 };
 
@@ -131,7 +130,7 @@ impl TcpTransport {
                 Ok(Ok(())) => {
                     //Check the tcp connection state because of the ip packet just pass through the smoltcp stack
                     match client_endpoint.get_state().await {
-                        ClientEndpointState::Tcp(State::Closed) => {
+                        State::Closed => {
                             // The tcp connection is closed we should remove the transport from the repository because of no data will come again.
                             debug!(
                                 ">>>> Transport {transport_id} is TCP protocol in [Closed] state, destroy client endpoint and remove the transport."
@@ -317,12 +316,12 @@ impl TcpTransport {
         'b: 'static,
     {
         match client_endpoint.get_state().await {
-            ClientEndpointState::Tcp(State::CloseWait)
-            | ClientEndpointState::Tcp(State::Closed)
-            | ClientEndpointState::Tcp(State::FinWait1)
-            | ClientEndpointState::Tcp(State::FinWait2)
-            | ClientEndpointState::Tcp(State::TimeWait)
-            | ClientEndpointState::Tcp(State::LastAck) => Ok(()),
+            State::CloseWait
+            | State::Closed
+            | State::FinWait1
+            | State::FinWait2
+            | State::TimeWait
+            | State::LastAck => Ok(()),
             _ => {
                 remote_endpoint
                     .consume_recv_buffer(

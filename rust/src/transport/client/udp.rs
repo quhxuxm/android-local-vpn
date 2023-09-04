@@ -13,8 +13,7 @@ use smoltcp::{
 use tokio::sync::mpsc::Sender;
 
 use super::{
-    ClientEndpointState, ClientEndpointUdpState, ClientOutputPacket,
-    TransportId,
+    ClientOutputPacket, TransportId,
     {
         poll_and_transfer_smoltcp_data_to_client,
         prepare_smoltcp_iface_and_device,
@@ -88,17 +87,6 @@ where
         );
         socket.bind(trans_id.destination)?;
         Ok(socket)
-    }
-
-    pub(crate) async fn get_state(&self) -> ClientEndpointState {
-        let smoltcp_socket = self
-            .smoltcp_socket_set
-            .get::<SmoltcpUdpSocket>(self.smoltcp_socket_handle);
-        ClientEndpointState::Udp(if smoltcp_socket.is_open() {
-            ClientEndpointUdpState::Open
-        } else {
-            ClientEndpointUdpState::Closed
-        })
     }
 
     pub(crate) async fn consume_recv_buffer<'r, F, Fut>(

@@ -8,7 +8,6 @@ use tokio::{sync::mpsc::Sender, time::timeout};
 use crate::{
     config::PpaassVpnServerConfig,
     error::{AgentError, ClientEndpointError, RemoteEndpointError},
-    transport::client::{ClientEndpointState, ClientEndpointUdpState},
     util::AgentRsaCryptoFetcher,
 };
 
@@ -88,16 +87,26 @@ impl UdpTransport {
                 Err(RemoteEndpointError::ReceiveTimeout(10).into())
             }
             Ok(Ok(())) => {
-                //Check the tcp connection state because of the ip packet just pass through the smoltcp stack
-                match client_endpoint.get_state().await {
-                    ClientEndpointState::Udp(
-                        ClientEndpointUdpState::Closed,
-                    ) => {
-                        // The udp connection is closed, we should remove the transport from the repository because of no data will come again.
-                        debug!(
-                                ">>>> Transport {transport_id} is UDP protocol in [Closed] state, destory client endpoint and remove the transport."
-                            );
-                        // Flush all the client receiver buffer data to remote.
+                if let Err(e) = Self::flush_client_recv_buf_to_remote(
+                    &mut client_endpoint,
+                    &mut remote_endpoint,
+                )
+                .await
+                {
+                    error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
+                    remote_endpoint.close().await;
+                    client_endpoint.close().await;
+                    client_endpoint.destroy().await;
+                    return Err(e.into());
+                };
+                match timeout(
+                    Duration::from_secs(10),
+                    remote_endpoint.read_from_remote(),
+                )
+                .await
+                {
+                    Err(_) => {
+                        error!("<<<< Transport {transport_id} timeout in 10 seconds when receive from remote.");
                         if let Err(e) = Self::flush_client_recv_buf_to_remote(
                             &mut client_endpoint,
                             &mut remote_endpoint,
@@ -107,12 +116,27 @@ impl UdpTransport {
                             error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
                         };
                         remote_endpoint.close().await;
+                        client_endpoint.close().await;
+                        client_endpoint.destroy().await;
+                        Err(RemoteEndpointError::ReceiveTimeout(10).into())
+                    }
+                    Ok(Ok(_)) => {
+                        // Remote endpoint still have data to read
+                        if let Err(e) = Self::flush_remote_recv_buf_to_client(
+                            &mut client_endpoint,
+                            &mut remote_endpoint,
+                        )
+                        .await
+                        {
+                            error!("<<<< Transport {transport_id} error happen when flush remote receive buffer to client because of the error: {e:?}");
+                        };
+                        remote_endpoint.close().await;
+                        client_endpoint.close().await;
                         client_endpoint.destroy().await;
                         Ok(())
                     }
-                    state => {
-                        //For other case we just continue, even for tcp CloseWait and LastAck because of the smoltcp stack should handle the tcp packet.
-                        debug!("###### Transport {transport_id} client endpoint in {state:?} state, going to read from remote.");
+                    Ok(Err(e)) => {
+                        error!("<<<< Transport {transport_id} error happen when read from remote endpoint because of the error: {e:?}");
                         if let Err(e) = Self::flush_client_recv_buf_to_remote(
                             &mut client_endpoint,
                             &mut remote_endpoint,
@@ -120,67 +144,11 @@ impl UdpTransport {
                         .await
                         {
                             error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
-                            remote_endpoint.close().await;
-                            client_endpoint.close().await;
-                            client_endpoint.destroy().await;
-                            return Err(e.into());
                         };
-                        match timeout(
-                            Duration::from_secs(10),
-                            remote_endpoint.read_from_remote(),
-                        )
-                        .await
-                        {
-                            Err(_) => {
-                                error!("<<<< Transport {transport_id} timeout in 10 seconds when receive from remote.");
-                                if let Err(e) =
-                                    Self::flush_client_recv_buf_to_remote(
-                                        &mut client_endpoint,
-                                        &mut remote_endpoint,
-                                    )
-                                    .await
-                                {
-                                    error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
-                                };
-                                remote_endpoint.close().await;
-                                client_endpoint.close().await;
-                                client_endpoint.destroy().await;
-                                Err(RemoteEndpointError::ReceiveTimeout(10)
-                                    .into())
-                            }
-                            Ok(Ok(_)) => {
-                                // Remote endpoint still have data to read
-                                if let Err(e) =
-                                    Self::flush_remote_recv_buf_to_client(
-                                        &mut client_endpoint,
-                                        &mut remote_endpoint,
-                                    )
-                                    .await
-                                {
-                                    error!("<<<< Transport {transport_id} error happen when flush remote receive buffer to client because of the error: {e:?}");
-                                };
-                                remote_endpoint.close().await;
-                                client_endpoint.close().await;
-                                client_endpoint.destroy().await;
-                                Ok(())
-                            }
-                            Ok(Err(e)) => {
-                                error!("<<<< Transport {transport_id} error happen when read from remote endpoint because of the error: {e:?}");
-                                if let Err(e) =
-                                    Self::flush_client_recv_buf_to_remote(
-                                        &mut client_endpoint,
-                                        &mut remote_endpoint,
-                                    )
-                                    .await
-                                {
-                                    error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
-                                };
-                                remote_endpoint.close().await;
-                                client_endpoint.close().await;
-                                client_endpoint.destroy().await;
-                                Err(e.into())
-                            }
-                        }
+                        remote_endpoint.close().await;
+                        client_endpoint.close().await;
+                        client_endpoint.destroy().await;
+                        Err(e.into())
                     }
                 }
             }
@@ -270,16 +238,11 @@ impl UdpTransport {
     where
         'b: 'static,
     {
-        match client_endpoint.get_state().await {
-            ClientEndpointState::Udp(ClientEndpointUdpState::Closed) => Ok(()),
-            _ => {
-                remote_endpoint
-                    .consume_recv_buffer(
-                        client_endpoint,
-                        Self::consume_remote_recv_buf_fn,
-                    )
-                    .await
-            }
-        }
+        remote_endpoint
+            .consume_recv_buffer(
+                client_endpoint,
+                Self::consume_remote_recv_buf_fn,
+            )
+            .await
     }
 }

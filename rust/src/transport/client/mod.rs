@@ -3,7 +3,7 @@ mod udp;
 
 use smoltcp::iface::SocketSet;
 
-use smoltcp::{iface::Interface, socket::tcp::State};
+use smoltcp::iface::Interface;
 use tokio::sync::{mpsc::Sender, Mutex, MutexGuard};
 
 use crate::device::SmoltcpDevice;
@@ -58,18 +58,6 @@ impl<'buf> ClientEndpointCtl<'buf> {
             smoltcp_device,
         }
     }
-}
-
-#[derive(Debug)]
-pub(crate) enum ClientEndpointUdpState {
-    Open,
-    Closed,
-}
-
-#[derive(Debug)]
-pub(crate) enum ClientEndpointState {
-    Tcp(State),
-    Udp(ClientEndpointUdpState),
 }
 
 fn prepare_smoltcp_iface_and_device(

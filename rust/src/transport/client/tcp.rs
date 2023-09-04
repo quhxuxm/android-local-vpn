@@ -3,8 +3,11 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 use anyhow::Result;
 
 use log::error;
-use smoltcp::iface::{SocketHandle, SocketSet};
 use smoltcp::socket::tcp::Socket as SmoltcpTcpSocket;
+use smoltcp::{
+    iface::{SocketHandle, SocketSet},
+    socket::tcp::State,
+};
 use tokio::sync::{mpsc::Sender, Mutex, RwLock};
 
 use crate::config::PpaassVpnServerConfig;
@@ -13,8 +16,8 @@ use crate::{error::ClientEndpointError, transport::remote::RemoteTcpEndpoint};
 use smoltcp::socket::tcp::SocketBuffer as SmoltcpTcpSocketBuffer;
 
 use super::{
-    ClientEndpointCtl, ClientEndpointCtlLockGuard, ClientEndpointState,
-    ClientOutputPacket, TransportId,
+    ClientEndpointCtl, ClientEndpointCtlLockGuard, ClientOutputPacket,
+    TransportId,
     {
         poll_and_transfer_smoltcp_data_to_client,
         prepare_smoltcp_iface_and_device,
@@ -87,7 +90,7 @@ where
         Ok(socket)
     }
 
-    pub(crate) async fn get_state(&self) -> ClientEndpointState {
+    pub(crate) async fn get_state(&self) -> State {
         let ClientEndpointCtlLockGuard {
             mut smoltcp_socket_set,
             ..
@@ -95,7 +98,7 @@ where
         let smoltcp_socket_handle = self.smoltcp_socket_handle;
         let smoltcp_socket = smoltcp_socket_set
             .get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
-        ClientEndpointState::Tcp(smoltcp_socket.state())
+        smoltcp_socket.state()
     }
 
     pub(crate) async fn consume_recv_buffer<'r, F, Fut>(
