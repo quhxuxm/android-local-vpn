@@ -1,31 +1,26 @@
-mod common;
+mod tcp;
+mod udp;
 
-use std::{collections::VecDeque, future::Future, sync::Arc};
+use smoltcp::iface::SocketSet;
 
+use smoltcp::{iface::Interface, socket::tcp::State};
+use tokio::sync::{mpsc::Sender, Mutex, MutexGuard};
+
+use crate::device::SmoltcpDevice;
+
+use super::{ClientOutputPacket, TransportId};
+use log::error;
+
+use anyhow::anyhow;
 use anyhow::Result;
 
-use smoltcp::iface::{SocketHandle, SocketSet};
-use smoltcp::socket::udp::Socket as SmoltcpUdpSocket;
-use smoltcp::{
-    iface::Interface, socket::tcp::Socket as SmoltcpTcpSocket,
-    socket::tcp::State,
-};
-use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, RwLock};
+use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
+use smoltcp::{iface::Config, time::Instant, wire::HardwareAddress};
 
-use crate::config::PpaassVpnServerConfig;
-use crate::transport::client::common::abort_client_tcp;
-use crate::{device::SmoltcpDevice, error::RemoteEndpointError};
-use crate::{error::ClientEndpointError, transport::ControlProtocol};
+pub(crate) use tcp::ClientTcpEndpoint;
+pub(crate) use udp::ClientUdpEndpoint;
 
-use self::common::{
-    close_client_tcp, close_client_udp, new_tcp, new_udp, recv_from_client_tcp,
-    recv_from_client_udp, send_to_client_tcp, send_to_client_udp,
-};
-
-use super::{remote::RemoteEndpoint, ClientOutputPacket, TransportId};
-
-pub(crate) type ClientTcpRecvBuf = RwLock<VecDeque<u8>>;
-pub(crate) type ClientUdpRecvBuf = RwLock<VecDeque<Vec<u8>>>;
+static DEFAULT_GATEWAY_IPV4_ADDR: Ipv4Address = Ipv4Address::new(0, 0, 0, 1);
 
 pub(crate) struct ClientEndpointCtlLockGuard<'lock, 'buf> {
     pub(crate) smoltcp_socket_set: MutexGuard<'lock, SocketSet<'buf>>,
@@ -77,296 +72,49 @@ pub(crate) enum ClientEndpointState {
     Udp(ClientEndpointUdpState),
 }
 
-pub(crate) enum ClientEndpoint<'buf> {
-    Tcp {
-        transport_id: TransportId,
-        ctl: ClientEndpointCtl<'buf>,
-        smoltcp_socket_handle: SocketHandle,
-        recv_buffer: Arc<ClientTcpRecvBuf>,
-        client_output_tx: Sender<ClientOutputPacket>,
-        _config: &'static PpaassVpnServerConfig,
-    },
-    Udp {
-        transport_id: TransportId,
-        smoltcp_socket_handle: SocketHandle,
-        ctl: ClientEndpointCtl<'buf>,
-        recv_buffer: Arc<ClientUdpRecvBuf>,
-        client_output_tx: Sender<ClientOutputPacket>,
-        _config: &'static PpaassVpnServerConfig,
-    },
+fn prepare_smoltcp_iface_and_device(
+    transport_id: TransportId,
+) -> Result<(Interface, SmoltcpDevice)> {
+    let mut interface_config = Config::new(HardwareAddress::Ip);
+    interface_config.random_seed = rand::random::<u64>();
+    let mut vpn_device = SmoltcpDevice::new(transport_id);
+    let mut interface =
+        Interface::new(interface_config, &mut vpn_device, Instant::now());
+    interface.set_any_ip(true);
+    interface.update_ip_addrs(|ip_addrs| {
+        if let Err(e) = ip_addrs.push(IpCidr::new(IpAddress::v4(0, 0, 0, 1), 0)) {
+            error!(">>>> Transportation {transport_id} fail to add ip address to interface in device endpoint because of error: {e:?}")
+        }
+    });
+    interface
+        .routes_mut()
+        .add_default_ipv4_route(DEFAULT_GATEWAY_IPV4_ADDR)
+        .map_err(|e| {
+            error!(">>>> Transportation {transport_id} fail to add default ipv4 route because of error: {e:?}");
+            anyhow!("{e:?}")
+        })?;
+
+    Ok((interface, vpn_device))
 }
 
-impl<'buf> ClientEndpoint<'buf> {
-    pub(crate) fn new(
-        transport_id: TransportId,
-        client_output_tx: Sender<ClientOutputPacket>,
-        config: &'static PpaassVpnServerConfig,
-    ) -> Result<ClientEndpoint<'_>, ClientEndpointError> {
-        match transport_id.control_protocol {
-            ControlProtocol::Tcp => {
-                new_tcp(transport_id, client_output_tx, config)
-            }
-            ControlProtocol::Udp => {
-                new_udp(transport_id, client_output_tx, config)
-            }
-        }
-    }
+async fn poll_and_transfer_smoltcp_data_to_client(
+    transport_id: TransportId,
+    smoltcp_socket_set: &mut SocketSet<'_>,
+    smoltcp_iface: &mut Interface,
+    smoltcp_device: &mut SmoltcpDevice,
 
-    pub(crate) async fn get_state(&self) -> ClientEndpointState {
-        match self {
-            ClientEndpoint::Tcp {
-                ctl,
-                smoltcp_socket_handle,
-                ..
-            } => {
-                let ClientEndpointCtlLockGuard {
-                    mut smoltcp_socket_set,
-                    ..
-                } = ctl.lock().await;
-                let smoltcp_socket = smoltcp_socket_set
-                    .get_mut::<SmoltcpTcpSocket>(*smoltcp_socket_handle);
-                ClientEndpointState::Tcp(smoltcp_socket.state())
-            }
-            ClientEndpoint::Udp {
-                ctl,
-                smoltcp_socket_handle,
-                ..
-            } => {
-                let ClientEndpointCtlLockGuard {
-                    mut smoltcp_socket_set,
-                    ..
-                } = ctl.lock().await;
-                let smoltcp_socket = smoltcp_socket_set
-                    .get_mut::<SmoltcpUdpSocket>(*smoltcp_socket_handle);
-                ClientEndpointState::Udp(if smoltcp_socket.is_open() {
-                    ClientEndpointUdpState::Open
-                } else {
-                    ClientEndpointUdpState::Closed
-                })
-            }
-        }
-    }
+    client_output_tx: &Sender<ClientOutputPacket>,
+) -> bool {
+    smoltcp_iface.poll(Instant::now(), smoltcp_device, smoltcp_socket_set);
 
-    pub(crate) async fn consume_recv_buffer<'r, F, Fut>(
-        &self,
-        remote: &'r RemoteEndpoint,
-        mut consume_fn: F,
-    ) -> Result<(), RemoteEndpointError>
-    where
-        F: FnMut(TransportId, Vec<u8>, &'r RemoteEndpoint) -> Fut,
-        Fut: Future<Output = Result<usize, RemoteEndpointError>>,
-    {
-        match self {
-            Self::Tcp {
-                transport_id,
-                recv_buffer,
-                ..
-            } => {
-                if recv_buffer.read().await.len() == 0 {
-                    return Ok(());
-                }
-                let mut recv_buffer = recv_buffer.write().await;
-                let recv_buffer_data = recv_buffer.make_contiguous().to_vec();
-                let consume_size =
-                    consume_fn(*transport_id, recv_buffer_data, remote).await?;
-                recv_buffer.drain(..consume_size);
-                Ok(())
-            }
-            Self::Udp {
-                transport_id,
-                recv_buffer,
-                ..
-            } => {
-                if recv_buffer.read().await.len() == 0 {
-                    return Ok(());
-                }
-                let mut recv_buffer = recv_buffer.write().await;
-                let mut consume_size = 0;
-                for udp_data in recv_buffer.iter() {
-                    consume_fn(*transport_id, udp_data.to_vec(), remote)
-                        .await?;
-                    consume_size += 1;
-                }
-                recv_buffer.drain(..consume_size);
-                Ok(())
-            }
-        }
+    while let Some(data) = smoltcp_device.pop_tx() {
+        if let Err(e) = client_output_tx
+            .send(ClientOutputPacket { transport_id, data })
+            .await
+        {
+            error!("<<<< Transport {transport_id} fail to transfer smoltcp data for output because of error: {e:?}");
+            break;
+        };
     }
-
-    pub(crate) async fn send_to_smoltcp(
-        &self,
-        data: Vec<u8>,
-    ) -> Result<usize, ClientEndpointError> {
-        match self {
-            Self::Tcp {
-                transport_id,
-                smoltcp_socket_handle,
-                ctl,
-                client_output_tx,
-                ..
-            } => {
-                send_to_client_tcp(
-                    ctl,
-                    *smoltcp_socket_handle,
-                    data,
-                    *transport_id,
-                    client_output_tx,
-                )
-                .await
-            }
-            Self::Udp {
-                transport_id,
-                smoltcp_socket_handle,
-                ctl,
-                client_output_tx,
-                ..
-            } => {
-                send_to_client_udp(
-                    ctl,
-                    *smoltcp_socket_handle,
-                    *transport_id,
-                    data,
-                    client_output_tx,
-                )
-                .await
-            }
-        }
-    }
-
-    /// The client tcp & udp packet will go through smoltcp stack
-    /// and change the client endpoint state
-    pub(crate) async fn receive_from_client(
-        &self,
-        client_data: Vec<u8>,
-    ) -> Result<(), ClientEndpointError> {
-        match self {
-            Self::Tcp {
-                transport_id,
-                smoltcp_socket_handle,
-                ctl,
-                client_output_tx,
-                recv_buffer,
-                ..
-            } => {
-                recv_from_client_tcp(
-                    ctl,
-                    client_data,
-                    *smoltcp_socket_handle,
-                    *transport_id,
-                    client_output_tx,
-                    recv_buffer,
-                )
-                .await
-            }
-            Self::Udp {
-                transport_id,
-                smoltcp_socket_handle,
-                ctl,
-                client_output_tx,
-                recv_buffer,
-                ..
-            } => {
-                recv_from_client_udp(
-                    ctl,
-                    client_data,
-                    *smoltcp_socket_handle,
-                    *transport_id,
-                    client_output_tx,
-                    recv_buffer,
-                )
-                .await
-            }
-        }
-    }
-
-    pub(crate) async fn abort(&self) {
-        match self {
-            Self::Tcp {
-                transport_id,
-                smoltcp_socket_handle,
-                ctl,
-                client_output_tx,
-                ..
-            } => {
-                abort_client_tcp(
-                    ctl,
-                    *smoltcp_socket_handle,
-                    *transport_id,
-                    client_output_tx,
-                )
-                .await;
-            }
-            Self::Udp {
-                transport_id,
-                ctl,
-                client_output_tx,
-                ..
-            } => {
-                close_client_udp(ctl, *transport_id, client_output_tx).await;
-            }
-        }
-    }
-    pub(crate) async fn close(&self) {
-        match self {
-            Self::Tcp {
-                transport_id,
-                smoltcp_socket_handle,
-                ctl,
-                client_output_tx,
-                ..
-            } => {
-                close_client_tcp(
-                    ctl,
-                    *smoltcp_socket_handle,
-                    *transport_id,
-                    client_output_tx,
-                )
-                .await;
-            }
-            Self::Udp {
-                transport_id,
-                ctl,
-                client_output_tx,
-                ..
-            } => {
-                close_client_udp(ctl, *transport_id, client_output_tx).await;
-            }
-        }
-    }
-
-    pub(crate) async fn destroy(&self) {
-        match self {
-            Self::Tcp {
-                smoltcp_socket_handle,
-                ctl,
-                recv_buffer,
-                ..
-            } => {
-                let ClientEndpointCtlLockGuard {
-                    mut smoltcp_socket_set,
-                    mut smoltcp_device,
-                    ..
-                } = ctl.lock().await;
-                smoltcp_socket_set.remove(*smoltcp_socket_handle);
-
-                smoltcp_device.destory();
-                recv_buffer.write().await.clear();
-            }
-            Self::Udp {
-                ctl,
-                smoltcp_socket_handle,
-                recv_buffer,
-                ..
-            } => {
-                let ClientEndpointCtlLockGuard {
-                    mut smoltcp_socket_set,
-                    mut smoltcp_device,
-                    ..
-                } = ctl.lock().await;
-                smoltcp_socket_set.remove(*smoltcp_socket_handle);
-                smoltcp_device.destory();
-                recv_buffer.write().await.clear();
-            }
-        }
-    }
+    true
 }

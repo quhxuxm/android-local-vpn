@@ -1,21 +1,21 @@
 use std::time::Duration;
 
 use anyhow::anyhow;
-use log::{debug, error};
+use log::{debug, error, trace};
 
-use tokio::sync::mpsc::Sender;
+use tokio::{sync::mpsc::Sender, time::timeout};
 
 use crate::{
     config::PpaassVpnServerConfig,
     error::{AgentError, ClientEndpointError, RemoteEndpointError},
-    transport::{
-        client::{ClientEndpoint, ClientEndpointState, ClientEndpointUdpState},
-        remote::RemoteEndpoint,
-    },
+    transport::client::{ClientEndpointState, ClientEndpointUdpState},
     util::AgentRsaCryptoFetcher,
 };
 
-use super::{ClientOutputPacket, TransportId};
+use super::{
+    client::ClientUdpEndpoint, remote::RemoteUdpEndpoint, ClientOutputPacket,
+    TransportId,
+};
 
 #[derive(Debug)]
 pub(crate) struct UdpTransport {
@@ -41,13 +41,13 @@ impl UdpTransport {
         client_data: Vec<u8>,
     ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
-        let client_endpoint = ClientEndpoint::new(
+        let client_endpoint = ClientUdpEndpoint::new(
             self.transport_id,
             self.client_output_tx,
             config,
         )?;
 
-        let remote_endpoint = match RemoteEndpoint::new(
+        let remote_endpoint = match RemoteUdpEndpoint::new(
             transport_id,
             agent_rsa_crypto_fetcher,
             config,
@@ -65,7 +65,7 @@ impl UdpTransport {
 
         debug!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
         // Push the data into smoltcp stack.
-        match tokio::time::timeout(
+        match timeout(
             Duration::from_secs(5),
             client_endpoint.receive_from_client(client_data),
         )
@@ -125,7 +125,7 @@ impl UdpTransport {
                             client_endpoint.destroy().await;
                             return Err(e.into());
                         };
-                        match tokio::time::timeout(
+                        match timeout(
                             Duration::from_secs(10),
                             remote_endpoint.read_from_remote(),
                         )
@@ -203,29 +203,70 @@ impl UdpTransport {
         }
     }
 
-    async fn flush_client_recv_buf_to_remote(
-        client_endpoint: &ClientEndpoint<'_>,
-        remote_endpoint: &RemoteEndpoint,
-    ) -> Result<(), RemoteEndpointError> {
+    /// The concrete function to forward client receive buffer to remote.
+    /// * transport_id: The transportation id.
+    /// * data: The data going to send to remote.
+    /// * remote_endpoint: The remote endpoint.
+    async fn consume_client_recv_buf_fn(
+        transport_id: TransportId,
+        data: Vec<u8>,
+        remote_endpoint: &RemoteUdpEndpoint,
+    ) -> Result<usize, RemoteEndpointError> {
+        trace!(
+            ">>>> Transport {transport_id} write data to remote: {}",
+            pretty_hex::pretty_hex(&data)
+        );
+        remote_endpoint.write_to_remote(data).await
+    }
+
+    /// The concrete function to forward remote receive buffer to client.
+    /// * transport_id: The transportation id.
+    /// * data: The data going to send to remote.
+    /// * client: The client endpoint.
+    async fn consume_remote_recv_buf_fn<'b>(
+        transport_id: TransportId,
+        data: Vec<u8>,
+        client_endpoint: &ClientUdpEndpoint<'b>,
+    ) -> Result<usize, ClientEndpointError>
+    where
+        'b: 'static,
+    {
+        trace!(
+            ">>>> Transport {transport_id} write data to smoltcp: {}",
+            pretty_hex::pretty_hex(&data)
+        );
+        client_endpoint.send_to_smoltcp(data).await
+    }
+
+    async fn flush_client_recv_buf_to_remote<'b>(
+        client_endpoint: &ClientUdpEndpoint<'b>,
+        remote_endpoint: &RemoteUdpEndpoint,
+    ) -> Result<(), RemoteEndpointError>
+    where
+        'b: 'static,
+    {
         client_endpoint
             .consume_recv_buffer(
                 remote_endpoint,
-                super::consume_client_recv_buf_fn,
+                Self::consume_client_recv_buf_fn,
             )
             .await
     }
 
-    async fn flush_remote_recv_buf_to_client(
-        client_endpoint: &ClientEndpoint<'_>,
-        remote_endpoint: &RemoteEndpoint,
-    ) -> Result<(), ClientEndpointError> {
+    async fn flush_remote_recv_buf_to_client<'b>(
+        client_endpoint: &ClientUdpEndpoint<'b>,
+        remote_endpoint: &RemoteUdpEndpoint,
+    ) -> Result<(), ClientEndpointError>
+    where
+        'b: 'static,
+    {
         match client_endpoint.get_state().await {
             ClientEndpointState::Udp(ClientEndpointUdpState::Closed) => Ok(()),
             _ => {
                 remote_endpoint
                     .consume_recv_buffer(
                         client_endpoint,
-                        super::consume_remote_recv_buf_fn,
+                        Self::consume_remote_recv_buf_fn,
                     )
                     .await
             }

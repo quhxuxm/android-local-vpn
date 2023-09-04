@@ -1,21 +1,24 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::anyhow;
-use log::{debug, error};
+use log::{debug, error, trace};
 use smoltcp::socket::tcp::State;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::{
+    sync::mpsc::{channel, Receiver, Sender},
+    time::timeout,
+};
 
 use crate::{
     config::PpaassVpnServerConfig,
     error::{AgentError, ClientEndpointError, RemoteEndpointError},
-    transport::{
-        client::{ClientEndpoint, ClientEndpointState},
-        remote::RemoteEndpoint,
-    },
+    transport::client::ClientEndpointState,
     util::AgentRsaCryptoFetcher,
 };
 
-use super::{ClientOutputPacket, TransportId};
+use super::{
+    client::ClientTcpEndpoint, remote::RemoteTcpEndpoint, ClientOutputPacket,
+    TransportId,
+};
 
 #[derive(Debug)]
 pub(crate) struct TcpTransport {
@@ -50,7 +53,7 @@ impl TcpTransport {
         remove_tcp_transports_tx: Sender<TransportId>,
     ) -> Result<(), AgentError> {
         let transport_id = self.transport_id;
-        let client_endpoint = match ClientEndpoint::new(
+        let client_endpoint = match ClientTcpEndpoint::new(
             self.transport_id,
             self.client_output_tx,
             config,
@@ -66,7 +69,7 @@ impl TcpTransport {
             }
         };
 
-        let remote_endpoint = match RemoteEndpoint::new(
+        let remote_endpoint = match RemoteTcpEndpoint::new(
             transport_id,
             agent_rsa_crypto_fetcher,
             config,
@@ -99,7 +102,7 @@ impl TcpTransport {
         debug!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
         while let Some(client_data) = self.client_input_rx.recv().await {
             // Push the data into smoltcp stack.
-            match tokio::time::timeout(
+            match timeout(
                 Duration::from_secs(10),
                 client_endpoint.receive_from_client(client_data),
             )
@@ -209,14 +212,14 @@ impl TcpTransport {
     /// Spawn a task to read remote data
     fn spawn_read_remote_task<'b>(
         transport_id: TransportId,
-        client_endpoint: Arc<ClientEndpoint<'b>>,
-        remote_endpoint: Arc<RemoteEndpoint>,
+        client_endpoint: Arc<ClientTcpEndpoint<'b>>,
+        remote_endpoint: Arc<RemoteTcpEndpoint>,
     ) where
         'b: 'static,
     {
         tokio::spawn(async move {
             loop {
-                match tokio::time::timeout(
+                match timeout(
                     Duration::from_secs(10),
                     remote_endpoint.read_from_remote(),
                 )
@@ -256,22 +259,63 @@ impl TcpTransport {
         });
     }
 
-    async fn flush_client_recv_buf_to_remote(
-        client_endpoint: &ClientEndpoint<'_>,
-        remote_endpoint: &RemoteEndpoint,
-    ) -> Result<(), RemoteEndpointError> {
+    /// The concrete function to forward client receive buffer to remote.
+    /// * transport_id: The transportation id.
+    /// * data: The data going to send to remote.
+    /// * remote_endpoint: The remote endpoint.
+    async fn consume_client_recv_buf_fn(
+        transport_id: TransportId,
+        data: Vec<u8>,
+        remote_endpoint: &RemoteTcpEndpoint,
+    ) -> Result<usize, RemoteEndpointError> {
+        trace!(
+            ">>>> Transport {transport_id} write data to remote: {}",
+            pretty_hex::pretty_hex(&data)
+        );
+        remote_endpoint.write_to_remote(data).await
+    }
+
+    async fn flush_client_recv_buf_to_remote<'b>(
+        client_endpoint: &ClientTcpEndpoint<'b>,
+        remote_endpoint: &RemoteTcpEndpoint,
+    ) -> Result<(), RemoteEndpointError>
+    where
+        'b: 'static,
+    {
         client_endpoint
             .consume_recv_buffer(
                 remote_endpoint,
-                super::consume_client_recv_buf_fn,
+                Self::consume_client_recv_buf_fn,
             )
             .await
     }
 
-    async fn flush_remote_recv_buf_to_client(
-        client_endpoint: &ClientEndpoint<'_>,
-        remote_endpoint: &RemoteEndpoint,
-    ) -> Result<(), ClientEndpointError> {
+    /// The concrete function to forward remote receive buffer to client.
+    /// * transport_id: The transportation id.
+    /// * data: The data going to send to remote.
+    /// * client: The client endpoint.
+    async fn consume_remote_recv_buf_fn<'b>(
+        transport_id: TransportId,
+        data: Vec<u8>,
+        client_endpoint: &ClientTcpEndpoint<'b>,
+    ) -> Result<usize, ClientEndpointError>
+    where
+        'b: 'static,
+    {
+        trace!(
+            ">>>> Transport {transport_id} write data to smoltcp: {}",
+            pretty_hex::pretty_hex(&data)
+        );
+        client_endpoint.send_to_smoltcp(data).await
+    }
+
+    async fn flush_remote_recv_buf_to_client<'b>(
+        client_endpoint: &ClientTcpEndpoint<'b>,
+        remote_endpoint: &RemoteTcpEndpoint,
+    ) -> Result<(), ClientEndpointError>
+    where
+        'b: 'static,
+    {
         match client_endpoint.get_state().await {
             ClientEndpointState::Tcp(State::CloseWait)
             | ClientEndpointState::Tcp(State::Closed)
@@ -283,7 +327,7 @@ impl TcpTransport {
                 remote_endpoint
                     .consume_recv_buffer(
                         client_endpoint,
-                        super::consume_remote_recv_buf_fn,
+                        Self::consume_remote_recv_buf_fn,
                     )
                     .await
             }
