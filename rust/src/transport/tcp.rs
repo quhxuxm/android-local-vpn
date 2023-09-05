@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::anyhow;
 use log::{debug, error, trace};
 use smoltcp::socket::tcp::State;
 use tokio::{
