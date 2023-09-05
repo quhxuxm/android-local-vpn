@@ -188,10 +188,6 @@ where
         Ok(())
     }
 
-    pub(crate) async fn abort(&mut self) {
-        self.close().await
-    }
-
     pub(crate) async fn close(&mut self) {
         poll_and_transfer_smoltcp_data_to_client(
             self.transport_id,

@@ -56,7 +56,7 @@ impl UdpTransport {
             Ok(remote_endpoint) => remote_endpoint,
             Err(e) => {
                 error!(">>>> Transport {transport_id} error happen when initialize the remote endpoint because of the error: {e:?}");
-                client_endpoint.abort().await;
+                client_endpoint.close().await;
                 client_endpoint.destroy().await;
                 return Err(e.into());
             }
@@ -162,7 +162,6 @@ impl UdpTransport {
                     error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
                 };
                 remote_endpoint.close().await;
-                client_endpoint.abort().await;
                 client_endpoint.destroy().await;
                 Err(AgentError::ClientEndpoint(ClientEndpointError::Other(
                     anyhow!(e),
