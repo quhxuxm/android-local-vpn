@@ -90,17 +90,6 @@ where
         Ok(socket)
     }
 
-    pub(crate) async fn get_state(&self) -> State {
-        let ClientEndpointCtlLockGuard {
-            mut smoltcp_socket_set,
-            ..
-        } = self.ctl.lock().await;
-        let smoltcp_socket_handle = self.smoltcp_socket_handle;
-        let smoltcp_socket = smoltcp_socket_set
-            .get_mut::<SmoltcpTcpSocket>(smoltcp_socket_handle);
-        smoltcp_socket.state()
-    }
-
     pub(crate) async fn consume_recv_buffer<'r, F, Fut>(
         &self,
         remote: &'r RemoteTcpEndpoint,
@@ -152,7 +141,7 @@ where
     pub(crate) async fn receive_from_client(
         &self,
         client_data: Vec<u8>,
-    ) -> Result<(), ClientEndpointError> {
+    ) -> Result<State, ClientEndpointError> {
         let ClientEndpointCtlLockGuard {
             mut smoltcp_socket_set,
             mut smoltcp_iface,
@@ -188,8 +177,11 @@ where
                 };
                 self.recv_buffer.write().await.extend(tcp_data);
             }
+            return Ok(smoltcp_tcp_socket.state());
         }
-        Ok(())
+        let smoltcp_tcp_socket = smoltcp_socket_set
+            .get::<SmoltcpTcpSocket>(self.smoltcp_socket_handle);
+        Ok(smoltcp_tcp_socket.state())
     }
 
     pub(crate) async fn abort(&self) {
