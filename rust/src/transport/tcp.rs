@@ -54,11 +54,17 @@ impl TcpTransport {
         let client_endpoint = match ClientTcpEndpoint::new(
             self.transport_id,
             self.client_output_tx,
-            remove_tcp_transports_tx,
+            remove_tcp_transports_tx.clone(),
             config,
         ) {
             Ok(client_endpoint) => client_endpoint,
             Err(e) => {
+                error!(">>>> Transport {transport_id} fail to create client endpoint because of error: {e:?}");
+                if let Err(e) =
+                    remove_tcp_transports_tx.send(self.transport_id).await
+                {
+                    error!("###### Transport {} fail to send remove transports signal because of error: {e:?}", self.transport_id)
+                }
                 return Err(e.into());
             }
         };
