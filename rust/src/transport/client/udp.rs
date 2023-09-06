@@ -77,12 +77,26 @@ where
     ) -> Result<SmoltcpUdpSocket<'a>, ClientEndpointError> {
         let mut socket = SmoltcpUdpSocket::new(
             SmoltcpUdpSocketBuffer::new(
-                vec![SmoltcpUdpPacketMetadata::EMPTY; 32],
-                vec![0; config.get_smoltcp_tcp_rx_buffer_size() * 32],
+                vec![
+                    SmoltcpUdpPacketMetadata::EMPTY;
+                    config.get_smoltcp_udp_rx_packet_buffer_number()
+                ],
+                vec![
+                    0;
+                    config.get_smoltcp_udp_packet_size()
+                        * config.get_smoltcp_udp_rx_packet_buffer_number()
+                ],
             ),
             SmoltcpUdpSocketBuffer::new(
-                vec![SmoltcpUdpPacketMetadata::EMPTY; 32],
-                vec![0; config.get_smoltcp_tcp_rx_buffer_size() * 32],
+                vec![
+                    SmoltcpUdpPacketMetadata::EMPTY;
+                    config.get_smoltcp_udp_tx_packet_buffer_number()
+                ],
+                vec![
+                    0;
+                    config.get_smoltcp_udp_packet_size()
+                        * config.get_smoltcp_udp_tx_packet_buffer_number()
+                ],
             ),
         );
         socket.bind(trans_id.destination)?;

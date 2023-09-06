@@ -6,6 +6,9 @@ pub(crate) struct PpaassVpnServerConfig {
     proxy_connection_buffer_size: usize,
     smoltcp_tcp_rx_buffer_size: usize,
     smoltcp_tcp_tx_buffer_size: usize,
+    smoltcp_udp_packet_size: usize,
+    smoltcp_udp_rx_packet_buffer_number: usize,
+    smoltcp_udp_tx_packet_buffer_number: usize,
     client_endpoint_tcp_recv_buffer_size: usize,
     client_endpoint_udp_recv_buffer_size: usize,
 }
@@ -15,12 +18,15 @@ impl PpaassVpnServerConfig {
         Self {
             user_token: "user1".to_string(),
             proxy_address: "64.176.193.76:80".to_string(),
-            thread_number: 256,
-            proxy_connection_buffer_size: 65536,
-            smoltcp_tcp_rx_buffer_size: 65536,
-            smoltcp_tcp_tx_buffer_size: 65536,
-            client_endpoint_tcp_recv_buffer_size: 65536,
-            client_endpoint_udp_recv_buffer_size: 32,
+            thread_number: 512,
+            proxy_connection_buffer_size: 1024 * 1024,
+            smoltcp_tcp_rx_buffer_size: 1024 * 1024,
+            smoltcp_tcp_tx_buffer_size: 1024 * 1024,
+            smoltcp_udp_packet_size: 65536,
+            client_endpoint_tcp_recv_buffer_size: 1024 * 1024,
+            client_endpoint_udp_recv_buffer_size: 1024 * 1024,
+            smoltcp_udp_rx_packet_buffer_number: 128,
+            smoltcp_udp_tx_packet_buffer_number: 128,
         }
     }
 
@@ -51,7 +57,20 @@ impl PpaassVpnServerConfig {
     pub(crate) fn get_client_endpoint_tcp_recv_buffer_size(&self) -> usize {
         self.client_endpoint_tcp_recv_buffer_size
     }
+
     pub(crate) fn get_client_endpoint_udp_recv_buffer_size(&self) -> usize {
         self.client_endpoint_udp_recv_buffer_size
+    }
+
+    pub(crate) fn get_smoltcp_udp_rx_packet_buffer_number(&self) -> usize {
+        self.smoltcp_udp_rx_packet_buffer_number
+    }
+
+    pub(crate) fn get_smoltcp_udp_tx_packet_buffer_number(&self) -> usize {
+        self.smoltcp_udp_tx_packet_buffer_number
+    }
+
+    pub(crate) fn get_smoltcp_udp_packet_size(&self) -> usize {
+        self.smoltcp_udp_packet_size
     }
 }
