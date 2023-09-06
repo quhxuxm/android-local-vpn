@@ -4,7 +4,7 @@ mod udp;
 use smoltcp::iface::SocketSet;
 
 use smoltcp::iface::Interface;
-use tokio::sync::{mpsc::Sender, Mutex, MutexGuard};
+use tokio::sync::mpsc::Sender;
 
 use crate::device::SmoltcpDevice;
 use crate::error::ClientEndpointError;
@@ -19,44 +19,6 @@ pub(crate) use tcp::ClientTcpEndpoint;
 pub(crate) use udp::ClientUdpEndpoint;
 
 static DEFAULT_GATEWAY_IPV4_ADDR: Ipv4Address = Ipv4Address::new(0, 0, 0, 1);
-
-pub(crate) struct ClientEndpointCtlLockGuard<'lock, 'buf> {
-    pub(crate) smoltcp_socket_set: MutexGuard<'lock, SocketSet<'buf>>,
-    pub(crate) smoltcp_iface: MutexGuard<'lock, Interface>,
-    pub(crate) smoltcp_device: MutexGuard<'lock, SmoltcpDevice>,
-}
-
-pub(crate) struct ClientEndpointCtl<'buf> {
-    smoltcp_socket_set: Mutex<SocketSet<'buf>>,
-    smoltcp_iface: Mutex<Interface>,
-    smoltcp_device: Mutex<SmoltcpDevice>,
-}
-
-impl<'buf> ClientEndpointCtl<'buf> {
-    fn new(
-        smoltcp_socket_set: Mutex<SocketSet<'buf>>,
-        smoltcp_iface: Mutex<Interface>,
-        smoltcp_device: Mutex<SmoltcpDevice>,
-    ) -> Self {
-        Self {
-            smoltcp_socket_set,
-            smoltcp_iface,
-            smoltcp_device,
-        }
-    }
-    pub(crate) async fn lock<'lock>(
-        &'lock self,
-    ) -> ClientEndpointCtlLockGuard<'lock, 'buf> {
-        let smoltcp_device = self.smoltcp_device.lock().await;
-        let smoltcp_iface = self.smoltcp_iface.lock().await;
-        let smoltcp_socket_set = self.smoltcp_socket_set.lock().await;
-        ClientEndpointCtlLockGuard {
-            smoltcp_socket_set,
-            smoltcp_iface,
-            smoltcp_device,
-        }
-    }
-}
 
 fn prepare_smoltcp_iface_and_device(
     transport_id: TransportId,

@@ -3,21 +3,20 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 use anyhow::Result;
 
 use log::error;
-use smoltcp::socket::tcp::Socket as SmoltcpTcpSocket;
+use smoltcp::{iface::Interface, socket::tcp::Socket as SmoltcpTcpSocket};
 use smoltcp::{
     iface::{SocketHandle, SocketSet},
     socket::tcp::State,
 };
-use tokio::sync::{mpsc::Sender, Mutex, RwLock};
+use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, RwLock};
 
-use crate::config::PpaassVpnServerConfig;
 use crate::error::RemoteEndpointError;
+use crate::{config::PpaassVpnServerConfig, device::SmoltcpDevice};
 use crate::{error::ClientEndpointError, transport::remote::RemoteTcpEndpoint};
 use smoltcp::socket::tcp::SocketBuffer as SmoltcpTcpSocketBuffer;
 
 use super::{
-    ClientEndpointCtl, ClientEndpointCtlLockGuard, ClientOutputPacket,
-    TransportId,
+    ClientOutputPacket, TransportId,
     {
         poll_and_transfer_smoltcp_data_to_client,
         prepare_smoltcp_iface_and_device,
@@ -26,9 +25,46 @@ use super::{
 
 type ClientTcpRecvBuf = RwLock<VecDeque<u8>>;
 
+struct ClientTcpEndpointCtlLockGuard<'lock, 'buf> {
+    smoltcp_socket_set: MutexGuard<'lock, SocketSet<'buf>>,
+    smoltcp_iface: MutexGuard<'lock, Interface>,
+    smoltcp_device: MutexGuard<'lock, SmoltcpDevice>,
+}
+
+struct ClientTcpEndpointCtl<'buf> {
+    smoltcp_socket_set: Mutex<SocketSet<'buf>>,
+    smoltcp_iface: Mutex<Interface>,
+    smoltcp_device: Mutex<SmoltcpDevice>,
+}
+
+impl<'buf> ClientTcpEndpointCtl<'buf> {
+    fn new(
+        smoltcp_socket_set: Mutex<SocketSet<'buf>>,
+        smoltcp_iface: Mutex<Interface>,
+        smoltcp_device: Mutex<SmoltcpDevice>,
+    ) -> Self {
+        Self {
+            smoltcp_socket_set,
+            smoltcp_iface,
+            smoltcp_device,
+        }
+    }
+    async fn lock<'lock>(
+        &'lock self,
+    ) -> ClientTcpEndpointCtlLockGuard<'lock, 'buf> {
+        let smoltcp_device = self.smoltcp_device.lock().await;
+        let smoltcp_iface = self.smoltcp_iface.lock().await;
+        let smoltcp_socket_set = self.smoltcp_socket_set.lock().await;
+        ClientTcpEndpointCtlLockGuard {
+            smoltcp_socket_set,
+            smoltcp_iface,
+            smoltcp_device,
+        }
+    }
+}
 pub(crate) struct ClientTcpEndpoint<'buf> {
     transport_id: TransportId,
-    ctl: ClientEndpointCtl<'buf>,
+    ctl: ClientTcpEndpointCtl<'buf>,
     smoltcp_socket_handle: SocketHandle,
     recv_buffer: Arc<ClientTcpRecvBuf>,
     client_output_tx: Sender<ClientOutputPacket>,
@@ -50,7 +86,7 @@ where
         let smoltcp_tcp_socket =
             Self::create_smoltcp_tcp_socket(transport_id, config)?;
         let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_tcp_socket);
-        let ctl = ClientEndpointCtl::new(
+        let ctl = ClientTcpEndpointCtl::new(
             Mutex::new(smoltcp_socket_set),
             Mutex::new(smoltcp_iface),
             Mutex::new(smoltcp_device),
@@ -114,7 +150,7 @@ where
         &self,
         data: Vec<u8>,
     ) -> Result<usize, ClientEndpointError> {
-        let ClientEndpointCtlLockGuard {
+        let ClientTcpEndpointCtlLockGuard {
             mut smoltcp_socket_set,
             mut smoltcp_iface,
             mut smoltcp_device,
@@ -142,7 +178,7 @@ where
         &self,
         client_data: Vec<u8>,
     ) -> Result<State, ClientEndpointError> {
-        let ClientEndpointCtlLockGuard {
+        let ClientTcpEndpointCtlLockGuard {
             mut smoltcp_socket_set,
             mut smoltcp_iface,
             mut smoltcp_device,
@@ -185,7 +221,7 @@ where
     }
 
     pub(crate) async fn abort(&self) {
-        let ClientEndpointCtlLockGuard {
+        let ClientTcpEndpointCtlLockGuard {
             mut smoltcp_socket_set,
             mut smoltcp_iface,
             mut smoltcp_device,
@@ -203,7 +239,7 @@ where
         .await;
     }
     pub(crate) async fn close(&self) {
-        let ClientEndpointCtlLockGuard {
+        let ClientTcpEndpointCtlLockGuard {
             mut smoltcp_socket_set,
             mut smoltcp_iface,
             mut smoltcp_device,
@@ -222,7 +258,7 @@ where
     }
 
     pub(crate) async fn destroy(&self) {
-        let ClientEndpointCtlLockGuard {
+        let ClientTcpEndpointCtlLockGuard {
             mut smoltcp_socket_set,
             mut smoltcp_device,
             ..
