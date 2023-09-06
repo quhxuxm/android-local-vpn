@@ -54,15 +54,11 @@ impl TcpTransport {
         let client_endpoint = match ClientTcpEndpoint::new(
             self.transport_id,
             self.client_output_tx,
+            remove_tcp_transports_tx,
             config,
         ) {
             Ok(client_endpoint) => client_endpoint,
             Err(e) => {
-                if let Err(e) =
-                    remove_tcp_transports_tx.send(transport_id).await
-                {
-                    error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
-                };
                 return Err(e.into());
             }
         };
@@ -79,11 +75,6 @@ impl TcpTransport {
                 error!(">>>> Transport {transport_id} error happen when initialize the remote endpoint because of the error: {e:?}");
                 client_endpoint.abort().await;
                 client_endpoint.destroy().await;
-                if let Err(e) =
-                    remove_tcp_transports_tx.send(transport_id).await
-                {
-                    error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
-                };
                 return Err(e.into());
             }
         };
@@ -95,7 +86,6 @@ impl TcpTransport {
             transport_id,
             Arc::clone(&client_endpoint),
             Arc::clone(&remote_endpoint),
-            remove_tcp_transports_tx.clone(),
         );
 
         debug!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
@@ -120,11 +110,6 @@ impl TcpTransport {
                     remote_endpoint.close().await;
                     client_endpoint.abort().await;
                     client_endpoint.destroy().await;
-                    if let Err(e) =
-                        remove_tcp_transports_tx.send(transport_id).await
-                    {
-                        error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
-                    };
                     return Err(ClientEndpointError::ReceiveTimeout(10).into());
                 }
                 Ok(Err(e)) => {
@@ -139,11 +124,6 @@ impl TcpTransport {
                     remote_endpoint.close().await;
                     client_endpoint.abort().await;
                     client_endpoint.destroy().await;
-                    if let Err(e) =
-                        remove_tcp_transports_tx.send(transport_id).await
-                    {
-                        error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
-                    };
                     return Err(TransportError::ClientEndpoint(e));
                 }
                 Ok(Ok(State::Closed)) => {
@@ -158,12 +138,8 @@ impl TcpTransport {
                     {
                         error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
                     };
+                    remote_endpoint.close().await;
                     client_endpoint.destroy().await;
-                    if let Err(e) =
-                        remove_tcp_transports_tx.send(transport_id).await
-                    {
-                        error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
-                    };
                     return Ok(());
                 }
                 Ok(Ok(state)) => {
@@ -190,7 +166,6 @@ impl TcpTransport {
         transport_id: TransportId,
         client_endpoint: Arc<ClientTcpEndpoint<'b>>,
         remote_endpoint: Arc<RemoteTcpEndpoint>,
-        remove_tcp_transports_tx: Sender<TransportId>,
     ) where
         'b: 'static,
     {
@@ -214,11 +189,6 @@ impl TcpTransport {
                         };
                         client_endpoint.close().await;
                         client_endpoint.destroy().await;
-                        if let Err(e) =
-                            remove_tcp_transports_tx.send(transport_id).await
-                        {
-                            error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
-                        };
                         return;
                     }
                     Ok(Ok(exhausted)) => {
@@ -229,6 +199,8 @@ impl TcpTransport {
                         )
                         .await
                         {
+                            client_endpoint.close().await;
+                            client_endpoint.destroy().await;
                             error!("<<<< Transport {transport_id} error happen when flush remote receive buffer to client because of the error: {e:?}");
                             return;
                         };
@@ -236,12 +208,6 @@ impl TcpTransport {
                             // Remote date exhausted and recv buffer also flushed, close the client endpoint.
                             client_endpoint.close().await;
                             client_endpoint.destroy().await;
-                            if let Err(e) = remove_tcp_transports_tx
-                                .send(transport_id)
-                                .await
-                            {
-                                error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
-                            };
                             return;
                         }
                         debug!("<<<< Transport {transport_id} keep reading remote data.");
@@ -259,11 +225,6 @@ impl TcpTransport {
                         };
                         client_endpoint.close().await;
                         client_endpoint.destroy().await;
-                        if let Err(e) =
-                            remove_tcp_transports_tx.send(transport_id).await
-                        {
-                            error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
-                        };
                         return;
                     }
                 }
