@@ -2,8 +2,6 @@ use std::{
     collections::VecDeque, future::Future, os::fd::AsRawFd, time::Duration,
 };
 
-use anyhow::{anyhow, Result};
-
 use futures_util::{SinkExt, StreamExt};
 
 use log::{error, trace};
@@ -88,9 +86,7 @@ impl RemoteUdpEndpoint {
         let proxy_addresses = config.get_proxy_address();
         let proxy_tcp_stream = tokio::time::timeout(
         Duration::from_secs(10),
-        tcp_socket.connect(proxy_addresses.parse().map_err(|e| {
-            anyhow!("Faill to parse proxy address because of error: {e:?}")
-        })?),
+        tcp_socket.connect(proxy_addresses.parse()?),
     )
     .await
     .map_err(|_| {

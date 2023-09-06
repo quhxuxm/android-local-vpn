@@ -7,12 +7,10 @@ use smoltcp::iface::Interface;
 use tokio::sync::{mpsc::Sender, Mutex, MutexGuard};
 
 use crate::device::SmoltcpDevice;
+use crate::error::ClientEndpointError;
 
 use super::{ClientOutputPacket, TransportId};
 use log::error;
-
-use anyhow::anyhow;
-use anyhow::Result;
 
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 use smoltcp::{iface::Config, time::Instant, wire::HardwareAddress};
@@ -62,7 +60,7 @@ impl<'buf> ClientEndpointCtl<'buf> {
 
 fn prepare_smoltcp_iface_and_device(
     transport_id: TransportId,
-) -> Result<(Interface, SmoltcpDevice)> {
+) -> Result<(Interface, SmoltcpDevice), ClientEndpointError> {
     let mut interface_config = Config::new(HardwareAddress::Ip);
     interface_config.random_seed = rand::random::<u64>();
     let mut vpn_device = SmoltcpDevice::new(transport_id);
@@ -76,12 +74,7 @@ fn prepare_smoltcp_iface_and_device(
     });
     interface
         .routes_mut()
-        .add_default_ipv4_route(DEFAULT_GATEWAY_IPV4_ADDR)
-        .map_err(|e| {
-            error!(">>>> Transportation {transport_id} fail to add default ipv4 route because of error: {e:?}");
-            anyhow!("{e:?}")
-        })?;
-
+        .add_default_ipv4_route(DEFAULT_GATEWAY_IPV4_ADDR)?;
     Ok((interface, vpn_device))
 }
 

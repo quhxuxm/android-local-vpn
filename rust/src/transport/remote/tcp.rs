@@ -3,7 +3,6 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, Result};
 use futures_util::{SinkExt, StreamExt};
 
 use log::{debug, error, trace};
@@ -90,9 +89,7 @@ impl RemoteTcpEndpoint {
         let proxy_addresses = config.get_proxy_address();
         let proxy_tcp_stream = tokio::time::timeout(
         Duration::from_secs(10),
-        tcp_socket.connect(proxy_addresses.parse().map_err(|e| {
-            anyhow!("Faill to parse proxy address because of error: {e:?}")
-        })?),
+        tcp_socket.connect(proxy_addresses.parse()?),
     )
     .await
     .map_err(|_| {
@@ -127,20 +124,22 @@ impl RemoteTcpEndpoint {
                     data: proxy_msg_payload_data,
                 },
             ..
-        } = proxy_connection.next().await.ok_or(anyhow!(
-            "Transport {transport_id} nothing read from proxy."
-        ))??;
+        } = proxy_connection
+            .next()
+            .await
+            .ok_or(RemoteEndpointError::ProxyExhausted(transport_id))??;
 
         let tcp_init_response = match proxy_msg_payload_type {
             PpaassMessageProxyPayloadType::TcpInit => {
                 proxy_msg_payload_data.as_slice().try_into()?
             }
-            _ => {
-                error!(">>>> Transport {transport_id} receive invalid message from proxy, payload type: {proxy_msg_payload_type:?}");
-                return Err(anyhow!(
-                    "Invalid proxy message payload type: {proxy_msg_payload_type:?}"
-                )
-                .into());
+            payload_type => {
+                error!(">>>> Transport {transport_id} receive invalid message from proxy, payload type: {payload_type:?}");
+                return Err(
+                    RemoteEndpointError::InvalidProxyMessagePayloadType(
+                        payload_type,
+                    ),
+                );
             }
         };
         let ProxyTcpInit {
@@ -154,7 +153,9 @@ impl RemoteTcpEndpoint {
             ProxyTcpInitResultType::Fail => {
                 error!(">>>> Transport {transport_id} fail to initialize proxy tcp connection.");
                 return Err(
-                    anyhow!("Fail to initialize proxy tcp connection").into()
+                    RemoteEndpointError::ProxyFailToInitializeConnection(
+                        transport_id,
+                    ),
                 );
             }
         }

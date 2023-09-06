@@ -9,7 +9,7 @@ use tokio::{
 
 use crate::{
     config::PpaassVpnServerConfig,
-    error::{AgentError, ClientEndpointError, RemoteEndpointError},
+    error::{ClientEndpointError, RemoteEndpointError, TransportError},
     util::AgentRsaCryptoFetcher,
 };
 
@@ -49,7 +49,7 @@ impl TcpTransport {
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
         remove_tcp_transports_tx: Sender<TransportId>,
-    ) -> Result<(), AgentError> {
+    ) -> Result<(), TransportError> {
         let transport_id = self.transport_id;
         let client_endpoint = match ClientTcpEndpoint::new(
             self.transport_id,
@@ -144,7 +144,7 @@ impl TcpTransport {
                     {
                         error!("###### Transport {transport_id} fail to send remove transports signal because of error: {e:?}")
                     };
-                    return Err(AgentError::ClientEndpoint(e));
+                    return Err(TransportError::ClientEndpoint(e));
                 }
                 Ok(Ok(State::Closed)) => {
                     // The tcp connection is closed we should remove the transport from the repository because of no data will come again.

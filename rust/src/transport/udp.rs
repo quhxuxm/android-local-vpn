@@ -1,13 +1,12 @@
 use std::time::Duration;
 
-use anyhow::anyhow;
 use log::{debug, error, trace};
 
 use tokio::{sync::mpsc::Sender, time::timeout};
 
 use crate::{
     config::PpaassVpnServerConfig,
-    error::{AgentError, ClientEndpointError, RemoteEndpointError},
+    error::{ClientEndpointError, RemoteEndpointError, TransportError},
     util::AgentRsaCryptoFetcher,
 };
 
@@ -38,7 +37,7 @@ impl UdpTransport {
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
         client_data: Vec<u8>,
-    ) -> Result<(), AgentError> {
+    ) -> Result<(), TransportError> {
         let transport_id = self.transport_id;
         let mut client_endpoint = ClientUdpEndpoint::new(
             self.transport_id,
@@ -163,9 +162,7 @@ impl UdpTransport {
                 };
                 remote_endpoint.close().await;
                 client_endpoint.destroy().await;
-                Err(AgentError::ClientEndpoint(ClientEndpointError::Other(
-                    anyhow!(e),
-                )))
+                Err(TransportError::ClientEndpoint(e))
             }
         }
     }

@@ -74,7 +74,7 @@ impl PpaassVpnServer {
         let mut client_file_write =
             unsafe { File::from_raw_fd(file_descriptor) };
         let (client_output_tx, mut client_output_rx) =
-            MpscChannel::<ClientOutputPacket>(1024);
+            MpscChannel::<ClientOutputPacket>(65536);
 
         let ppaass_server_config = self.config;
         let (stop_signal_tx, stop_signal_rx) = OneshotChannel();
@@ -144,14 +144,11 @@ impl PpaassVpnServer {
                 }
                 Ok(size) => &client_rx_buffer[..size],
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                    // sleep(Duration::from_millis(50)).await;
                     yield_now().await;
                     continue;
                 }
                 Err(e) => {
-                    error!(
-                        "Fail to read client file data because of error, stop ppaass vpn server: {e:?}"
-                    );
+                    error!("Fail to read client file data because of error, stop ppaass vpn server: {e:?}");
                     break;
                 }
             };
