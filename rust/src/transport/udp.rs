@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use bytes::Bytes;
 use log::{debug, error, trace};
 
 use tokio::{sync::mpsc::Sender, time::timeout};
@@ -173,7 +174,7 @@ impl UdpTransport {
     /// * remote_endpoint: The remote endpoint.
     async fn consume_client_recv_buf_fn(
         transport_id: TransportId,
-        data: Vec<Vec<u8>>,
+        data: Vec<Bytes>,
         remote_endpoint: &mut RemoteUdpEndpoint,
     ) -> Result<usize, RemoteEndpointError> {
         let mut consume_size = 0;

@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use bytes::Bytes;
 use log::{debug, error, trace};
 use smoltcp::socket::tcp::State;
 use tokio::{
@@ -244,7 +245,7 @@ impl TcpTransport {
     /// * remote_endpoint: The remote endpoint.
     async fn consume_client_recv_buf_fn(
         transport_id: TransportId,
-        data: Vec<u8>,
+        data: Bytes,
         remote_endpoint: &RemoteTcpEndpoint,
     ) -> Result<usize, RemoteEndpointError> {
         trace!(

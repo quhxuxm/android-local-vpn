@@ -2,6 +2,7 @@ use std::{
     collections::VecDeque, future::Future, os::fd::AsRawFd, time::Duration,
 };
 
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 
 use log::{error, trace};
@@ -115,7 +116,7 @@ impl RemoteUdpEndpoint {
                 let UdpData {
                     data: udp_relay_data,
                     ..
-                } = proxy_message_payload.data.try_into()?;
+                } = proxy_message_payload.data.freeze().try_into()?;
                 trace!(
                 "<<<< Transport {}, [UDP PROCESS] read remote udp data to remote receive buffer: {}",
                 self.transport_id,
@@ -134,12 +135,12 @@ impl RemoteUdpEndpoint {
 
     pub(crate) async fn write_to_remote(
         &mut self,
-        data: Vec<u8>,
+        data: Bytes,
     ) -> Result<usize, RemoteEndpointError> {
         let payload_encryption =
             AgentPpaassMessagePayloadEncryptionSelector::select(
                 self.config.get_user_token(),
-                Some(generate_uuid().into_bytes()),
+                Some(Bytes::from(generate_uuid().into_bytes())),
             );
         trace!(
             ">>>> Transport {}, [UDP PROCESS] send udp data to remote: {}",

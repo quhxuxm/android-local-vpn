@@ -2,6 +2,7 @@ use std::{collections::VecDeque, future::Future, sync::Arc};
 
 use anyhow::Result;
 
+use bytes::Bytes;
 use log::error;
 use smoltcp::{iface::Interface, socket::tcp::Socket as SmoltcpTcpSocket};
 use smoltcp::{
@@ -135,14 +136,15 @@ where
         mut consume_fn: F,
     ) -> Result<(), RemoteEndpointError>
     where
-        F: FnMut(TransportId, Vec<u8>, &'r RemoteTcpEndpoint) -> Fut,
+        F: FnMut(TransportId, Bytes, &'r RemoteTcpEndpoint) -> Fut,
         Fut: Future<Output = Result<usize, RemoteEndpointError>>,
     {
         if self.recv_buffer.read().await.is_empty() {
             return Ok(());
         }
         let mut recv_buffer = self.recv_buffer.write().await;
-        let recv_buffer_data = recv_buffer.make_contiguous().to_vec();
+        let recv_buffer_data =
+            Bytes::from(recv_buffer.make_contiguous().to_vec());
         let consume_size =
             consume_fn(self.transport_id, recv_buffer_data, remote).await?;
         recv_buffer.drain(..consume_size);

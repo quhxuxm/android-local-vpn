@@ -2,6 +2,7 @@ use std::{collections::VecDeque, future::Future};
 
 use anyhow::Result;
 
+use bytes::Bytes;
 use log::error;
 use smoltcp::{iface::Interface, socket::udp::Socket as SmoltcpUdpSocket};
 
@@ -28,7 +29,7 @@ use smoltcp::socket::udp::{
     PacketMetadata as SmoltcpUdpPacketMetadata,
 };
 
-type ClientUdpRecvBuf = VecDeque<Vec<u8>>;
+type ClientUdpRecvBuf = VecDeque<Bytes>;
 
 pub(crate) struct ClientUdpEndpoint<'buf> {
     transport_id: TransportId,
@@ -109,7 +110,7 @@ where
         mut consume_fn: F,
     ) -> Result<(), RemoteEndpointError>
     where
-        F: FnMut(TransportId, Vec<Vec<u8>>, &'r mut RemoteUdpEndpoint) -> Fut,
+        F: FnMut(TransportId, Vec<Bytes>, &'r mut RemoteUdpEndpoint) -> Fut,
         Fut: Future<Output = Result<usize, RemoteEndpointError>>,
     {
         if self.recv_buffer.is_empty() {
@@ -188,7 +189,7 @@ where
                     .recv_slice(&mut udp_data)
                 {
                     Ok((0, _)) => break,
-                    Ok((size, _)) => &udp_data[..size],
+                    Ok((size, _)) => Bytes::from(udp_data[..size].to_vec()),
                     Err(e) => {
                         error!(">>>> Transport {} fail to receive udp data from smoltcp because of error: {e:?}", self.transport_id);
                         return Err(
@@ -196,7 +197,7 @@ where
                         );
                     }
                 };
-                self.recv_buffer.push_back(udp_data.to_vec());
+                self.recv_buffer.push_back(udp_data);
             }
         }
         Ok(())

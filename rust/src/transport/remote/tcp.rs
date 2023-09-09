@@ -3,6 +3,7 @@ use std::{
     time::Duration,
 };
 
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 
 use log::{debug, error, trace};
@@ -106,7 +107,7 @@ impl RemoteTcpEndpoint {
         let payload_encryption =
             AgentPpaassMessagePayloadEncryptionSelector::select(
                 config.get_user_token(),
-                Some(generate_uuid().into_bytes()),
+                Some(Bytes::from(generate_uuid().into_bytes())),
             );
 
         let tcp_init_request =
@@ -131,7 +132,7 @@ impl RemoteTcpEndpoint {
 
         let tcp_init_response = match proxy_msg_payload_type {
             PpaassMessageProxyPayloadType::TcpInit => {
-                proxy_msg_payload_data.as_slice().try_into()?
+                proxy_msg_payload_data.freeze().try_into()?
             }
             payload_type => {
                 error!(">>>> Transport {transport_id} receive invalid message from proxy, payload type: {payload_type:?}");
@@ -175,7 +176,7 @@ impl RemoteTcpEndpoint {
                 let ProxyTcpData {
                     data: tcp_relay_data,
                     ..
-                } = proxy_message_payload.data.as_slice().try_into()?;
+                } = proxy_message_payload.data.freeze().try_into()?;
                 trace!(
                 "<<<< Transport {} read remote tcp data to remote endpoint receive buffer: {}",
                 self.transport_id,
@@ -194,12 +195,12 @@ impl RemoteTcpEndpoint {
 
     pub(crate) async fn write_to_remote(
         &self,
-        data: Vec<u8>,
+        data: Bytes,
     ) -> Result<usize, RemoteEndpointError> {
         let payload_encryption =
             AgentPpaassMessagePayloadEncryptionSelector::select(
                 self.config.get_user_token(),
-                Some(generate_uuid().into_bytes()),
+                Some(Bytes::from(generate_uuid().into_bytes())),
             );
         let data_len = data.len();
         let tcp_data = PpaassMessageGenerator::generate_agent_tcp_data_message(
