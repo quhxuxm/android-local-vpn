@@ -132,7 +132,7 @@ impl RemoteTcpEndpoint {
 
         let tcp_init_response = match proxy_msg_payload_type {
             PpaassMessageProxyPayloadType::TcpInit => {
-                proxy_msg_payload_data.freeze().try_into()?
+                proxy_msg_payload_data.try_into()?
             }
             payload_type => {
                 error!(">>>> Transport {transport_id} receive invalid message from proxy, payload type: {payload_type:?}");
@@ -176,7 +176,7 @@ impl RemoteTcpEndpoint {
                 let ProxyTcpData {
                     data: tcp_relay_data,
                     ..
-                } = proxy_message_payload.data.freeze().try_into()?;
+                } = proxy_message_payload.data.try_into()?;
                 trace!(
                 "<<<< Transport {} read remote tcp data to remote endpoint receive buffer: {}",
                 self.transport_id,

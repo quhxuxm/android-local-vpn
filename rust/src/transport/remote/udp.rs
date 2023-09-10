@@ -116,7 +116,7 @@ impl RemoteUdpEndpoint {
                 let UdpData {
                     data: udp_relay_data,
                     ..
-                } = proxy_message_payload.data.freeze().try_into()?;
+                } = proxy_message_payload.data.try_into()?;
                 trace!(
                 "<<<< Transport {}, [UDP PROCESS] read remote udp data to remote receive buffer: {}",
                 self.transport_id,
