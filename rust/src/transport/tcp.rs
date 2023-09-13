@@ -276,7 +276,7 @@ impl TcpTransport {
     /// * client: The client endpoint.
     async fn consume_remote_recv_buf_fn<'b>(
         transport_id: TransportId,
-        data: Vec<u8>,
+        data: Bytes,
         client_endpoint: &ClientTcpEndpoint<'b>,
     ) -> Result<usize, ClientEndpointError>
     where

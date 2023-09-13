@@ -1,9 +1,6 @@
-use std::{
-    collections::VecDeque, future::Future, os::fd::AsRawFd, sync::Arc,
-    time::Duration,
-};
+use std::{future::Future, os::fd::AsRawFd, sync::Arc, time::Duration};
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 
 use log::{debug, error, trace};
@@ -31,7 +28,7 @@ use ppaass_common::{
     PpaassProxyMessagePayload,
 };
 
-pub(crate) type RemoteTcpRecvBuf = RwLock<VecDeque<u8>>;
+pub(crate) type RemoteTcpRecvBuf = RwLock<BytesMut>;
 
 pub(crate) struct RemoteTcpEndpoint {
     transport_id: TransportId,
@@ -67,7 +64,7 @@ impl RemoteTcpEndpoint {
             transport_id,
             proxy_connection_read: Mutex::new(proxy_connection_read),
             proxy_connection_write: Mutex::new(proxy_connection_write),
-            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(65536))),
+            recv_buffer: Arc::new(RwLock::new(BytesMut::with_capacity(65536))),
             config,
         })
     }
@@ -224,20 +221,18 @@ impl RemoteTcpEndpoint {
         mut consume_fn: F,
     ) -> Result<(), ClientEndpointError>
     where
-        F: FnMut(TransportId, Vec<u8>, &'c ClientTcpEndpoint<'buf>) -> Fut,
+        F: FnMut(TransportId, Bytes, &'c ClientTcpEndpoint<'buf>) -> Fut,
         Fut: Future<Output = Result<usize, ClientEndpointError>>,
     {
-        if self.recv_buffer.read().await.len() == 0 {
+        if self.recv_buffer.read().await.is_empty() {
             return Ok(());
         }
         let mut recv_buffer = self.recv_buffer.write().await;
-        let consume_size = consume_fn(
-            self.transport_id,
-            recv_buffer.make_contiguous().to_vec(),
-            remote,
-        )
-        .await?;
-        recv_buffer.drain(..consume_size);
+        let recv_buffer_clone = recv_buffer.clone();
+        let consume_size =
+            consume_fn(self.transport_id, recv_buffer_clone.freeze(), remote)
+                .await?;
+        recv_buffer.advance(consume_size);
         Ok(())
     }
 
