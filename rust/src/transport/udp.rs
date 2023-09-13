@@ -195,7 +195,7 @@ impl UdpTransport {
     /// * client: The client endpoint.
     async fn consume_remote_recv_buf_fn<'b>(
         transport_id: TransportId,
-        data: Vec<Vec<u8>>,
+        data: Vec<Bytes>,
         client_endpoint: &mut ClientUdpEndpoint<'b>,
     ) -> Result<usize, ClientEndpointError>
     where
@@ -207,7 +207,7 @@ impl UdpTransport {
                 ">>>> Transport {transport_id} write udp data to smoltcp: {}",
                 pretty_hex::pretty_hex(&data)
             );
-            client_endpoint.send_to_smoltcp(data).await?;
+            client_endpoint.send_to_smoltcp(&data).await?;
             consume_size += 1;
         }
         Ok(consume_size)

@@ -134,7 +134,7 @@ where
 
     pub(crate) async fn send_to_smoltcp(
         &mut self,
-        data: Vec<u8>,
+        data: &[u8],
     ) -> Result<usize, ClientEndpointError> {
         let smoltcp_socket = self
             .smoltcp_socket_set
@@ -147,7 +147,7 @@ where
                 endpoint: self.transport_id.source.into(),
                 meta: udp_packet_meta,
             };
-            smoltcp_socket.send_slice(&data, udp_meta_data)?;
+            smoltcp_socket.send_slice(data, udp_meta_data)?;
             poll_and_transfer_smoltcp_data_to_client(
                 self.transport_id,
                 &mut self.smoltcp_socket_set,

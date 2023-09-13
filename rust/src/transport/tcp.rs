@@ -286,7 +286,7 @@ impl TcpTransport {
             ">>>> Transport {transport_id} write data to smoltcp: {}",
             pretty_hex::pretty_hex(&data)
         );
-        client_endpoint.send_to_smoltcp(data).await
+        client_endpoint.send_to_smoltcp(&data).await
     }
 
     async fn flush_remote_recv_buf_to_client<'b>(

@@ -153,7 +153,7 @@ where
 
     pub(crate) async fn send_to_smoltcp(
         &self,
-        data: Vec<u8>,
+        data: &[u8],
     ) -> Result<usize, ClientEndpointError> {
         let ClientTcpEndpointCtlLockGuard {
             mut smoltcp_socket_set,
@@ -163,7 +163,7 @@ where
         let smoltcp_socket = smoltcp_socket_set
             .get_mut::<SmoltcpTcpSocket>(self.smoltcp_socket_handle);
         if smoltcp_socket.may_send() {
-            let send_result = smoltcp_socket.send_slice(&data)?;
+            let send_result = smoltcp_socket.send_slice(data)?;
             poll_and_transfer_smoltcp_data_to_client(
                 self.transport_id,
                 &mut smoltcp_socket_set,

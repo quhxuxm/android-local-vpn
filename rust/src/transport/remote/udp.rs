@@ -28,7 +28,7 @@ use ppaass_common::{
     PpaassProxyMessage,
 };
 
-type RemoteUdpRecvBuf = VecDeque<Vec<u8>>;
+type RemoteUdpRecvBuf = VecDeque<Bytes>;
 
 pub(crate) struct RemoteUdpEndpoint {
     transport_id: TransportId,
@@ -123,7 +123,7 @@ impl RemoteUdpEndpoint {
                 pretty_hex::pretty_hex(&udp_relay_data)
             );
 
-                self.recv_buffer.push_back(udp_relay_data.to_vec());
+                self.recv_buffer.push_back(udp_relay_data);
                 Ok(false)
             }
             Some(Err(e)) => {
@@ -168,7 +168,7 @@ impl RemoteUdpEndpoint {
     where
         F: FnMut(
             TransportId,
-            Vec<Vec<u8>>,
+            Vec<Bytes>,
             &'c2 mut ClientUdpEndpoint<'buf>,
         ) -> Fut,
         Fut: Future<Output = Result<usize, ClientEndpointError>>,
