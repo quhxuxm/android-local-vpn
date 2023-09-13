@@ -1,15 +1,16 @@
-use std::{collections::VecDeque, future::Future, sync::Arc};
+use std::{collections::VecDeque, future::Future, sync::Arc, task::Waker};
 
 use anyhow::Result;
 
 use bytes::Bytes;
-use log::error;
+use log::{error, trace};
 use smoltcp::{iface::Interface, socket::tcp::Socket as SmoltcpTcpSocket};
 use smoltcp::{
     iface::{SocketHandle, SocketSet},
     socket::tcp::State,
 };
 use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, RwLock};
+use waker_fn::waker_fn;
 
 use crate::error::RemoteEndpointError;
 use crate::{config::PpaassVpnServerConfig, device::SmoltcpDevice};
@@ -70,6 +71,8 @@ pub(crate) struct ClientTcpEndpoint<'buf> {
     recv_buffer: Arc<ClientTcpRecvBuf>,
     client_output_tx: Sender<ClientOutputPacket>,
     remove_tcp_transports_tx: Sender<TransportId>,
+    _smoltcp_send_waker: Waker,
+    _smoltcp_recv_waker: Waker,
     _config: &'static PpaassVpnServerConfig,
 }
 
@@ -86,8 +89,18 @@ where
         let (smoltcp_iface, smoltcp_device) =
             prepare_smoltcp_iface_and_device(transport_id)?;
         let mut smoltcp_socket_set = SocketSet::new(Vec::with_capacity(1));
-        let smoltcp_tcp_socket =
-            Self::create_smoltcp_tcp_socket(transport_id, config)?;
+        let smoltcp_recv_waker = waker_fn(move || {
+            trace!("!!!!!! Transport {transport_id} wakeup on receive data because of status change.");
+        });
+        let smoltcp_send_waker = waker_fn(move || {
+            trace!("!!!!!! Transport {transport_id} wakeup on send data because of status change.");
+        });
+        let smoltcp_tcp_socket = Self::create_smoltcp_tcp_socket(
+            transport_id,
+            config,
+            &smoltcp_recv_waker,
+            &smoltcp_send_waker,
+        )?;
         let smoltcp_socket_handle = smoltcp_socket_set.add(smoltcp_tcp_socket);
         let ctl = ClientTcpEndpointCtl::new(
             Mutex::new(smoltcp_socket_set),
@@ -103,6 +116,8 @@ where
                 config.get_client_endpoint_tcp_recv_buffer_size(),
             ))),
             client_output_tx,
+            _smoltcp_recv_waker: smoltcp_recv_waker,
+            _smoltcp_send_waker: smoltcp_send_waker,
             _config: config,
         })
     }
@@ -110,6 +125,8 @@ where
     fn create_smoltcp_tcp_socket<'a>(
         transport_id: TransportId,
         config: &PpaassVpnServerConfig,
+        smoltcp_recv_waker: &Waker,
+        smoltcp_send_waker: &Waker,
     ) -> Result<SmoltcpTcpSocket<'a>, ClientEndpointError> {
         let mut socket = SmoltcpTcpSocket::new(
             SmoltcpTcpSocketBuffer::new(vec![
@@ -127,6 +144,9 @@ where
         );
         socket.listen(transport_id.destination)?;
         socket.set_ack_delay(None);
+
+        socket.register_recv_waker(smoltcp_recv_waker);
+        socket.register_send_waker(smoltcp_send_waker);
         Ok(socket)
     }
 
