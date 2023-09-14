@@ -1,3 +1,5 @@
+pub(crate) const MTU: usize = 65535;
+
 #[derive(Debug)]
 pub(crate) struct PpaassVpnServerConfig {
     user_token: String,
@@ -11,6 +13,10 @@ pub(crate) struct PpaassVpnServerConfig {
     smoltcp_udp_tx_packet_buffer_number: usize,
     client_endpoint_tcp_recv_buffer_size: usize,
     client_endpoint_udp_recv_buffer_size: usize,
+    remote_tcp_recv_timeout: u64,
+    remote_udp_recv_timeout: u64,
+    client_tcp_recv_timeout: u64,
+    client_udp_recv_timeout: u64,
 }
 
 impl PpaassVpnServerConfig {
@@ -27,6 +33,10 @@ impl PpaassVpnServerConfig {
             client_endpoint_udp_recv_buffer_size: 1024 * 1024,
             smoltcp_udp_rx_packet_buffer_number: 128,
             smoltcp_udp_tx_packet_buffer_number: 128,
+            remote_tcp_recv_timeout: 10,
+            remote_udp_recv_timeout: 5,
+            client_tcp_recv_timeout: 10,
+            client_udp_recv_timeout: 5,
         }
     }
 
@@ -72,5 +82,21 @@ impl PpaassVpnServerConfig {
 
     pub(crate) fn get_smoltcp_udp_packet_size(&self) -> usize {
         self.smoltcp_udp_packet_size
+    }
+
+    pub(crate) fn get_remote_tcp_recv_timeout(&self) -> u64 {
+        self.remote_tcp_recv_timeout
+    }
+
+    pub(crate) fn get_remote_udp_recv_timeout(&self) -> u64 {
+        self.remote_udp_recv_timeout
+    }
+
+    pub(crate) fn get_client_tcp_recv_timeout(&self) -> u64 {
+        self.client_tcp_recv_timeout
+    }
+
+    pub(crate) fn get_client_udp_recv_timeout(&self) -> u64 {
+        self.client_udp_recv_timeout
     }
 }

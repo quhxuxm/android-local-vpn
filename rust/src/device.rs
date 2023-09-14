@@ -8,6 +8,7 @@ use smoltcp::{
 use bytes::BytesMut;
 use std::collections::VecDeque;
 
+use crate::config;
 use crate::transport::TransportId;
 
 #[derive(Debug)]
@@ -70,7 +71,7 @@ impl Device for SmoltcpDevice {
 
     fn capabilities(&self) -> DeviceCapabilities {
         let mut default = DeviceCapabilities::default();
-        default.max_transmission_unit = 65535;
+        default.max_transmission_unit = config::MTU;
         default.medium = Medium::Ip;
         default
     }

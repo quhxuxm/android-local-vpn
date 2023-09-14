@@ -22,6 +22,7 @@ use tokio::{
 };
 use tokio::{sync::mpsc::channel as MpscChannel, task::yield_now};
 
+use crate::config;
 use crate::{
     config::PpaassVpnServerConfig,
     transport::{
@@ -118,7 +119,7 @@ impl PpaassVpnServer {
         let tcp_transports = Arc::new(Mutex::new(Transports::default()));
         let (remove_tcp_transports_tx, mut remove_tcp_transports_rx) =
             MpscChannel::<TransportId>(65536);
-        let mut client_rx_buffer = [0u8; 65536];
+        let mut client_rx_buffer = [0u8; config::MTU];
         {
             let tcp_transports = Arc::clone(&tcp_transports);
             tokio::spawn(async move {

@@ -12,6 +12,7 @@ use smoltcp::{
 use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, RwLock};
 use waker_fn::waker_fn;
 
+use crate::config;
 use crate::error::RemoteEndpointError;
 use crate::{config::PpaassVpnServerConfig, device::SmoltcpDevice};
 use crate::{error::ClientEndpointError, transport::remote::RemoteTcpEndpoint};
@@ -144,7 +145,6 @@ where
         );
         socket.listen(transport_id.destination)?;
         socket.set_ack_delay(None);
-
         socket.register_recv_waker(smoltcp_recv_waker);
         socket.register_send_waker(smoltcp_send_waker);
         Ok(socket)
@@ -222,7 +222,7 @@ where
             let smoltcp_tcp_socket = smoltcp_socket_set
                 .get_mut::<SmoltcpTcpSocket>(self.smoltcp_socket_handle);
             while smoltcp_tcp_socket.may_recv() {
-                let mut tcp_data = [0u8; 65536];
+                let mut tcp_data = [0u8; config::MTU];
                 let tcp_data = match smoltcp_tcp_socket
                     .recv_slice(&mut tcp_data)
                 {

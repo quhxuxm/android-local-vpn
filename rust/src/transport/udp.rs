@@ -65,7 +65,7 @@ impl UdpTransport {
         debug!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
         // Push the data into smoltcp stack.
         match timeout(
-            Duration::from_secs(5),
+            Duration::from_secs(config.get_client_udp_recv_timeout()),
             client_endpoint.receive_from_client(client_data),
         )
         .await
@@ -100,7 +100,7 @@ impl UdpTransport {
                     return Err(e.into());
                 };
                 match timeout(
-                    Duration::from_secs(10),
+                    Duration::from_secs(config.get_remote_udp_recv_timeout()),
                     remote_endpoint.read_from_remote(),
                 )
                 .await

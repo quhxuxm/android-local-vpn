@@ -93,13 +93,14 @@ impl TcpTransport {
             transport_id,
             Arc::clone(&client_endpoint),
             Arc::clone(&remote_endpoint),
+            config,
         );
 
         debug!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
         while let Some(client_data) = self.client_input_rx.recv().await {
             // Push the data into smoltcp stack.
             match timeout(
-                Duration::from_secs(10),
+                Duration::from_secs(config.get_client_tcp_recv_timeout()),
                 client_endpoint.receive_from_client(client_data),
             )
             .await
@@ -173,13 +174,14 @@ impl TcpTransport {
         transport_id: TransportId,
         client_endpoint: Arc<ClientTcpEndpoint<'b>>,
         remote_endpoint: Arc<RemoteTcpEndpoint>,
+        config: &'static PpaassVpnServerConfig,
     ) where
         'b: 'static,
     {
         tokio::spawn(async move {
             loop {
                 match timeout(
-                    Duration::from_secs(10),
+                    Duration::from_secs(config.get_remote_tcp_recv_timeout()),
                     remote_endpoint.read_from_remote(),
                 )
                 .await
