@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use log::{debug, error, trace};
 use smoltcp::socket::tcp::State;
 use tokio::{
@@ -23,18 +23,18 @@ use super::{
 pub(crate) struct TcpTransport {
     transport_id: TransportId,
     client_output_tx: Sender<ClientOutputPacket>,
-    client_input_rx: Receiver<Vec<u8>>,
+    client_input_rx: Receiver<BytesMut>,
 }
 
 impl TcpTransport {
     /// Create a new tcp transport
-    /// * transprot_id: The transport id
+    /// * transport_id: The transport id
     /// * client_output_tx: The sender which send output packe to client.
     pub(crate) fn new(
         transport_id: TransportId,
         client_output_tx: Sender<ClientOutputPacket>,
-    ) -> (Self, Sender<Vec<u8>>) {
-        let (client_input_tx, client_input_rx) = channel::<Vec<u8>>(65536);
+    ) -> (Self, Sender<BytesMut>) {
+        let (client_input_tx, client_input_rx) = channel::<BytesMut>(65536);
         (
             Self {
                 transport_id,

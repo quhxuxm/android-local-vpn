@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use log::{debug, error, trace};
 
 use tokio::{sync::mpsc::Sender, time::timeout};
@@ -37,7 +37,7 @@ impl UdpTransport {
         self,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
-        client_data: Vec<u8>,
+        client_data: BytesMut,
     ) -> Result<(), TransportError> {
         let transport_id = self.transport_id;
         let mut client_endpoint = ClientUdpEndpoint::new(

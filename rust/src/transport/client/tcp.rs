@@ -2,7 +2,7 @@ use std::{collections::VecDeque, future::Future, sync::Arc, task::Waker};
 
 use anyhow::Result;
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use log::{error, trace};
 use smoltcp::{iface::Interface, socket::tcp::Socket as SmoltcpTcpSocket};
 use smoltcp::{
@@ -201,7 +201,7 @@ where
     /// and change the client endpoint state
     pub(crate) async fn receive_from_client(
         &self,
-        client_data: Vec<u8>,
+        client_data: BytesMut,
     ) -> Result<State, ClientEndpointError> {
         let ClientTcpEndpointCtlLockGuard {
             mut smoltcp_socket_set,

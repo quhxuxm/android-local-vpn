@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::Result;
+use bytes::BytesMut;
 use log::{debug, error, info, trace};
 
 use tokio::{
@@ -142,7 +143,7 @@ impl PpaassVpnServer {
                     error!("Nothing to read from client file, stop ppaass vpn server.");
                     break;
                 }
-                Ok(size) => &client_rx_buffer[..size],
+                Ok(size) => BytesMut::from(&client_rx_buffer[..size]),
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {
                     yield_now().await;
                     continue;
@@ -154,7 +155,7 @@ impl PpaassVpnServer {
             };
 
             let (transport_id, create_on_not_exist) =
-                match ClientInputParser::parse(client_data) {
+                match ClientInputParser::parse(&client_data) {
                     Ok((
                         transport_id,
                         ClientInputIpPacket::Ipv4(
@@ -190,8 +191,7 @@ impl PpaassVpnServer {
                     let mut tcp_transports = tcp_transports.lock().await;
                     match tcp_transports.entry(transport_id) {
                         Entry::Occupied(entry) => {
-                            if let Err(e) =
-                                entry.get().send(client_data.to_vec()).await
+                            if let Err(e) = entry.get().send(client_data).await
                             {
                                 error!(">>>> Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
                                 tcp_transports.remove(&transport_id);
@@ -226,7 +226,7 @@ impl PpaassVpnServer {
                             });
                             let client_input_tx = entry.insert(client_input_tx);
                             if let Err(e) =
-                                client_input_tx.send(client_data.to_vec()).await
+                                client_input_tx.send(client_data).await
                             {
                                 error!("Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
                                 tcp_transports.remove(&transport_id);
@@ -239,7 +239,7 @@ impl PpaassVpnServer {
                         transport_id,
                         client_output_tx.clone(),
                     );
-                    let client_data = client_data.to_vec();
+                    let client_data = client_data;
                     tokio::spawn(async move {
                         debug!("###### Transport {transport_id} begin to handle udp packet.");
                         if let Err(e) = udp_transport

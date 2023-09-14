@@ -52,7 +52,10 @@ async fn poll_and_transfer_smoltcp_data_to_client(
 
     while let Some(data) = smoltcp_device.pop_tx() {
         if let Err(e) = client_output_tx
-            .send(ClientOutputPacket { transport_id, data })
+            .send(ClientOutputPacket {
+                transport_id,
+                data: data.freeze(),
+            })
             .await
         {
             error!("<<<< Transport {transport_id} fail to transfer smoltcp data for output because of error: {e:?}");

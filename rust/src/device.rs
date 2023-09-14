@@ -5,6 +5,7 @@ use smoltcp::{
     wire::{Ipv4Packet, PrettyPrinter},
 };
 
+use bytes::BytesMut;
 use std::collections::VecDeque;
 
 use crate::transport::TransportId;
@@ -12,8 +13,8 @@ use crate::transport::TransportId;
 #[derive(Debug)]
 pub(crate) struct SmoltcpDevice {
     trans_id: TransportId,
-    rx_queue: VecDeque<Vec<u8>>,
-    tx_queue: VecDeque<Vec<u8>>,
+    rx_queue: VecDeque<BytesMut>,
+    tx_queue: VecDeque<BytesMut>,
 }
 
 impl SmoltcpDevice {
@@ -25,11 +26,11 @@ impl SmoltcpDevice {
         }
     }
 
-    pub(crate) fn push_rx(&mut self, bytes: Vec<u8>) {
+    pub(crate) fn push_rx(&mut self, bytes: BytesMut) {
         self.rx_queue.push_back(bytes);
     }
 
-    pub(crate) fn pop_tx(&mut self) -> Option<Vec<u8>> {
+    pub(crate) fn pop_tx(&mut self) -> Option<BytesMut> {
         self.tx_queue.pop_front()
     }
 
@@ -77,7 +78,7 @@ impl Device for SmoltcpDevice {
 
 pub(crate) struct RxToken {
     trans_id: TransportId,
-    buffer: Vec<u8>,
+    buffer: BytesMut,
 }
 
 impl phy::RxToken for RxToken {
@@ -97,7 +98,7 @@ impl phy::RxToken for RxToken {
 
 pub(crate) struct TxToken<'a> {
     trans_id: TransportId,
-    queue: &'a mut VecDeque<Vec<u8>>,
+    queue: &'a mut VecDeque<BytesMut>,
 }
 
 impl<'a> phy::TxToken for TxToken<'a> {
@@ -105,7 +106,7 @@ impl<'a> phy::TxToken for TxToken<'a> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let mut buffer = vec![0; len];
+        let mut buffer = BytesMut::from_iter(vec![0; len]);
         let result = f(&mut buffer);
         trace!(
             "<<<< Transportation {} vpn send tx token to device:{}",

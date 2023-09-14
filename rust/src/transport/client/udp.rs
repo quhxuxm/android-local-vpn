@@ -2,7 +2,7 @@ use std::{collections::VecDeque, future::Future};
 
 use anyhow::Result;
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use log::error;
 use smoltcp::{iface::Interface, socket::udp::Socket as SmoltcpUdpSocket};
 
@@ -165,7 +165,7 @@ where
     /// and change the client endpoint state
     pub(crate) async fn receive_from_client(
         &mut self,
-        client_data: Vec<u8>,
+        client_data: BytesMut,
     ) -> Result<(), ClientEndpointError> {
         self.smoltcp_device.push_rx(client_data);
         if poll_and_transfer_smoltcp_data_to_client(
