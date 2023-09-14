@@ -1,4 +1,9 @@
-use std::{collections::VecDeque, future::Future, sync::Arc, task::Waker};
+use std::{
+    collections::VecDeque,
+    future::Future,
+    sync::Arc,
+    task::{RawWaker, RawWakerVTable, Waker},
+};
 
 use anyhow::Result;
 
@@ -27,6 +32,24 @@ use super::{
 };
 
 type ClientTcpRecvBuf = RwLock<VecDeque<u8>>;
+
+const RAW_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
+    ClientTcpWakerHelper::clone,
+    ClientTcpWakerHelper::wake,
+    ClientTcpWakerHelper::wake_by_ref,
+    ClientTcpWakerHelper::drop,
+);
+
+struct ClientTcpWakerHelper;
+
+impl ClientTcpWakerHelper {
+    unsafe fn clone(ptr: *const ()) -> RawWaker {
+        RawWaker::new(ptr, &RAW_WAKER_VTABLE)
+    }
+    unsafe fn wake(ptr: *const ()) {}
+    unsafe fn wake_by_ref(_: *const ()) {}
+    unsafe fn drop(_: *const ()) {}
+}
 
 struct ClientTcpEndpointCtlLockGuard<'lock, 'buf> {
     smoltcp_socket_set: MutexGuard<'lock, SocketSet<'buf>>,
