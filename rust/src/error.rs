@@ -1,7 +1,7 @@
 use std::net::AddrParseError;
 
 use crate::transport::TransportId;
-use ppaass_common::{CommonError, PpaassMessageProxyPayloadType};
+use ppaass_common::{CommonError, PpaassMessageProxyProtocol};
 use smoltcp::{
     iface::RouteTableFull as SmoltcpRouteTableFullError,
     socket::tcp::{
@@ -45,7 +45,7 @@ pub(crate) enum RemoteEndpointError {
     #[error("Proxy connection exhausted, transport: {0:?}")]
     ProxyExhausted(TransportId),
     #[error("Invalid proxy message payload type: {0:?}")]
-    InvalidProxyMessagePayloadType(PpaassMessageProxyPayloadType),
+    InvalidProxyProtocol(PpaassMessageProxyProtocol),
     #[error("Fail to parse address: {0:?}")]
     AddressParse(#[from] AddrParseError),
 }

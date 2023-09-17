@@ -24,8 +24,8 @@ use ppaass_common::{
     proxy::PpaassProxyConnection,
     tcp::{ProxyTcpData, ProxyTcpInit, ProxyTcpInitResultType},
     PpaassMessageGenerator, PpaassMessagePayloadEncryptionSelector,
-    PpaassMessageProxyPayloadType, PpaassProxyMessage,
-    PpaassProxyMessagePayload,
+    PpaassMessageProxyProtocol, PpaassMessageProxyTcpPayloadType,
+    PpaassProxyMessage, PpaassProxyMessagePayload,
 };
 
 pub(crate) type RemoteTcpRecvBuf = RwLock<BytesMut>;
@@ -118,7 +118,7 @@ impl RemoteTcpEndpoint {
         let PpaassProxyMessage {
             payload:
                 PpaassProxyMessagePayload {
-                    payload_type: proxy_msg_payload_type,
+                    protocol: proxy_msg_protocol,
                     data: proxy_msg_payload_data,
                 },
             ..
@@ -127,17 +127,15 @@ impl RemoteTcpEndpoint {
             .await
             .ok_or(RemoteEndpointError::ProxyExhausted(transport_id))??;
 
-        let tcp_init_response = match proxy_msg_payload_type {
-            PpaassMessageProxyPayloadType::TcpInit => {
-                proxy_msg_payload_data.try_into()?
-            }
-            payload_type => {
-                error!(">>>> Transport {transport_id} receive invalid message from proxy, payload type: {payload_type:?}");
-                return Err(
-                    RemoteEndpointError::InvalidProxyMessagePayloadType(
-                        payload_type,
-                    ),
-                );
+        let tcp_init_response = match proxy_msg_protocol {
+            PpaassMessageProxyProtocol::Tcp(
+                PpaassMessageProxyTcpPayloadType::Init,
+            ) => proxy_msg_payload_data.try_into()?,
+            proxy_protocol => {
+                error!(">>>> Transport {transport_id} receive invalid message from proxy, payload type: {proxy_protocol:?}");
+                return Err(RemoteEndpointError::InvalidProxyProtocol(
+                    proxy_protocol,
+                ));
             }
         };
         let ProxyTcpInit {
