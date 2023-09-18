@@ -48,6 +48,8 @@ pub(crate) enum RemoteEndpointError {
     InvalidProxyProtocol(PpaassMessageProxyProtocol),
     #[error("Fail to parse address: {0:?}")]
     AddressParse(#[from] AddrParseError),
+    #[error("Other error happen: {0:?}")]
+    Other(#[from] anyhow::Error),
 }
 
 #[derive(Error, Debug)]
