@@ -1,19 +1,21 @@
-use log::debug;
+use log::trace;
 use smoltcp::time::Instant;
 use smoltcp::{
     phy::{self, Device, DeviceCapabilities, Medium},
     wire::{Ipv4Packet, PrettyPrinter},
 };
 
+use bytes::BytesMut;
 use std::collections::VecDeque;
 
+use crate::config;
 use crate::transport::TransportId;
 
 #[derive(Debug)]
 pub(crate) struct SmoltcpDevice {
     trans_id: TransportId,
-    rx_queue: VecDeque<Vec<u8>>,
-    tx_queue: VecDeque<Vec<u8>>,
+    rx_queue: VecDeque<BytesMut>,
+    tx_queue: VecDeque<BytesMut>,
 }
 
 impl SmoltcpDevice {
@@ -25,12 +27,17 @@ impl SmoltcpDevice {
         }
     }
 
-    pub(crate) fn push_rx(&mut self, bytes: Vec<u8>) {
+    pub(crate) fn push_rx(&mut self, bytes: BytesMut) {
         self.rx_queue.push_back(bytes);
     }
 
-    pub(crate) fn pop_tx(&mut self) -> Option<Vec<u8>> {
+    pub(crate) fn pop_tx(&mut self) -> Option<BytesMut> {
         self.tx_queue.pop_front()
+    }
+
+    pub(crate) fn destory(&mut self) {
+        self.rx_queue.clear();
+        self.tx_queue.clear();
     }
 }
 
@@ -38,7 +45,10 @@ impl Device for SmoltcpDevice {
     type RxToken<'a> = RxToken where Self: 'a;
     type TxToken<'a> = TxToken<'a> where Self: 'a;
 
-    fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+    fn receive(
+        &mut self,
+        _timestamp: Instant,
+    ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         self.rx_queue.pop_front().map(move |buffer| {
             let rx = RxToken {
                 trans_id: self.trans_id,
@@ -61,7 +71,7 @@ impl Device for SmoltcpDevice {
 
     fn capabilities(&self) -> DeviceCapabilities {
         let mut default = DeviceCapabilities::default();
-        default.max_transmission_unit = 65535;
+        default.max_transmission_unit = config::MTU;
         default.medium = Medium::Ip;
         default
     }
@@ -69,7 +79,7 @@ impl Device for SmoltcpDevice {
 
 pub(crate) struct RxToken {
     trans_id: TransportId,
-    buffer: Vec<u8>,
+    buffer: BytesMut,
 }
 
 impl phy::RxToken for RxToken {
@@ -78,7 +88,7 @@ impl phy::RxToken for RxToken {
         F: FnOnce(&mut [u8]) -> R,
     {
         let result = f(&mut self.buffer);
-        debug!(
+        trace!(
             ">>>> Transportation {} vpn receive rx token from device:{}",
             self.trans_id,
             PrettyPrinter::<Ipv4Packet<&'static [u8]>>::new("", &self.buffer)
@@ -89,7 +99,7 @@ impl phy::RxToken for RxToken {
 
 pub(crate) struct TxToken<'a> {
     trans_id: TransportId,
-    queue: &'a mut VecDeque<Vec<u8>>,
+    queue: &'a mut VecDeque<BytesMut>,
 }
 
 impl<'a> phy::TxToken for TxToken<'a> {
@@ -97,9 +107,9 @@ impl<'a> phy::TxToken for TxToken<'a> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let mut buffer = vec![0; len];
+        let mut buffer = BytesMut::from_iter(vec![0; len]);
         let result = f(&mut buffer);
-        debug!(
+        trace!(
             "<<<< Transportation {} vpn send tx token to device:{}",
             self.trans_id,
             PrettyPrinter::<Ipv4Packet<&'static [u8]>>::new("", &buffer)

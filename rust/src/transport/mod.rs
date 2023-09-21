@@ -1,319 +1,203 @@
 mod client;
 mod remote;
-mod value;
+mod tcp;
+mod udp;
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use anyhow::{anyhow, Result};
+use bytes::{Bytes, BytesMut};
+use core::fmt;
+use std::{collections::HashMap, fmt::Display, net::SocketAddr};
 
-use anyhow::Result;
-use log::{debug, error};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv6Packet, TcpPacket, UdpPacket};
+use tokio::sync::mpsc::Sender;
 
-use self::client::ClientEndpoint;
-use crate::{
-    config::PpaassVpnServerConfig,
-    error::{AgentError, ClientEndpointError, RemoteEndpointError},
-    util::ClientOutputPacket,
-};
-use crate::{transport::remote::RemoteEndpoint, util::AgentRsaCryptoFetcher};
+pub(crate) use self::tcp::TcpTransport;
+pub(crate) use self::udp::UdpTransport;
 
-pub(crate) use self::value::ControlProtocol;
-pub(crate) use self::value::TransportId;
-pub(crate) use self::value::Transports;
+pub(crate) type Transports = HashMap<TransportId, Sender<BytesMut>>;
 
-#[derive(Debug)]
-pub(crate) struct Transport {
-    transport_id: TransportId,
-    client_output_tx: Sender<ClientOutputPacket>,
-    client_input_rx: Receiver<Vec<u8>>,
-    closed: Arc<AtomicBool>,
+pub(crate) struct ClientOutputPacket {
+    pub transport_id: TransportId,
+    pub data: Bytes,
 }
 
-impl Transport {
-    pub(crate) fn new(
-        transport_id: TransportId,
-        client_output_tx: Sender<ClientOutputPacket>,
-    ) -> (Self, Sender<Vec<u8>>) {
-        let (client_input_tx, client_input_rx) = channel::<Vec<u8>>(1024);
-        (
-            Self {
-                transport_id,
-                client_output_tx,
-                client_input_rx,
-                closed: Arc::new(AtomicBool::new(false)),
-            },
-            client_input_tx,
+/// The transport protocol, TCP and UDP
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+pub(crate) enum ControlProtocol {
+    Tcp,
+    Udp,
+}
+
+/// The internet protocol for IPv4 and IPV6
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+pub(crate) enum InternetProtocol {
+    Ipv4,
+    Ipv6,
+}
+
+/// The transport id.
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+pub struct TransportId {
+    pub(crate) source: SocketAddr,
+    pub(crate) destination: SocketAddr,
+    pub(crate) control_protocol: ControlProtocol,
+    pub(crate) internet_protocol: InternetProtocol,
+}
+
+impl Display for TransportId {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            formatter,
+            "[{:?}][{:?}][{}:{}->{}:{}]",
+            self.internet_protocol,
+            self.control_protocol,
+            self.source.ip(),
+            self.source.port(),
+            self.destination.ip(),
+            self.destination.port()
         )
     }
+}
 
-    pub(crate) async fn exec(
-        mut self,
-        agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
-        config: &'static PpaassVpnServerConfig,
-        transports_remove_tx: Sender<TransportId>,
-    ) -> Result<(), AgentError> {
-        let transport_id = self.transport_id;
-        let client_endpoint = match ClientEndpoint::new(
-            self.transport_id,
-            self.client_output_tx,
-            config,
-        ) {
-            Ok(client_endpoint_result) => client_endpoint_result,
-            Err(e) => {
-                if let Err(e) = transports_remove_tx.send(transport_id).await {
-                    error!(">>>> Transport {transport_id} fail to send remove message because of error: {e:?}")
-                };
-                return Err(e.into());
-            }
-        };
-        debug!(">>>> Transport {transport_id} success create client endpoint.");
-        let remote_endpoint = match RemoteEndpoint::new(
-            transport_id,
-            agent_rsa_crypto_fetcher,
-            config,
-        )
-        .await
-        {
-            Ok(remote_endpoint_result) => remote_endpoint_result,
-            Err(e) => {
-                if let Err(e) = transports_remove_tx.send(transport_id).await {
-                    error!(">>>> Transport {transport_id} fail to send remove message because of error: {e:?}")
-                };
-                return Err(e.into());
-            }
-        };
-        debug!(">>>> Transport {transport_id} success create remote endpoint.");
-        let client_endpoint = Arc::new(client_endpoint);
-        let remote_endpoint = Arc::new(remote_endpoint);
+pub(crate) enum ClientInputTransportPacket<'p> {
+    Tcp(TcpPacket<&'p [u8]>),
+    Udp(UdpPacket<&'p [u8]>),
+}
 
-        Self::spawn_consume_client_recv_buf_task(
-            transport_id,
-            Arc::clone(&remote_endpoint),
-            Arc::clone(&client_endpoint),
-            transports_remove_tx.clone(),
-            Arc::clone(&self.closed),
-        );
-        Self::spawn_consume_remote_recv_buf_task(
-            transport_id,
-            Arc::clone(&client_endpoint),
-            Arc::clone(&remote_endpoint),
-            transports_remove_tx.clone(),
-            Arc::clone(&self.closed),
-        );
-        Self::spawn_read_remote_task(
-            transport_id,
-            Arc::clone(&remote_endpoint),
-            Arc::clone(&client_endpoint),
-            transports_remove_tx.clone(),
-            Arc::clone(&self.closed),
-        );
-        while let Some(client_data) = self.client_input_rx.recv().await {
-            client_endpoint.receive_from_client(client_data).await;
+pub(crate) enum ClientInputIpPacket<'p> {
+    Ipv4(ClientInputTransportPacket<'p>),
+    Ipv6(ClientInputTransportPacket<'p>),
+}
+
+pub(crate) struct ClientInputParser;
+
+impl ClientInputParser {
+    pub(crate) fn parse(
+        data: &[u8],
+    ) -> Result<(TransportId, ClientInputIpPacket<'_>)> {
+        Self::parse_ipv4(data).or_else(|_| Self::parse_ipv6(data))
+    }
+
+    fn parse_ipv4(
+        data: &[u8],
+    ) -> Result<(TransportId, ClientInputIpPacket<'_>)> {
+        let ip_packet = Ipv4Packet::new_checked(data)?;
+        match ip_packet.next_header() {
+            IpProtocol::Tcp => {
+                let payload = ip_packet.payload();
+                let tcp_packet = TcpPacket::new_checked(payload)?;
+                let source_ip: [u8; 4] =
+                    ip_packet.src_addr().as_bytes().try_into()?;
+                let destination_ip: [u8; 4] =
+                    ip_packet.dst_addr().as_bytes().try_into()?;
+                Ok((
+                    TransportId {
+                        source: SocketAddr::from((
+                            source_ip,
+                            tcp_packet.src_port(),
+                        )),
+                        destination: SocketAddr::from((
+                            destination_ip,
+                            tcp_packet.dst_port(),
+                        )),
+                        control_protocol: ControlProtocol::Tcp,
+                        internet_protocol: InternetProtocol::Ipv4,
+                    },
+                    ClientInputIpPacket::Ipv4(ClientInputTransportPacket::Tcp(
+                        tcp_packet,
+                    )),
+                ))
+            }
+            IpProtocol::Udp => {
+                let payload = ip_packet.payload();
+                let udp_packet = UdpPacket::new_checked(payload)?;
+                let source_ip: [u8; 4] =
+                    ip_packet.src_addr().as_bytes().try_into()?;
+                let destination_ip: [u8; 4] =
+                    ip_packet.dst_addr().as_bytes().try_into()?;
+                Ok((
+                    TransportId {
+                        source: SocketAddr::from((
+                            source_ip,
+                            udp_packet.src_port(),
+                        )),
+                        destination: SocketAddr::from((
+                            destination_ip,
+                            udp_packet.dst_port(),
+                        )),
+                        control_protocol: ControlProtocol::Udp,
+                        internet_protocol: InternetProtocol::Ipv4,
+                    },
+                    ClientInputIpPacket::Ipv4(ClientInputTransportPacket::Udp(
+                        udp_packet,
+                    )),
+                ))
+            }
+            _ => Err(anyhow!(
+                "Unsupported transport protocol in ipv4 packet, protocol=${:?}",
+                ip_packet.next_header()
+            )),
         }
-        Self::close(
-            transport_id,
-            &client_endpoint,
-            &remote_endpoint,
-            transports_remove_tx,
-            &self.closed,
-        )
-        .await;
-        Ok::<(), AgentError>(())
     }
 
-    /// Spawn a task to read remote data
-    fn spawn_read_remote_task<'b>(
-        transport_id: TransportId,
-        remote_endpoint: Arc<RemoteEndpoint>,
-        client_endpoint: Arc<ClientEndpoint<'b>>,
-        transports_remove_tx: Sender<TransportId>,
-        closed: Arc<AtomicBool>,
-    ) where
-        'b: 'static,
-    {
-        tokio::spawn(async move {
-            loop {
-                if closed.load(Ordering::Relaxed) {
-                    Self::close(
-                        transport_id,
-                        &client_endpoint,
-                        &remote_endpoint,
-                        transports_remove_tx,
-                        &closed,
-                    )
-                    .await;
-                    break;
-                }
-                match remote_endpoint.read_from_remote().await {
-                    Ok(false) => continue,
-                    Ok(true) => {
-                        debug!(
-                            ">>>> Transport {transport_id} mark client & remote endpoint closed."
-                        );
-                        Self::close(
-                            transport_id,
-                            &client_endpoint,
-                            &remote_endpoint,
-                            transports_remove_tx,
-                            &closed,
-                        )
-                        .await;
-                        break;
-                    }
-                    Err(e) => {
-                        debug!(">>>> Transport {transport_id} error happen on remote connection close client & remote endpoint, error: {e:?}");
-                        Self::close(
-                            transport_id,
-                            &client_endpoint,
-                            &remote_endpoint,
-                            transports_remove_tx,
-                            &closed,
-                        )
-                        .await;
-                        break;
-                    }
-                };
+    fn parse_ipv6(data: &[u8]) -> Result<(TransportId, ClientInputIpPacket)> {
+        let ip_packet = Ipv6Packet::new_checked(data)?;
+        let protocol = ip_packet.next_header();
+        match protocol {
+            IpProtocol::Tcp => {
+                let payload = ip_packet.payload();
+                let tcp_packet = TcpPacket::new_checked(payload)?;
+                let source_ip: [u8; 16] =
+                    ip_packet.src_addr().as_bytes().try_into()?;
+                let destination_ip: [u8; 16] =
+                    ip_packet.dst_addr().as_bytes().try_into()?;
+                Ok((
+                    TransportId {
+                        source: SocketAddr::from((
+                            source_ip,
+                            tcp_packet.src_port(),
+                        )),
+                        destination: SocketAddr::from((
+                            destination_ip,
+                            tcp_packet.dst_port(),
+                        )),
+                        control_protocol: ControlProtocol::Tcp,
+                        internet_protocol: InternetProtocol::Ipv6,
+                    },
+                    ClientInputIpPacket::Ipv6(ClientInputTransportPacket::Tcp(
+                        tcp_packet,
+                    )),
+                ))
             }
-            Ok::<(), RemoteEndpointError>(())
-        });
-    }
-
-    /// Spawn a task to consume the client endpoint receive data buffer
-    fn spawn_consume_client_recv_buf_task<'b>(
-        transport_id: TransportId,
-        remote_endpoint: Arc<RemoteEndpoint>,
-        client_endpoint: Arc<ClientEndpoint<'b>>,
-        transports_remove_tx: Sender<TransportId>,
-        closed: Arc<AtomicBool>,
-    ) where
-        'b: 'static,
-    {
-        // Spawn a task for output data to client
-        tokio::spawn(async move {
-            /// Define consume function
-            async fn consume_fn(
-                transport_id: TransportId,
-                data: Vec<u8>,
-                remote: Arc<RemoteEndpoint>,
-            ) -> Result<usize, RemoteEndpointError> {
-                debug!(
-                    ">>>> Transport {transport_id} write data to remote: {}",
-                    pretty_hex::pretty_hex(&data)
-                );
-                remote.write_to_remote(data).await
+            IpProtocol::Udp => {
+                let payload = ip_packet.payload();
+                let udp_packet = UdpPacket::new_checked(payload)?;
+                let source_ip: [u8; 16] =
+                    ip_packet.src_addr().as_bytes().try_into()?;
+                let destination_ip: [u8; 16] =
+                    ip_packet.dst_addr().as_bytes().try_into()?;
+                Ok((
+                    TransportId {
+                        source: SocketAddr::from((
+                            source_ip,
+                            udp_packet.src_port(),
+                        )),
+                        destination: SocketAddr::from((
+                            destination_ip,
+                            udp_packet.dst_port(),
+                        )),
+                        control_protocol: ControlProtocol::Udp,
+                        internet_protocol: InternetProtocol::Ipv6,
+                    },
+                    ClientInputIpPacket::Ipv6(ClientInputTransportPacket::Udp(
+                        udp_packet,
+                    )),
+                ))
             }
-            loop {
-                if closed.load(Ordering::Relaxed) {
-                    Self::close(
-                        transport_id,
-                        &client_endpoint,
-                        &remote_endpoint,
-                        transports_remove_tx,
-                        &closed,
-                    )
-                    .await;
-                    break;
-                }
-                client_endpoint.awaiting_recv_buf().await;
-                if let Err(e) = client_endpoint
-                    .consume_recv_buffer(Arc::clone(&remote_endpoint), consume_fn)
-                    .await
-                {
-                    error!(">>>> Transport {transport_id} fail to consume client endpoint receive buffer because of error: {e:?}");
-                    Self::close(
-                        transport_id,
-                        &client_endpoint,
-                        &remote_endpoint,
-                        transports_remove_tx,
-                        &closed,
-                    )
-                    .await;
-                    break;
-                };
-                debug!(
-                    ">>>> Transport {transport_id} consume client endpoint receive buffer success."
-                )
-            }
-        });
-    }
-
-    /// Spawn a task to consume the remote endpoint receive data buffer
-    fn spawn_consume_remote_recv_buf_task<'b>(
-        transport_id: TransportId,
-        client_endpoint: Arc<ClientEndpoint<'b>>,
-        remote_endpoint: Arc<RemoteEndpoint>,
-        transports_remove_tx: Sender<TransportId>,
-        closed: Arc<AtomicBool>,
-    ) where
-        'b: 'static,
-    {
-        // Spawn a task for output data to client
-        tokio::spawn(async move {
-            /// Define the consume function
-            async fn consume_fn(
-                transport_id: TransportId,
-                data: Vec<u8>,
-                client: Arc<ClientEndpoint<'_>>,
-            ) -> Result<usize, ClientEndpointError> {
-                debug!(
-                    ">>>> Transport {transport_id} write data to smoltcp: {}",
-                    pretty_hex::pretty_hex(&data)
-                );
-                client.send_to_smoltcp(data).await
-            }
-            loop {
-                if closed.load(Ordering::Relaxed) {
-                    Self::close(
-                        transport_id,
-                        &client_endpoint,
-                        &remote_endpoint,
-                        transports_remove_tx.clone(),
-                        &closed,
-                    )
-                    .await;
-                    break;
-                }
-                remote_endpoint.awaiting_recv_buf().await;
-                if let Err(e) = remote_endpoint
-                    .consume_recv_buffer(Arc::clone(&client_endpoint), consume_fn)
-                    .await
-                {
-                    error!(">>>> Transport {transport_id} fail to consume remote endpoint receive buffer because of error: {e:?}");
-
-                    Self::close(
-                        transport_id,
-                        &client_endpoint,
-                        &remote_endpoint,
-                        transports_remove_tx.clone(),
-                        &closed,
-                    )
-                    .await;
-                };
-                debug!(
-                    ">>>> Transport {transport_id} consume remote endpoint receive buffer success."
-                )
-            }
-        });
-    }
-
-    async fn close<'b>(
-        transport_id: TransportId,
-        client_endpoint: &ClientEndpoint<'b>,
-        remote_endpoint: &RemoteEndpoint,
-        transports_remove_tx: Sender<TransportId>,
-        closed: &AtomicBool,
-    ) where
-        'b: 'static,
-    {
-        if let Err(e) = transports_remove_tx.send(transport_id).await {
-            error!(
-                ">>>> Transport {transport_id} fail to send remove message because of error: {e:?}"
-            )
-        };
-        closed.swap(true, Ordering::Relaxed);
-        remote_endpoint.close().await;
-        client_endpoint.close().await;
+            _ => Err(anyhow!(
+                "Unsupported transport protocol in ipv6 packet, protocol=${:?}",
+                ip_packet.next_header()
+            )),
+        }
     }
 }

@@ -3,7 +3,7 @@
 #
 # rustfmt --print-config default
 #
-max_width = 100
+max_width = 80
 hard_tabs = false
 tab_spaces = 4
 newline_style = "Auto"

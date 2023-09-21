@@ -1,6 +1,14 @@
 {
     "configurations": [
         {
+            "type": "cargo",
+            "workingDir": "./rust/",
+            "name": "Cargo check",
+            "cargoArgs": [
+                "check"
+            ],
+        },
+        {
             "type": "command",
             "name": "Start emulator",
             "program": "C:/Software/AndroidSDK/emulator/emulator.exe",

@@ -1,47 +1,62 @@
-use std::{fs::File, io::Write, sync::Arc};
+use std::{collections::hash_map::Entry, fs::File, io::Write, sync::Arc};
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
-    collections::hash_map::Entry,
     io::{ErrorKind, Read},
     os::fd::FromRawFd,
 };
 
-use anyhow::Error as AnyhowError;
 use anyhow::Result;
-use log::{debug, error, info};
+use bytes::BytesMut;
+use log::{debug, error, info, trace};
 
 use tokio::{
     runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
-    sync::{mpsc::Sender, Mutex},
+    sync::{
+        mpsc::Sender as MpscSender,
+        oneshot::{
+            channel as OneshotChannel, Receiver as OneshotReceiver,
+            Sender as OneshotSender,
+        },
+        Mutex,
+    },
 };
-use tokio::{sync::mpsc::channel, task::yield_now};
+use tokio::{sync::mpsc::channel as MpscChannel, task::yield_now};
 
-use crate::{config::PpaassVpnServerConfig, transport::Transports, util::ClientOutputPacket};
+use crate::config;
 use crate::{
-    transport::{Transport, TransportId},
-    util::AgentRsaCryptoFetcher,
+    config::PpaassVpnServerConfig,
+    transport::{
+        ClientInputIpPacket, ClientInputParser, ClientInputTransportPacket,
+        ClientOutputPacket, ControlProtocol, TcpTransport, Transports,
+        UdpTransport,
+    },
 };
+use crate::{transport::TransportId, util::AgentRsaCryptoFetcher};
 
 #[derive(Debug)]
 pub(crate) struct PpaassVpnServer {
     config: &'static PpaassVpnServerConfig,
     file_descriptor: i32,
-    closed: Arc<AtomicBool>,
+    stop_signal_tx: Option<OneshotSender<bool>>,
     runtime: Option<TokioRuntime>,
 }
 
 impl PpaassVpnServer {
-    pub(crate) fn new(file_descriptor: i32, config: &'static PpaassVpnServerConfig) -> Self {
+    pub(crate) fn new(
+        file_descriptor: i32,
+        config: &'static PpaassVpnServerConfig,
+    ) -> Self {
         Self {
             config,
             file_descriptor,
-            closed: Arc::new(AtomicBool::new(false)),
+            stop_signal_tx: Default::default(),
             runtime: None,
         }
     }
 
-    fn init_async_runtime(config: &PpaassVpnServerConfig) -> Result<TokioRuntime> {
+    fn init_async_runtime(
+        config: &PpaassVpnServerConfig,
+    ) -> Result<TokioRuntime> {
         let mut runtime_builder = TokioRuntimeBuilder::new_multi_thread();
         runtime_builder.worker_threads(config.get_thread_number());
         runtime_builder.enable_all();
@@ -58,126 +73,197 @@ impl PpaassVpnServer {
         let runtime = Self::init_async_runtime(self.config)?;
         let file_descriptor = self.file_descriptor;
         let client_file_read = unsafe { File::from_raw_fd(file_descriptor) };
-        let mut client_file_write = unsafe { File::from_raw_fd(file_descriptor) };
-        let (client_output_tx, mut client_output_rx) = channel::<ClientOutputPacket>(1024);
+        let mut client_file_write =
+            unsafe { File::from_raw_fd(file_descriptor) };
+        let (client_output_tx, mut client_output_rx) =
+            MpscChannel::<ClientOutputPacket>(65536);
 
         let ppaass_server_config = self.config;
-        let closed = Arc::clone(&self.closed);
+        let (stop_signal_tx, stop_signal_rx) = OneshotChannel();
+        self.stop_signal_tx = Some(stop_signal_tx);
+        runtime.spawn(async move {
+            while let Some(client_output_packet) = client_output_rx.recv().await
+            {
+                trace!(
+                    "<<<< Transport {} write data to client file.",
+                    client_output_packet.transport_id
+                );
+               if let Err(e)= client_file_write.write_all(&client_output_packet.data){
+                error!("<<<< Transport {} fail to write data to client file because of error: {e:?}", client_output_packet.transport_id)
+               };
+            }
+        });
         runtime.spawn(async move {
             info!("Begin to handle client file data.");
             Self::start_handle_client_rx(
                 client_file_read,
-                closed,
+                stop_signal_rx,
                 client_output_tx,
                 agent_rsa_crypto_fetcher,
                 ppaass_server_config,
             )
             .await;
-            Ok::<(), AnyhowError>(())
         });
-        runtime.spawn(async move {
-            while let Some(client_outpu_packet) = client_output_rx.recv().await {
-                let transport_id = client_outpu_packet.transport_id;
-                if let Err(e) = client_file_write.write_all(&client_outpu_packet.data) {
-                    error!("<<<< Transport {transport_id} fail to write client output packet because of error: {e:?}");
-                };
-            }
-        });
-
         self.runtime = Some(runtime);
-
         info!("Ppaass vpn server started");
         Ok(())
     }
 
     async fn start_handle_client_rx(
         mut client_file_read: File,
-        closed: Arc<AtomicBool>,
-        client_output_tx: Sender<ClientOutputPacket>,
+        mut stop_signal_rx: OneshotReceiver<bool>,
+        client_output_tx: MpscSender<ClientOutputPacket>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
     ) {
-        let transports = Arc::new(Mutex::new(Transports::default()));
-        let mut client_rx_buffer = [0u8; 65536];
-        let (transports_remove_tx, mut transports_remove_rx) = channel::<TransportId>(1024);
+        let tcp_transports = Arc::new(Mutex::new(Transports::default()));
+        let (remove_tcp_transports_tx, mut remove_tcp_transports_rx) =
+            MpscChannel::<TransportId>(65536);
+        let mut client_rx_buffer = [0u8; config::MTU];
         {
-            let transports = transports.clone();
+            let tcp_transports = Arc::clone(&tcp_transports);
             tokio::spawn(async move {
-                while let Some(transport_id) = transports_remove_rx.recv().await {
-                    let mut transports = transports.lock().await;
-                    transports.remove(&transport_id);
+                while let Some(transport_id) =
+                    remove_tcp_transports_rx.recv().await
+                {
+                    let mut tcp_transports = tcp_transports.lock().await;
+                    tcp_transports.remove(&transport_id);
+                    info!("###### Remove tcp transport {transport_id}, current tcp transport number: {}", tcp_transports.len())
                 }
             });
         }
         loop {
-            if closed.load(Ordering::Relaxed) {
-                info!("Close vpn server, going to quite.");
-                break;
+            if let Ok(true) = stop_signal_rx.try_recv() {
+                info!("Stop ppaass vpn server.");
+                return;
             }
-            let client_data = match client_file_read.read(&mut client_rx_buffer) {
+
+            let client_data = match client_file_read.read(&mut client_rx_buffer)
+            {
                 Ok(0) => {
-                    error!("Nothing to read from client file break the loop.");
+                    error!("Nothing to read from client file, stop ppaass vpn server.");
                     break;
                 }
-                Ok(size) => &client_rx_buffer[..size],
+                Ok(size) => BytesMut::from(&client_rx_buffer[..size]),
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                    // sleep(Duration::from_millis(50)).await;
                     yield_now().await;
                     continue;
                 }
                 Err(e) => {
-                    error!("Fail to read client file data because of error: {e:?}");
+                    error!("Fail to read client file data because of error, stop ppaass vpn server: {e:?}");
                     break;
                 }
             };
 
-            let transport_id = match TransportId::new(client_data) {
-                Ok(transport_id) => transport_id,
-                Err(e) => {
-                    error!(">>>> Fail to parse transport id because of error: {e:?}");
-                    continue;
-                }
-            };
+            let (transport_id, create_on_not_exist) =
+                match ClientInputParser::parse(&client_data) {
+                    Ok((
+                        transport_id,
+                        ClientInputIpPacket::Ipv4(
+                            ClientInputTransportPacket::Tcp(tcp_packet),
+                        ),
+                    )) => (transport_id, tcp_packet.syn()),
+                    Ok((
+                        transport_id,
+                        ClientInputIpPacket::Ipv4(
+                            ClientInputTransportPacket::Udp(_),
+                        ),
+                    )) => (transport_id, true),
+                    Ok((
+                        transport_id,
+                        ClientInputIpPacket::Ipv6(
+                            ClientInputTransportPacket::Tcp(tcp_packet),
+                        ),
+                    )) => (transport_id, tcp_packet.syn()),
+                    Ok((
+                        transport_id,
+                        ClientInputIpPacket::Ipv6(
+                            ClientInputTransportPacket::Udp(_),
+                        ),
+                    )) => (transport_id, true),
+                    Err(e) => {
+                        error!(">>>> Fail to parse transport id from ip packet because of error: {e:?}");
+                        continue;
+                    }
+                };
 
-            let mut transports = transports.lock().await;
-            match transports.entry(transport_id) {
-                Entry::Occupied(entry) => {
-                    debug!(">>>> Found existing transport {transport_id}.");
-                    if entry.get().send(client_data.to_vec()).await.is_err() {
-                        error!("Transport {transport_id} closed already, can not send client data to transport");
-                        entry.remove();
-                    };
+            match transport_id.control_protocol {
+                ControlProtocol::Tcp => {
+                    let mut tcp_transports = tcp_transports.lock().await;
+                    match tcp_transports.entry(transport_id) {
+                        Entry::Occupied(entry) => {
+                            if let Err(e) = entry.get().send(client_data).await
+                            {
+                                error!(">>>> Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
+                                tcp_transports.remove(&transport_id);
+                            };
+                        }
+                        Entry::Vacant(entry) => {
+                            if !create_on_not_exist {
+                                error!("Incoming client input packet is not a valid handshake.");
+                                continue;
+                            }
+                            let (transport, client_input_tx) =
+                                TcpTransport::new(
+                                    transport_id,
+                                    client_output_tx.clone(),
+                                );
+                            let remove_tcp_transports_tx =
+                                remove_tcp_transports_tx.clone();
+                            tokio::spawn(async move {
+                                debug!("###### Transport {transport_id} begin to handle tcp packet.");
+                                if let Err(e) = transport
+                                    .exec(
+                                        agent_rsa_crypto_fetcher,
+                                        config,
+                                        remove_tcp_transports_tx,
+                                    )
+                                    .await
+                                {
+                                    error!("###### Transport {transport_id} fail to handle tcp packet because of error: {e:?}");
+                                    return;
+                                };
+                                debug!("###### Transport {transport_id} complete to handle tcp packet.");
+                            });
+                            let client_input_tx = entry.insert(client_input_tx);
+                            if let Err(e) =
+                                client_input_tx.send(client_data).await
+                            {
+                                error!("Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
+                                tcp_transports.remove(&transport_id);
+                            };
+                        }
+                    }
                 }
-                Entry::Vacant(entry) => {
-                    let (transport, client_input_tx) =
-                        Transport::new(transport_id, client_output_tx.clone());
-                    let transports_remove_tx = transports_remove_tx.clone();
+                ControlProtocol::Udp => {
+                    let udp_transport = UdpTransport::new(
+                        transport_id,
+                        client_output_tx.clone(),
+                    );
+                    let client_data = client_data;
                     tokio::spawn(async move {
-                        if let Err(e) = transport
-                            .exec(agent_rsa_crypto_fetcher, config, transports_remove_tx)
+                        debug!("###### Transport {transport_id} begin to handle udp packet.");
+                        if let Err(e) = udp_transport
+                            .exec(agent_rsa_crypto_fetcher, config, client_data)
                             .await
                         {
-                            error!(">>>> Transport {transport_id} fail to start because of error: {e:?}");
+                            error!("###### Transport {transport_id} fail to handle udp packet because of error: {e:?}");
+                            return;
                         };
+                        debug!("###### Transport {transport_id} complete to handle udp packet.");
                     });
-                    if client_input_tx.send(client_data.to_vec()).await.is_err() {
-                        error!("Transport {transport_id} closed already, can not send client data to transport");
-                        continue;
-                    };
-                    entry.insert(client_input_tx);
                 }
             }
         }
-        error!("****** Server quite because of unknown reason ****** ");
     }
 
     pub(crate) fn stop(&mut self) -> Result<()> {
         debug!("Stop ppaass vpn server");
-        if let Some(runtime) = self.runtime.take() {
-            runtime.block_on(async {
-                self.closed.swap(true, Ordering::Relaxed);
-            });
-        };
+        if let Some(stop_signal_tx) = self.stop_signal_tx.take() {
+            if let Err(e) = stop_signal_tx.send(true) {
+                error!("Fail to stop ppaass vpn server because of error: {e:?}")
+            };
+        }
         Ok(())
     }
 }
