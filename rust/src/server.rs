@@ -89,8 +89,11 @@ impl PpaassVpnServer {
                     client_output_packet.transport_id
                 );
                if let Err(e)= client_file_write.write_all(&client_output_packet.data){
-                error!("<<<< Transport {} fail to write data to client file because of error: {e:?}", client_output_packet.transport_id)
+                   error!("<<<< Transport {} fail to write data to client file because of error: {e:?}", client_output_packet.transport_id);
                };
+               if let Err(e) = client_file_write.flush(){
+                   error!("<<<< Transport {} fail to flush data to client file because of error: {e:?}", client_output_packet.transport_id);
+               }
             }
         });
         runtime.spawn(async move {
