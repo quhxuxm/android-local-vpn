@@ -109,10 +109,11 @@ impl RemoteUdpEndpoint {
     ) -> Result<bool, RemoteEndpointError> {
         match self.proxy_connection_read.next().await {
             None => Ok(true),
-            Some(Ok(PpaassProxyMessage {
-                payload: proxy_message_payload,
-                ..
-            })) => {
+            Some(Ok(proxy_message)) => {
+                let PpaassProxyMessage {
+                    payload: proxy_message_payload,
+                    ..
+                } = proxy_message;
                 let UdpData {
                     data: udp_relay_data,
                     ..
