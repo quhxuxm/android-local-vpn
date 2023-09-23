@@ -40,6 +40,14 @@ fn prepare_smoltcp_iface_and_device(
     Ok((interface, vpn_device))
 }
 
+async fn poll_smoltcp(
+    smoltcp_socket_set: &mut SocketSet<'_>,
+    smoltcp_iface: &mut Interface,
+    smoltcp_device: &mut SmoltcpDevice,
+) -> bool {
+    smoltcp_iface.poll(Instant::now(), smoltcp_device, smoltcp_socket_set)
+}
+
 async fn poll_and_transfer_smoltcp_data_to_client(
     transport_id: TransportId,
     smoltcp_socket_set: &mut SocketSet<'_>,
@@ -48,8 +56,7 @@ async fn poll_and_transfer_smoltcp_data_to_client(
 
     client_output_tx: &Sender<ClientOutputPacket>,
 ) -> bool {
-    smoltcp_iface.poll(Instant::now(), smoltcp_device, smoltcp_socket_set);
-
+    poll_smoltcp(smoltcp_socket_set, smoltcp_iface, smoltcp_device);
     while let Some(data) = smoltcp_device.pop_tx() {
         if let Err(e) = client_output_tx
             .send(ClientOutputPacket {
