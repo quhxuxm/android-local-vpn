@@ -26,6 +26,7 @@ use smoltcp::socket::udp::{
     PacketMetadata as SmoltcpUdpPacketMetadata,
 };
 
+const UDP_PACKET_MAX_SIZE: usize = 65535;
 type ClientUdpRecvBuf = VecDeque<Bytes>;
 
 pub(crate) struct ClientUdpEndpoint<'buf> {
@@ -120,11 +121,6 @@ where
             remote,
         )
         .await?;
-        // let mut consume_size = 0;
-        // for udp_data in self.recv_buffer.iter() {
-        //     consume_fn(self.transport_id, udp_data.to_vec(), remote).await?;
-        //     consume_size += 1;
-        // }
         self.recv_buffer.drain(..consume_size);
         Ok(())
     }
@@ -181,7 +177,7 @@ where
                 return Ok(());
             }
             while smoltcp_udp_socket.can_recv() {
-                let mut udp_data = [0u8; 65535];
+                let mut udp_data = [0u8; UDP_PACKET_MAX_SIZE];
                 let udp_data = match smoltcp_udp_socket
                     .recv_slice(&mut udp_data)
                 {
@@ -209,6 +205,10 @@ where
             &self.client_output_tx,
         )
         .await;
+        let smoltcp_udp_socket = self
+            .smoltcp_socket_set
+            .get_mut::<SmoltcpUdpSocket>(self.smoltcp_socket_handle);
+        smoltcp_udp_socket.close();
     }
 
     pub(crate) async fn destroy(&mut self) {
