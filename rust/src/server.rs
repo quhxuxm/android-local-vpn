@@ -243,7 +243,6 @@ impl PpaassVpnServer {
                         transport_id,
                         client_output_tx.clone(),
                     );
-                    let client_data = client_data;
                     tokio::spawn(async move {
                         debug!("###### Transport {transport_id} begin to handle udp packet.");
                         if let Err(e) = udp_transport
