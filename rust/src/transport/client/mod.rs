@@ -48,7 +48,7 @@ async fn poll_smoltcp(
     smoltcp_iface.poll(Instant::now(), smoltcp_device, smoltcp_socket_set)
 }
 
-async fn poll_and_transfer_smoltcp_data_to_client(
+async fn poll_smoltcp_and_flush(
     transport_id: TransportId,
     smoltcp_socket_set: &mut SocketSet<'_>,
     smoltcp_iface: &mut Interface,

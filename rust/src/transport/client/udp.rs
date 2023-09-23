@@ -15,10 +15,7 @@ use tokio::sync::mpsc::Sender;
 
 use super::{
     ClientOutputPacket, TransportId,
-    {
-        poll_and_transfer_smoltcp_data_to_client,
-        prepare_smoltcp_iface_and_device,
-    },
+    {poll_smoltcp_and_flush, prepare_smoltcp_iface_and_device},
 };
 use crate::config::PpaassVpnServerConfig;
 use crate::device::SmoltcpDevice;
@@ -148,7 +145,7 @@ where
                 meta: udp_packet_meta,
             };
             smoltcp_socket.send_slice(data, udp_meta_data)?;
-            poll_and_transfer_smoltcp_data_to_client(
+            poll_smoltcp_and_flush(
                 self.transport_id,
                 &mut self.smoltcp_socket_set,
                 &mut self.smoltcp_iface,
@@ -168,7 +165,7 @@ where
         client_data: BytesMut,
     ) -> Result<(), ClientEndpointError> {
         self.smoltcp_device.push_rx(client_data);
-        if poll_and_transfer_smoltcp_data_to_client(
+        if poll_smoltcp_and_flush(
             self.transport_id,
             &mut self.smoltcp_socket_set,
             &mut self.smoltcp_iface,
@@ -204,7 +201,7 @@ where
     }
 
     pub(crate) async fn close(&mut self) {
-        poll_and_transfer_smoltcp_data_to_client(
+        poll_smoltcp_and_flush(
             self.transport_id,
             &mut self.smoltcp_socket_set,
             &mut self.smoltcp_iface,

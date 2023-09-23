@@ -19,10 +19,7 @@ use smoltcp::socket::tcp::SocketBuffer as SmoltcpTcpSocketBuffer;
 
 use super::{
     ClientOutputPacket, TransportId,
-    {
-        poll_and_transfer_smoltcp_data_to_client,
-        prepare_smoltcp_iface_and_device,
-    },
+    {poll_smoltcp_and_flush, prepare_smoltcp_iface_and_device},
 };
 
 type ClientTcpRecvBuf = RwLock<VecDeque<u8>>;
@@ -168,7 +165,7 @@ where
             .get_mut::<SmoltcpTcpSocket>(self.smoltcp_socket_handle);
         if smoltcp_socket.may_send() {
             let send_result = smoltcp_socket.send_slice(data)?;
-            poll_and_transfer_smoltcp_data_to_client(
+            poll_smoltcp_and_flush(
                 self.transport_id,
                 &mut smoltcp_socket_set,
                 &mut smoltcp_iface,
@@ -194,7 +191,7 @@ where
         } = self.ctl.lock().await;
 
         smoltcp_device.push_rx(client_data);
-        if poll_and_transfer_smoltcp_data_to_client(
+        if poll_smoltcp_and_flush(
             self.transport_id,
             &mut smoltcp_socket_set,
             &mut smoltcp_iface,
@@ -238,7 +235,7 @@ where
         let smoltcp_socket = smoltcp_socket_set
             .get_mut::<SmoltcpTcpSocket>(self.smoltcp_socket_handle);
         smoltcp_socket.abort();
-        poll_and_transfer_smoltcp_data_to_client(
+        poll_smoltcp_and_flush(
             self.transport_id,
             &mut smoltcp_socket_set,
             &mut smoltcp_iface,
@@ -256,7 +253,7 @@ where
         let smoltcp_socket = smoltcp_socket_set
             .get_mut::<SmoltcpTcpSocket>(self.smoltcp_socket_handle);
         smoltcp_socket.close();
-        poll_and_transfer_smoltcp_data_to_client(
+        poll_smoltcp_and_flush(
             self.transport_id,
             &mut smoltcp_socket_set,
             &mut smoltcp_iface,
