@@ -165,21 +165,14 @@ impl RemoteTcpEndpoint {
         match self.proxy_connection_read.lock().await.next().await {
             None => Ok(true),
             Some(Ok(proxy_message)) => {
-                let PpaassProxyMessage {
-                    payload: proxy_message_payload,
-                    ..
-                } = proxy_message;
+                let PpaassProxyMessage { payload, .. } = proxy_message;
                 let ProxyTcpData {
                     data: tcp_relay_data,
                     ..
-                } = proxy_message_payload.data.try_into()?;
+                } = payload.data.try_into()?;
                 trace!(
-                "<<<< Transport {} read remote tcp data to remote endpoint receive buffer: {}",
-                self.transport_id,
-                pretty_hex::pretty_hex(&tcp_relay_data)
-            );
+                "<<<< Transport {} read remote tcp data to remote endpoint receive buffer: {}", self.transport_id, pretty_hex::pretty_hex(&tcp_relay_data));
                 self.recv_buffer.write().await.extend(tcp_relay_data);
-
                 Ok(false)
             }
             Some(Err(e)) => {
