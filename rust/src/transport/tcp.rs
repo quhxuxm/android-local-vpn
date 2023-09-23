@@ -4,7 +4,8 @@ use bytes::{Bytes, BytesMut};
 use log::{debug, error, trace};
 use smoltcp::socket::tcp::State;
 use tokio::{
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::mpsc,
+    sync::mpsc::{Receiver, Sender},
     time::timeout,
 };
 
@@ -34,7 +35,8 @@ impl TcpTransport {
         transport_id: TransportId,
         client_output_tx: Sender<ClientOutputPacket>,
     ) -> (Self, Sender<BytesMut>) {
-        let (client_input_tx, client_input_rx) = channel::<BytesMut>(65536);
+        let (client_input_tx, client_input_rx) =
+            mpsc::channel::<BytesMut>(65536);
         (
             Self {
                 transport_id,

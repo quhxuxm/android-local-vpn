@@ -4,7 +4,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 
 use log::{debug, error, trace};
-use tokio::{net::TcpSocket, sync::RwLock};
+use tokio::{net::TcpSocket, sync::RwLock, time::timeout};
 use tokio::{net::TcpStream, sync::Mutex};
 
 use crate::{
@@ -28,7 +28,7 @@ use ppaass_common::{
     PpaassProxyMessage, PpaassProxyMessagePayload,
 };
 
-pub(crate) type RemoteTcpRecvBuf = RwLock<BytesMut>;
+type RemoteTcpRecvBuf = RwLock<BytesMut>;
 
 pub(crate) struct RemoteTcpEndpoint {
     transport_id: TransportId,
@@ -85,7 +85,7 @@ impl RemoteTcpEndpoint {
         RemoteEndpointError,
     > {
         let proxy_addresses = config.get_proxy_address();
-        let proxy_tcp_stream = tokio::time::timeout(
+        let proxy_tcp_stream = timeout(
         Duration::from_secs(10),
         tcp_socket.connect(proxy_addresses.parse()?),
     )
@@ -116,33 +116,26 @@ impl RemoteTcpEndpoint {
             )?;
         proxy_connection.send(tcp_init_request).await?;
         let PpaassProxyMessage {
-            payload:
-                PpaassProxyMessagePayload {
-                    protocol: proxy_msg_protocol,
-                    data: proxy_msg_payload_data,
-                },
+            payload: PpaassProxyMessagePayload { protocol, data },
             ..
         } = proxy_connection
             .next()
             .await
             .ok_or(RemoteEndpointError::ProxyExhausted(transport_id))??;
 
-        let tcp_init_response = match proxy_msg_protocol {
+        let tcp_init_response = match protocol {
             PpaassMessageProxyProtocol::Tcp(
                 PpaassMessageProxyTcpPayloadType::Init,
-            ) => proxy_msg_payload_data.try_into()?,
-            proxy_protocol => {
-                error!(">>>> Transport {transport_id} receive invalid message from proxy, payload type: {proxy_protocol:?}");
+            ) => data.try_into()?,
+            other_protocol => {
+                error!(">>>> Transport {transport_id} receive invalid message from proxy, payload type: {other_protocol:?}");
                 return Err(RemoteEndpointError::InvalidProxyProtocol(
-                    proxy_protocol,
+                    other_protocol,
                 ));
             }
         };
-        let ProxyTcpInit {
-            result_type: tcp_init_response_type,
-            ..
-        } = tcp_init_response;
-        match tcp_init_response_type {
+        let ProxyTcpInit { result_type, .. } = tcp_init_response;
+        match result_type {
             ProxyTcpInitResultType::Success => {
                 debug!(">>>> Transport {transport_id} success to initialize proxy tcp connection.");
             }
