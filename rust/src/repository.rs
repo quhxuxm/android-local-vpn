@@ -9,7 +9,7 @@ use crate::{
 use bytes::BytesMut;
 
 use log::{debug, error};
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::mpsc::{self, Sender, UnboundedReceiver, UnboundedSender};
 
 pub(crate) enum TcpTransportsRepoCmd {
     ClientData {
@@ -20,7 +20,7 @@ pub(crate) enum TcpTransportsRepoCmd {
     Remove(TransportId),
 }
 pub(crate) struct TcpTransportsRepository {
-    repo_cmd_tx: Sender<TcpTransportsRepoCmd>,
+    repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
 }
 
 impl TcpTransportsRepository {
@@ -30,7 +30,7 @@ impl TcpTransportsRepository {
         vpn_server_config: &'static PpaassVpnServerConfig,
     ) -> Self {
         let (repo_cmd_tx, repo_cmd_rx) =
-            mpsc::channel::<TcpTransportsRepoCmd>(65536);
+            mpsc::unbounded_channel::<TcpTransportsRepoCmd>();
         {
             let repo_cmd_tx = repo_cmd_tx.clone();
             tokio::spawn(async move {
@@ -56,13 +56,12 @@ impl TcpTransportsRepository {
     ) -> Result<(), TransportError> {
         self.repo_cmd_tx
             .send(cmd)
-            .await
             .map_err(|e| TcpTransportRepositoryError::CommandTxError(e).into())
     }
 
     async fn handle_cmd(
-        repo_cmd_tx: Sender<TcpTransportsRepoCmd>,
-        mut repo_cmd_rx: Receiver<TcpTransportsRepoCmd>,
+        repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
+        mut repo_cmd_rx: UnboundedReceiver<TcpTransportsRepoCmd>,
         client_output_tx: mpsc::Sender<ClientOutputPacket>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         vpn_server_config: &'static PpaassVpnServerConfig,

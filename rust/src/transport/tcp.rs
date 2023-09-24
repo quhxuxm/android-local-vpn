@@ -5,7 +5,7 @@ use log::{debug, error, trace};
 use smoltcp::socket::tcp::State;
 use tokio::{
     sync::mpsc,
-    sync::mpsc::{Receiver, Sender},
+    sync::mpsc::{Receiver, Sender, UnboundedSender},
     time::timeout,
 };
 
@@ -52,7 +52,7 @@ impl TcpTransport {
         mut self,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
-        repo_cmd_tx: Sender<TcpTransportsRepoCmd>,
+        repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
     ) -> Result<(), TransportError> {
         let client_endpoint = match ClientTcpEndpoint::new(
             self.transport_id,
@@ -65,7 +65,6 @@ impl TcpTransport {
                 error!(">>>> Transport {} fail to create client endpoint because of error: {e:?}.", self.transport_id);
                 if let Err(e) = repo_cmd_tx
                     .send(TcpTransportsRepoCmd::Remove(self.transport_id))
-                    .await
                 {
                     error!("###### Transport {} fail to send remove transports signal because of error: {e:?}", self.transport_id)
                 }

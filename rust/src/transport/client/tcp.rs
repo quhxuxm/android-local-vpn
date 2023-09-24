@@ -9,7 +9,10 @@ use smoltcp::{
     iface::{SocketHandle, SocketSet},
     socket::tcp::State,
 };
-use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, RwLock};
+use tokio::sync::{
+    mpsc::{Sender, UnboundedSender},
+    Mutex, MutexGuard, RwLock,
+};
 
 use crate::error::RemoteEndpointError;
 use crate::{config, repository::TcpTransportsRepoCmd};
@@ -67,7 +70,7 @@ pub(crate) struct ClientTcpEndpoint<'buf> {
     smoltcp_socket_handle: SocketHandle,
     recv_buffer: Arc<ClientTcpRecvBuf>,
     client_output_tx: Sender<ClientOutputPacket>,
-    repo_cmd_tx: Sender<TcpTransportsRepoCmd>,
+    repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
     _config: &'static PpaassVpnServerConfig,
 }
 
@@ -78,7 +81,7 @@ where
     pub(crate) fn new(
         transport_id: TransportId,
         client_output_tx: Sender<ClientOutputPacket>,
-        repo_cmd_tx: Sender<TcpTransportsRepoCmd>,
+        repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
         config: &'static PpaassVpnServerConfig,
     ) -> Result<ClientTcpEndpoint<'_>, ClientEndpointError> {
         let (smoltcp_iface, smoltcp_device) =
@@ -275,7 +278,6 @@ where
         if let Err(e) = self
             .repo_cmd_tx
             .send(TcpTransportsRepoCmd::Remove(self.transport_id))
-            .await
         {
             error!("###### Transport {} fail to send remove transports signal because of error: {e:?}", self.transport_id)
         }
