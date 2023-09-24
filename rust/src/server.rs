@@ -193,60 +193,6 @@ impl PpaassVpnServer {
                     {
                         error!(">>>> Transport {transport_id} fail to send repository command because of error: {e:?}")
                     };
-                    // let client_input_tx = tcp_transports_repo
-                    //     .handle(transport_id, async move {
-                    //         let (transport, client_input_tx) =
-                    //             TcpTransport::new(
-                    //                 transport_id,
-                    //                 client_output_tx.clone(),
-                    //             );
-                    //     })
-                    //     .await;
-
-                    // match tcp_transports_repo.entry(transport_id) {
-                    //     Entry::Occupied(entry) => {
-                    //         if let Err(e) = entry.get().send(client_data).await
-                    //         {
-                    //             error!(">>>> Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
-                    //             tcp_transports.remove(&transport_id);
-                    //         };
-                    //     }
-                    //     Entry::Vacant(entry) => {
-                    //         if !create_on_not_exist {
-                    //             error!("Incoming client input packet is not a valid handshake.");
-                    //             continue;
-                    //         }
-                    //         let (transport, client_input_tx) =
-                    //             TcpTransport::new(
-                    //                 transport_id,
-                    //                 client_output_tx.clone(),
-                    //             );
-                    //         let remove_tcp_transports_tx =
-                    //             remove_tcp_transports_tx.clone();
-                    //         tokio::spawn(async move {
-                    //             debug!("###### Transport {transport_id} begin to handle tcp packet.");
-                    //             if let Err(e) = transport
-                    //                 .exec(
-                    //                     agent_rsa_crypto_fetcher,
-                    //                     config,
-                    //                     remove_tcp_transports_tx,
-                    //                 )
-                    //                 .await
-                    //             {
-                    //                 error!("###### Transport {transport_id} fail to handle tcp packet because of error: {e:?}");
-                    //                 return;
-                    //             };
-                    //             debug!("###### Transport {transport_id} complete to handle tcp packet.");
-                    //         });
-                    //         let client_input_tx = entry.insert(client_input_tx);
-                    //         if let Err(e) =
-                    //             client_input_tx.send(client_data).await
-                    //         {
-                    //             error!("Transport {transport_id} client input receiver closed already, can not send client data to transport, error: {e:?}");
-                    //             tcp_transports.remove(&transport_id);
-                    //         };
-                    //     }
-                    // }
                 }
                 ControlProtocol::Udp => {
                     let udp_transport = UdpTransport::new(

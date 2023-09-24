@@ -76,40 +76,38 @@ impl TcpTransportsRepository {
                     client_data,
                     create_on_not_exist,
                 } => {
-                    match concrete_repository.entry(transport_id) {
-                        Entry::Occupied(entry) => {
-                            entry.get().send(client_data).await?;
-                        }
-                        Entry::Vacant(entry) => {
-                            if !create_on_not_exist {
-                                error!("#### Transport {transport_id} incoming client input packet is not a valid handshake.");
-                                continue;
-                            }
+                    if let Entry::Occupied(entry) =
+                        concrete_repository.entry(transport_id)
+                    {
+                        entry.get().send(client_data).await?;
+                        continue;
+                    }
+                    if !create_on_not_exist {
+                        error!("#### Transport {transport_id} incoming client input packet is not a valid handshake.");
+                        continue;
+                    }
 
-                            let (transport, client_input_tx) =
-                                TcpTransport::new(
-                                    transport_id,
-                                    client_output_tx.clone(),
-                                );
-                            entry.insert(client_input_tx);
-                            let repo_cmd_tx = repo_cmd_tx.clone();
-                            tokio::spawn(async move {
-                                debug!("###### Transport {transport_id} begin to handle tcp packet.");
-                                if let Err(e) = transport
-                                    .exec(
-                                        agent_rsa_crypto_fetcher,
-                                        vpn_server_config,
-                                        repo_cmd_tx,
-                                    )
-                                    .await
-                                {
-                                    error!("###### Transport {transport_id} fail to handle tcp packet because of error: {e:?}");
-                                    return;
-                                };
-                                debug!("###### Transport {transport_id} complete to handle tcp packet.");
-                            });
-                        }
-                    };
+                    let (transport, client_input_tx) = TcpTransport::new(
+                        transport_id,
+                        client_output_tx.clone(),
+                    );
+                    concrete_repository.insert(transport_id, client_input_tx);
+                    let repo_cmd_tx = repo_cmd_tx.clone();
+                    tokio::spawn(async move {
+                        debug!("###### Transport {transport_id} begin to handle tcp packet.");
+                        if let Err(e) = transport
+                            .exec(
+                                agent_rsa_crypto_fetcher,
+                                vpn_server_config,
+                                repo_cmd_tx,
+                            )
+                            .await
+                        {
+                            error!("###### Transport {transport_id} fail to handle tcp packet because of error: {e:?}");
+                            return;
+                        };
+                        debug!("###### Transport {transport_id} complete to handle tcp packet.");
+                    });
                 }
                 TcpTransportsRepoCmd::Remove(transport_id) => {
                     concrete_repository.remove(&transport_id);
