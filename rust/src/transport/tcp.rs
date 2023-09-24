@@ -12,6 +12,7 @@ use tokio::{
 use crate::{
     config::PpaassVpnServerConfig,
     error::{ClientEndpointError, RemoteEndpointError, TransportError},
+    repository::TcpTransportsRepoCmd,
     util::AgentRsaCryptoFetcher,
 };
 
@@ -51,19 +52,20 @@ impl TcpTransport {
         mut self,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
-        remove_tcp_transports_tx: Sender<TransportId>,
+        repo_cmd_tx: Sender<TcpTransportsRepoCmd>,
     ) -> Result<(), TransportError> {
         let client_endpoint = match ClientTcpEndpoint::new(
             self.transport_id,
             self.client_output_tx,
-            remove_tcp_transports_tx.clone(),
+            repo_cmd_tx.clone(),
             config,
         ) {
             Ok(client_endpoint) => client_endpoint,
             Err(e) => {
                 error!(">>>> Transport {} fail to create client endpoint because of error: {e:?}.", self.transport_id);
-                if let Err(e) =
-                    remove_tcp_transports_tx.send(self.transport_id).await
+                if let Err(e) = repo_cmd_tx
+                    .send(TcpTransportsRepoCmd::Remove(self.transport_id))
+                    .await
                 {
                     error!("###### Transport {} fail to send remove transports signal because of error: {e:?}", self.transport_id)
                 }

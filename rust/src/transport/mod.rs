@@ -4,17 +4,14 @@ mod tcp;
 mod udp;
 
 use anyhow::{anyhow, Result};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use core::fmt;
-use std::{collections::HashMap, fmt::Display, net::SocketAddr};
+use std::{fmt::Display, net::SocketAddr};
 
 use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv6Packet, TcpPacket, UdpPacket};
-use tokio::sync::mpsc::Sender;
 
 pub(crate) use self::tcp::TcpTransport;
 pub(crate) use self::udp::UdpTransport;
-
-pub(crate) type Transports = HashMap<TransportId, Sender<BytesMut>>;
 
 pub(crate) struct ClientOutputPacket {
     pub transport_id: TransportId,

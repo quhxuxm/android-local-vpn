@@ -1,6 +1,8 @@
+#![allow(unused)]
 use std::net::AddrParseError;
 
-use crate::transport::TransportId;
+use crate::{repository::TcpTransportsRepoCmd, transport::TransportId};
+use bytes::BytesMut;
 use ppaass_common::{CommonError, PpaassMessageProxyProtocol};
 use smoltcp::{
     iface::RouteTableFull as SmoltcpRouteTableFullError,
@@ -15,6 +17,7 @@ use smoltcp::socket::udp::{
     SendError as SmoltcpUdpSendError,
 };
 use thiserror::Error;
+use tokio::sync::mpsc::error::SendError;
 
 #[derive(Error, Debug)]
 pub(crate) enum TransportError {
@@ -22,6 +25,20 @@ pub(crate) enum TransportError {
     RemoteEndpoint(#[from] RemoteEndpointError),
     #[error("Client endpoint error happen:{0:?}")]
     ClientEndpoint(#[from] ClientEndpointError),
+    #[error("Tcp transport repository error happen:{0:?}")]
+    TcpTransportRepository(#[from] TcpTransportRepositoryError),
+}
+
+#[derive(Error, Debug)]
+pub(crate) enum TcpTransportRepositoryError {
+    #[error(
+        "Tcp transport repository fail to handle command because of error: {0}"
+    )]
+    CommandTxError(#[from] SendError<TcpTransportsRepoCmd>),
+    #[error(
+        "Tcp transport repository fail to send client data to transport because of error: {0}"
+    )]
+    ClientInputDataTxError(#[from] SendError<BytesMut>),
 }
 
 #[derive(Error, Debug)]

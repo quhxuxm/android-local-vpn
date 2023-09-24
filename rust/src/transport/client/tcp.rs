@@ -11,8 +11,8 @@ use smoltcp::{
 };
 use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, RwLock};
 
-use crate::config;
 use crate::error::RemoteEndpointError;
+use crate::{config, repository::TcpTransportsRepoCmd};
 use crate::{config::PpaassVpnServerConfig, device::SmoltcpDevice};
 use crate::{error::ClientEndpointError, transport::remote::RemoteTcpEndpoint};
 use smoltcp::socket::tcp::SocketBuffer as SmoltcpTcpSocketBuffer;
@@ -67,7 +67,7 @@ pub(crate) struct ClientTcpEndpoint<'buf> {
     smoltcp_socket_handle: SocketHandle,
     recv_buffer: Arc<ClientTcpRecvBuf>,
     client_output_tx: Sender<ClientOutputPacket>,
-    remove_tcp_transports_tx: Sender<TransportId>,
+    repo_cmd_tx: Sender<TcpTransportsRepoCmd>,
     _config: &'static PpaassVpnServerConfig,
 }
 
@@ -78,7 +78,7 @@ where
     pub(crate) fn new(
         transport_id: TransportId,
         client_output_tx: Sender<ClientOutputPacket>,
-        remove_tcp_transports_tx: Sender<TransportId>,
+        repo_cmd_tx: Sender<TcpTransportsRepoCmd>,
         config: &'static PpaassVpnServerConfig,
     ) -> Result<ClientTcpEndpoint<'_>, ClientEndpointError> {
         let (smoltcp_iface, smoltcp_device) =
@@ -98,7 +98,7 @@ where
             transport_id,
             smoltcp_socket_handle,
             ctl,
-            remove_tcp_transports_tx,
+            repo_cmd_tx,
             recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(
                 config.get_client_endpoint_tcp_recv_buffer_size(),
             ))),
@@ -272,8 +272,10 @@ where
         smoltcp_socket_set.remove(self.smoltcp_socket_handle);
         smoltcp_device.destory();
         self.recv_buffer.write().await.clear();
-        if let Err(e) =
-            self.remove_tcp_transports_tx.send(self.transport_id).await
+        if let Err(e) = self
+            .repo_cmd_tx
+            .send(TcpTransportsRepoCmd::Remove(self.transport_id))
+            .await
         {
             error!("###### Transport {} fail to send remove transports signal because of error: {e:?}", self.transport_id)
         }
