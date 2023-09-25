@@ -9,7 +9,10 @@ use smoltcp::{
     iface::{SocketHandle, SocketSet},
     socket::tcp::State,
 };
-use tokio::sync::{mpsc::UnboundedSender, Mutex, MutexGuard, RwLock};
+use tokio::sync::{
+    mpsc::{self, UnboundedReceiver, UnboundedSender},
+    Mutex, MutexGuard, RwLock,
+};
 
 use crate::error::RemoteEndpointError;
 use crate::{config, repository::TcpTransportsRepoCmd};
@@ -21,8 +24,6 @@ use super::{
     ClientOutputPacket, TransportId,
     {poll_smoltcp_and_flush, prepare_smoltcp_iface_and_device},
 };
-
-type ClientTcpRecvBuf = RwLock<VecDeque<u8>>;
 
 struct ClientTcpEndpointCtlLockGuard<'lock, 'buf> {
     smoltcp_socket_set: MutexGuard<'lock, SocketSet<'buf>>,
@@ -61,11 +62,18 @@ impl<'buf> ClientTcpEndpointCtl<'buf> {
         }
     }
 }
+
+pub(crate) enum ClientTcpEndpointRecvBufCmd {
+    Dump(Arc<RemoteTcpEndpoint>),
+    Extend(Bytes),
+    Clear,
+}
+
 pub(crate) struct ClientTcpEndpoint<'buf> {
     transport_id: TransportId,
     ctl: ClientTcpEndpointCtl<'buf>,
     smoltcp_socket_handle: SocketHandle,
-    recv_buffer: Arc<ClientTcpRecvBuf>,
+    recv_buf_cmd_tx: UnboundedSender<ClientTcpEndpointRecvBufCmd>,
     client_output_tx: UnboundedSender<ClientOutputPacket>,
     repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
     _config: &'static PpaassVpnServerConfig,
@@ -94,17 +102,62 @@ where
             Mutex::new(smoltcp_iface),
             Mutex::new(smoltcp_device),
         );
+        let (recv_buf_cmd_tx, recv_buf_cmd_rx) =
+            mpsc::unbounded_channel::<ClientTcpEndpointRecvBufCmd>();
+        tokio::spawn(Self::handle_recv_buf_cmd(
+            transport_id,
+            VecDeque::with_capacity(
+                config.get_client_endpoint_tcp_recv_buffer_size(),
+            ),
+            recv_buf_cmd_rx,
+            consume_fn,
+        ));
         Ok(Self {
             transport_id,
             smoltcp_socket_handle,
             ctl,
             repo_cmd_tx,
-            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(
-                config.get_client_endpoint_tcp_recv_buffer_size(),
-            ))),
+            recv_buf_cmd_tx,
             client_output_tx,
             _config: config,
         })
+    }
+
+    async fn handle_recv_buf_cmd<F, Fut>(
+        transport_id: TransportId,
+        mut recv_buffer: VecDeque<u8>,
+        mut recv_buf_cmd_rx: UnboundedReceiver<ClientTcpEndpointRecvBufCmd>,
+        mut consume_fn: F,
+    ) where
+        F: FnMut(TransportId, Bytes, Arc<RemoteTcpEndpoint>) -> Fut,
+        Fut: Future<Output = Result<usize, RemoteEndpointError>>,
+    {
+        while let Some(cmd) = recv_buf_cmd_rx.recv().await {
+            match cmd {
+                ClientTcpEndpointRecvBufCmd::Dump(remote) => {
+                    let recv_buffer_data =
+                        Bytes::from(recv_buffer.make_contiguous().to_vec());
+                    let consume_size = match consume_fn(
+                        transport_id,
+                        recv_buffer_data,
+                        remote,
+                    )
+                    .await
+                    {
+                        Ok(consume_size) => consume_size,
+                        Err(e) => {
+                            error!(">>>> Transport {transport_id} fail to dump client endpoint receive buffer to remote endpoint because of error: {e:?}");
+                            continue;
+                        }
+                    };
+                    recv_buffer.drain(..consume_size);
+                }
+                ClientTcpEndpointRecvBufCmd::Extend(data) => {
+                    recv_buffer.extend(&data);
+                }
+                ClientTcpEndpointRecvBufCmd::Clear => recv_buffer.clear(),
+            }
+        }
     }
 
     fn create_smoltcp_tcp_socket<'a>(
