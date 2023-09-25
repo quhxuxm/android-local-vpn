@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, future::Future, sync::Arc};
+use std::{collections::VecDeque, sync::Arc};
 
 use anyhow::Result;
 
@@ -11,7 +11,7 @@ use smoltcp::{
 };
 use tokio::sync::{
     mpsc::{self, UnboundedReceiver, UnboundedSender},
-    Mutex, MutexGuard, RwLock,
+    Mutex, MutexGuard,
 };
 
 use crate::error::RemoteEndpointError;
@@ -110,7 +110,6 @@ where
                 config.get_client_endpoint_tcp_recv_buffer_size(),
             ),
             recv_buf_cmd_rx,
-            consume_fn,
         ));
         Ok(Self {
             transport_id,
@@ -123,26 +122,22 @@ where
         })
     }
 
-    async fn handle_recv_buf_cmd<F, Fut>(
+    async fn handle_recv_buf_cmd(
         transport_id: TransportId,
         mut recv_buffer: VecDeque<u8>,
         mut recv_buf_cmd_rx: UnboundedReceiver<ClientTcpEndpointRecvBufCmd>,
-        mut consume_fn: F,
-    ) where
-        F: FnMut(TransportId, Bytes, Arc<RemoteTcpEndpoint>) -> Fut,
-        Fut: Future<Output = Result<usize, RemoteEndpointError>>,
-    {
+    ) {
         while let Some(cmd) = recv_buf_cmd_rx.recv().await {
             match cmd {
                 ClientTcpEndpointRecvBufCmd::Dump(remote) => {
+                    if recv_buffer.is_empty() {
+                        continue;
+                    }
                     let recv_buffer_data =
                         Bytes::from(recv_buffer.make_contiguous().to_vec());
-                    let consume_size = match consume_fn(
-                        transport_id,
-                        recv_buffer_data,
-                        remote,
-                    )
-                    .await
+                    let consume_size = match remote
+                        .write_to_remote(recv_buffer_data)
+                        .await
                     {
                         Ok(consume_size) => consume_size,
                         Err(e) => {
@@ -184,24 +179,12 @@ where
         Ok(socket)
     }
 
-    pub(crate) async fn consume_recv_buffer<'r, F, Fut>(
+    pub(crate) async fn consume_recv_buffer(
         &self,
-        remote: &'r RemoteTcpEndpoint,
-        mut consume_fn: F,
-    ) -> Result<(), RemoteEndpointError>
-    where
-        F: FnMut(TransportId, Bytes, &'r RemoteTcpEndpoint) -> Fut,
-        Fut: Future<Output = Result<usize, RemoteEndpointError>>,
-    {
-        if self.recv_buffer.read().await.is_empty() {
-            return Ok(());
-        }
-        let mut recv_buffer = self.recv_buffer.write().await;
-        let recv_buffer_data =
-            Bytes::from(recv_buffer.make_contiguous().to_vec());
-        let consume_size =
-            consume_fn(self.transport_id, recv_buffer_data, remote).await?;
-        recv_buffer.drain(..consume_size);
+        remote: Arc<RemoteTcpEndpoint>,
+    ) -> Result<(), RemoteEndpointError> {
+        self.recv_buf_cmd_tx
+            .send(ClientTcpEndpointRecvBufCmd::Dump(remote));
         Ok(())
     }
 
@@ -270,7 +253,10 @@ where
                         );
                     }
                 };
-                self.recv_buffer.write().await.extend(tcp_data);
+                self.recv_buf_cmd_tx
+                    .send(ClientTcpEndpointRecvBufCmd::Extend(Bytes::from(
+                        tcp_data.to_vec(),
+                    )));
             }
             return Ok(smoltcp_tcp_socket.state());
         }
@@ -324,7 +310,8 @@ where
         } = self.ctl.lock().await;
         smoltcp_socket_set.remove(self.smoltcp_socket_handle);
         smoltcp_device.destory();
-        self.recv_buffer.write().await.clear();
+        self.recv_buf_cmd_tx
+            .send(ClientTcpEndpointRecvBufCmd::Clear);
         if let Err(e) = self
             .repo_cmd_tx
             .send(TcpTransportsRepoCmd::Remove(self.transport_id))
