@@ -5,7 +5,7 @@ use log::{debug, error, trace};
 use smoltcp::socket::tcp::State;
 use tokio::{
     sync::mpsc,
-    sync::mpsc::{Receiver, Sender, UnboundedSender},
+    sync::mpsc::{UnboundedReceiver, UnboundedSender},
     time::timeout,
 };
 
@@ -25,7 +25,7 @@ use super::{
 pub(crate) struct TcpTransport {
     transport_id: TransportId,
     client_output_tx: UnboundedSender<ClientOutputPacket>,
-    client_input_rx: Receiver<BytesMut>,
+    client_input_rx: UnboundedReceiver<BytesMut>,
 }
 
 impl TcpTransport {
@@ -35,9 +35,9 @@ impl TcpTransport {
     pub(crate) fn new(
         transport_id: TransportId,
         client_output_tx: UnboundedSender<ClientOutputPacket>,
-    ) -> (Self, Sender<BytesMut>) {
+    ) -> (Self, UnboundedSender<BytesMut>) {
         let (client_input_tx, client_input_rx) =
-            mpsc::channel::<BytesMut>(65536);
+            mpsc::unbounded_channel::<BytesMut>();
         (
             Self {
                 transport_id,

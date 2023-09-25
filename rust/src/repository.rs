@@ -9,7 +9,7 @@ use crate::{
 use bytes::BytesMut;
 
 use log::{debug, error};
-use tokio::sync::mpsc::{self, Sender, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 pub(crate) enum TcpTransportsRepoCmd {
     ClientData {
@@ -66,8 +66,10 @@ impl TcpTransportsRepository {
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         vpn_server_config: &'static PpaassVpnServerConfig,
     ) -> Result<(), TcpTransportRepositoryError> {
-        let mut concrete_repository: HashMap<TransportId, Sender<BytesMut>> =
-            Default::default();
+        let mut concrete_repository: HashMap<
+            TransportId,
+            UnboundedSender<BytesMut>,
+        > = Default::default();
         while let Some(cmd) = repo_cmd_rx.recv().await {
             match cmd {
                 TcpTransportsRepoCmd::ClientData {
@@ -78,7 +80,7 @@ impl TcpTransportsRepository {
                     if let Entry::Occupied(entry) =
                         concrete_repository.entry(transport_id)
                     {
-                        entry.get().send(client_data).await?;
+                        entry.get().send(client_data)?;
                         continue;
                     }
                     if !create_on_not_exist {
