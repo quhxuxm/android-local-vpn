@@ -11,14 +11,11 @@ use smoltcp::{
     phy::PacketMeta,
     socket::udp::UdpMetadata,
 };
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 
 use super::{
     ClientOutputPacket, TransportId,
-    {
-        poll_and_transfer_smoltcp_data_to_client,
-        prepare_smoltcp_iface_and_device,
-    },
+    {poll_smoltcp_and_flush, prepare_smoltcp_iface_and_device},
 };
 use crate::config::PpaassVpnServerConfig;
 use crate::device::SmoltcpDevice;
@@ -29,6 +26,7 @@ use smoltcp::socket::udp::{
     PacketMetadata as SmoltcpUdpPacketMetadata,
 };
 
+const UDP_PACKET_MAX_SIZE: usize = 65535;
 type ClientUdpRecvBuf = VecDeque<Bytes>;
 
 pub(crate) struct ClientUdpEndpoint<'buf> {
@@ -38,7 +36,7 @@ pub(crate) struct ClientUdpEndpoint<'buf> {
     smoltcp_iface: Interface,
     smoltcp_device: SmoltcpDevice,
     recv_buffer: ClientUdpRecvBuf,
-    client_output_tx: Sender<ClientOutputPacket>,
+    client_output_tx: UnboundedSender<ClientOutputPacket>,
     _config: &'static PpaassVpnServerConfig,
 }
 
@@ -48,7 +46,7 @@ where
 {
     pub(crate) fn new(
         transport_id: TransportId,
-        client_output_tx: Sender<ClientOutputPacket>,
+        client_output_tx: UnboundedSender<ClientOutputPacket>,
         config: &'static PpaassVpnServerConfig,
     ) -> Result<ClientUdpEndpoint<'_>, ClientEndpointError> {
         let (smoltcp_iface, smoltcp_device) =
@@ -123,11 +121,6 @@ where
             remote,
         )
         .await?;
-        // let mut consume_size = 0;
-        // for udp_data in self.recv_buffer.iter() {
-        //     consume_fn(self.transport_id, udp_data.to_vec(), remote).await?;
-        //     consume_size += 1;
-        // }
         self.recv_buffer.drain(..consume_size);
         Ok(())
     }
@@ -148,7 +141,7 @@ where
                 meta: udp_packet_meta,
             };
             smoltcp_socket.send_slice(data, udp_meta_data)?;
-            poll_and_transfer_smoltcp_data_to_client(
+            poll_smoltcp_and_flush(
                 self.transport_id,
                 &mut self.smoltcp_socket_set,
                 &mut self.smoltcp_iface,
@@ -168,7 +161,7 @@ where
         client_data: BytesMut,
     ) -> Result<(), ClientEndpointError> {
         self.smoltcp_device.push_rx(client_data);
-        if poll_and_transfer_smoltcp_data_to_client(
+        if poll_smoltcp_and_flush(
             self.transport_id,
             &mut self.smoltcp_socket_set,
             &mut self.smoltcp_iface,
@@ -184,7 +177,7 @@ where
                 return Ok(());
             }
             while smoltcp_udp_socket.can_recv() {
-                let mut udp_data = [0u8; 65535];
+                let mut udp_data = [0u8; UDP_PACKET_MAX_SIZE];
                 let udp_data = match smoltcp_udp_socket
                     .recv_slice(&mut udp_data)
                 {
@@ -204,7 +197,7 @@ where
     }
 
     pub(crate) async fn close(&mut self) {
-        poll_and_transfer_smoltcp_data_to_client(
+        poll_smoltcp_and_flush(
             self.transport_id,
             &mut self.smoltcp_socket_set,
             &mut self.smoltcp_iface,
@@ -212,6 +205,10 @@ where
             &self.client_output_tx,
         )
         .await;
+        let smoltcp_udp_socket = self
+            .smoltcp_socket_set
+            .get_mut::<SmoltcpUdpSocket>(self.smoltcp_socket_handle);
+        smoltcp_udp_socket.close();
     }
 
     pub(crate) async fn destroy(&mut self) {

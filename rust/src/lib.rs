@@ -1,6 +1,7 @@
 mod config;
 mod device;
 mod error;
+mod repository;
 mod server;
 mod transport;
 mod util;

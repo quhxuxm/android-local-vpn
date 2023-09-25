@@ -4,13 +4,15 @@ use bytes::{Bytes, BytesMut};
 use log::{debug, error, trace};
 use smoltcp::socket::tcp::State;
 use tokio::{
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::mpsc,
+    sync::mpsc::{UnboundedReceiver, UnboundedSender},
     time::timeout,
 };
 
 use crate::{
     config::PpaassVpnServerConfig,
     error::{ClientEndpointError, RemoteEndpointError, TransportError},
+    repository::TcpTransportsRepoCmd,
     util::AgentRsaCryptoFetcher,
 };
 
@@ -22,8 +24,8 @@ use super::{
 #[derive(Debug)]
 pub(crate) struct TcpTransport {
     transport_id: TransportId,
-    client_output_tx: Sender<ClientOutputPacket>,
-    client_input_rx: Receiver<BytesMut>,
+    client_output_tx: UnboundedSender<ClientOutputPacket>,
+    client_input_rx: UnboundedReceiver<BytesMut>,
 }
 
 impl TcpTransport {
@@ -32,9 +34,10 @@ impl TcpTransport {
     /// * client_output_tx: The sender which send output packe to client.
     pub(crate) fn new(
         transport_id: TransportId,
-        client_output_tx: Sender<ClientOutputPacket>,
-    ) -> (Self, Sender<BytesMut>) {
-        let (client_input_tx, client_input_rx) = channel::<BytesMut>(65536);
+        client_output_tx: UnboundedSender<ClientOutputPacket>,
+    ) -> (Self, UnboundedSender<BytesMut>) {
+        let (client_input_tx, client_input_rx) =
+            mpsc::unbounded_channel::<BytesMut>();
         (
             Self {
                 transport_id,
@@ -49,20 +52,19 @@ impl TcpTransport {
         mut self,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
-        remove_tcp_transports_tx: Sender<TransportId>,
+        repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
     ) -> Result<(), TransportError> {
-        let transport_id = self.transport_id;
         let client_endpoint = match ClientTcpEndpoint::new(
             self.transport_id,
             self.client_output_tx,
-            remove_tcp_transports_tx.clone(),
+            repo_cmd_tx.clone(),
             config,
         ) {
             Ok(client_endpoint) => client_endpoint,
             Err(e) => {
-                error!(">>>> Transport {transport_id} fail to create client endpoint because of error: {e:?}");
-                if let Err(e) =
-                    remove_tcp_transports_tx.send(self.transport_id).await
+                error!(">>>> Transport {} fail to create client endpoint because of error: {e:?}.", self.transport_id);
+                if let Err(e) = repo_cmd_tx
+                    .send(TcpTransportsRepoCmd::Remove(self.transport_id))
                 {
                     error!("###### Transport {} fail to send remove transports signal because of error: {e:?}", self.transport_id)
                 }
@@ -71,7 +73,7 @@ impl TcpTransport {
         };
 
         let remote_endpoint = match RemoteTcpEndpoint::new(
-            transport_id,
+            self.transport_id,
             agent_rsa_crypto_fetcher,
             config,
         )
@@ -79,7 +81,7 @@ impl TcpTransport {
         {
             Ok(remote_endpoint) => remote_endpoint,
             Err(e) => {
-                error!(">>>> Transport {transport_id} error happen when initialize the remote endpoint because of the error: {e:?}");
+                error!(">>>> Transport {} error happen when initialize the remote endpoint because of the error: {e:?}", self.transport_id);
                 client_endpoint.abort().await;
                 client_endpoint.destroy().await;
                 return Err(e.into());
@@ -90,13 +92,13 @@ impl TcpTransport {
         let remote_endpoint = Arc::new(remote_endpoint);
 
         Self::spawn_read_remote_task(
-            transport_id,
+            self.transport_id,
             Arc::clone(&client_endpoint),
             Arc::clone(&remote_endpoint),
             config,
         );
 
-        debug!(">>>> Transport {transport_id} initialize success, begin to serve client input data.");
+        debug!(">>>> Transport {} initialize success, begin to serve client input data." ,self.transport_id);
         while let Some(client_data) = self.client_input_rx.recv().await {
             // Push the data into smoltcp stack.
             match timeout(
@@ -106,14 +108,15 @@ impl TcpTransport {
             .await
             {
                 Err(_) => {
-                    error!(">>>> Transport {transport_id} receive tcp from client timeout in 10 seconds.");
-                    if let Err(e) = Self::flush_client_recv_buf_to_remote(
-                        &client_endpoint,
-                        &remote_endpoint,
-                    )
-                    .await
+                    error!(">>>> Transport {} receive tcp from client timeout in 10 seconds.", self.transport_id);
+                    if let Err(e) = client_endpoint
+                        .consume_recv_buffer(
+                            &remote_endpoint,
+                            Self::consume_client_recv_buf_fn,
+                        )
+                        .await
                     {
-                        error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
+                        error!(">>>> Transport {} error happen when flush client receive buffer to remote because of the error: {e:?}", self.transport_id);
                     };
                     remote_endpoint.close().await;
                     client_endpoint.abort().await;
@@ -121,13 +124,14 @@ impl TcpTransport {
                     return Err(ClientEndpointError::ReceiveTimeout(10).into());
                 }
                 Ok(Err(e)) => {
-                    if let Err(e) = Self::flush_client_recv_buf_to_remote(
-                        &client_endpoint,
-                        &remote_endpoint,
-                    )
-                    .await
+                    if let Err(e) = client_endpoint
+                        .consume_recv_buffer(
+                            &remote_endpoint,
+                            Self::consume_client_recv_buf_fn,
+                        )
+                        .await
                     {
-                        error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
+                        error!(">>>> Transport {} error happen when flush client receive buffer to remote because of the error: {e:?}", self.transport_id);
                     };
                     remote_endpoint.close().await;
                     client_endpoint.abort().await;
@@ -136,15 +140,16 @@ impl TcpTransport {
                 }
                 Ok(Ok(State::Closed)) => {
                     // The tcp connection is closed we should remove the transport from the repository because of no data will come again.
-                    debug!(">>>> Transport {transport_id} is TCP protocol in [Closed] state, destroy client endpoint and remove the transport.");
+                    debug!(">>>> Transport {} is TCP protocol in [Closed] state, destroy client endpoint and remove the transport.", self.transport_id);
                     // Flush all the client receiver buffer data to remote.
-                    if let Err(e) = Self::flush_client_recv_buf_to_remote(
-                        &client_endpoint,
-                        &remote_endpoint,
-                    )
-                    .await
+                    if let Err(e) = client_endpoint
+                        .consume_recv_buffer(
+                            &remote_endpoint,
+                            Self::consume_client_recv_buf_fn,
+                        )
+                        .await
                     {
-                        error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
+                        error!(">>>> Transport {} error happen when flush client receive buffer to remote because of the error: {e:?}", self.transport_id);
                     };
                     remote_endpoint.close().await;
                     client_endpoint.destroy().await;
@@ -153,14 +158,15 @@ impl TcpTransport {
                 Ok(Ok(state)) => {
                     //Check the tcp connection state because of the ip packet just pass through the smoltcp stack
                     //For other case we just continue, even for tcp CloseWait and LastAck because of the smoltcp stack should handle the tcp packet.
-                    debug!("###### Transport {transport_id} client endpoint in {state:?} state, continue to receive client data");
-                    if let Err(e) = Self::flush_client_recv_buf_to_remote(
-                        &client_endpoint,
-                        &remote_endpoint,
-                    )
-                    .await
+                    debug!("###### Transport {} client endpoint in {state:?} state, continue to receive client data", self.transport_id);
+                    if let Err(e) = client_endpoint
+                        .consume_recv_buffer(
+                            &remote_endpoint,
+                            Self::consume_client_recv_buf_fn,
+                        )
+                        .await
                     {
-                        error!(">>>> Transport {transport_id} error happen when flush client receive buffer to remote because of the error: {e:?}");
+                        error!(">>>> Transport {} error happen when flush client receive buffer to remote because of the error: {e:?}", self.transport_id);
                     };
                     continue;
                 }
@@ -188,11 +194,12 @@ impl TcpTransport {
                 {
                     Err(_) => {
                         error!("<<<< Transport {transport_id} receive tcp from remote timeout in 10 seconds.");
-                        if let Err(e) = Self::flush_remote_recv_buf_to_client(
-                            &client_endpoint,
-                            &remote_endpoint,
-                        )
-                        .await
+                        if let Err(e) = remote_endpoint
+                            .consume_recv_buffer(
+                                &client_endpoint,
+                                Self::consume_remote_recv_buf_fn,
+                            )
+                            .await
                         {
                             error!("<<<< Transport {transport_id} error happen when flush remote receive buffer to client because of the error: {e:?}");
                         };
@@ -202,11 +209,12 @@ impl TcpTransport {
                     }
                     Ok(Ok(exhausted)) => {
                         // Remote endpoint still have data to read
-                        if let Err(e) = Self::flush_remote_recv_buf_to_client(
-                            &client_endpoint,
-                            &remote_endpoint,
-                        )
-                        .await
+                        if let Err(e) = remote_endpoint
+                            .consume_recv_buffer(
+                                &client_endpoint,
+                                Self::consume_remote_recv_buf_fn,
+                            )
+                            .await
                         {
                             client_endpoint.close().await;
                             client_endpoint.destroy().await;
@@ -224,11 +232,12 @@ impl TcpTransport {
                     }
                     Ok(Err(e)) => {
                         error!("<<<< Transport {transport_id} error happen when read from remote endpoint because of the error: {e:?}");
-                        if let Err(e) = Self::flush_remote_recv_buf_to_client(
-                            &client_endpoint,
-                            &remote_endpoint,
-                        )
-                        .await
+                        if let Err(e) = remote_endpoint
+                            .consume_recv_buffer(
+                                &client_endpoint,
+                                Self::consume_remote_recv_buf_fn,
+                            )
+                            .await
                         {
                             error!("<<<< Transport {transport_id} error happen when flush remote receive buffer to client because of the error: {e:?}");
                         };
@@ -257,21 +266,6 @@ impl TcpTransport {
         remote_endpoint.write_to_remote(data).await
     }
 
-    async fn flush_client_recv_buf_to_remote<'b>(
-        client_endpoint: &ClientTcpEndpoint<'b>,
-        remote_endpoint: &RemoteTcpEndpoint,
-    ) -> Result<(), RemoteEndpointError>
-    where
-        'b: 'static,
-    {
-        client_endpoint
-            .consume_recv_buffer(
-                remote_endpoint,
-                Self::consume_client_recv_buf_fn,
-            )
-            .await
-    }
-
     /// The concrete function to forward remote receive buffer to client.
     /// * transport_id: The transportation id.
     /// * data: The data going to send to remote.
@@ -289,20 +283,5 @@ impl TcpTransport {
             pretty_hex::pretty_hex(&data)
         );
         client_endpoint.send_to_smoltcp(&data).await
-    }
-
-    async fn flush_remote_recv_buf_to_client<'b>(
-        client_endpoint: &ClientTcpEndpoint<'b>,
-        remote_endpoint: &RemoteTcpEndpoint,
-    ) -> Result<(), ClientEndpointError>
-    where
-        'b: 'static,
-    {
-        remote_endpoint
-            .consume_recv_buffer(
-                client_endpoint,
-                Self::consume_remote_recv_buf_fn,
-            )
-            .await
     }
 }

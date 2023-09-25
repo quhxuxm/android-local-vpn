@@ -27,6 +27,7 @@ use ppaass_common::{
     PpaassMessageGenerator, PpaassMessagePayloadEncryptionSelector,
     PpaassProxyMessage,
 };
+use tokio::time::timeout;
 
 type RemoteUdpRecvBuf = VecDeque<Bytes>;
 
@@ -85,9 +86,7 @@ impl RemoteUdpEndpoint {
         RemoteEndpointError,
     > {
         let proxy_addresses = config.get_proxy_address();
-        let proxy_tcp_stream = tokio::time::timeout(
-        Duration::from_secs(10),
-        tcp_socket.connect(proxy_addresses.parse()?),
+        let proxy_tcp_stream = timeout(Duration::from_secs(10), tcp_socket.connect(proxy_addresses.parse()?),
     )
     .await
     .map_err(|_| {
@@ -109,21 +108,11 @@ impl RemoteUdpEndpoint {
     ) -> Result<bool, RemoteEndpointError> {
         match self.proxy_connection_read.next().await {
             None => Ok(true),
-            Some(Ok(PpaassProxyMessage {
-                payload: proxy_message_payload,
-                ..
-            })) => {
-                let UdpData {
-                    data: udp_relay_data,
-                    ..
-                } = proxy_message_payload.data.try_into()?;
-                trace!(
-                "<<<< Transport {}, [UDP PROCESS] read remote udp data to remote receive buffer: {}",
-                self.transport_id,
-                pretty_hex::pretty_hex(&udp_relay_data)
-            );
-
-                self.recv_buffer.push_back(udp_relay_data);
+            Some(Ok(proxy_message)) => {
+                let PpaassProxyMessage { payload, .. } = proxy_message;
+                let UdpData { data, .. } = payload.data.try_into()?;
+                trace!("<<<< Transport {}, [UDP PROCESS] read remote udp data to remote receive buffer: {}", self.transport_id, pretty_hex::pretty_hex(&data));
+                self.recv_buffer.push_back(data);
                 Ok(false)
             }
             Some(Err(e)) => {

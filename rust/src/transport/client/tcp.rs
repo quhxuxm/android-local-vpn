@@ -9,20 +9,17 @@ use smoltcp::{
     iface::{SocketHandle, SocketSet},
     socket::tcp::State,
 };
-use tokio::sync::{mpsc::Sender, Mutex, MutexGuard, RwLock};
+use tokio::sync::{mpsc::UnboundedSender, Mutex, MutexGuard, RwLock};
 
-use crate::config;
 use crate::error::RemoteEndpointError;
+use crate::{config, repository::TcpTransportsRepoCmd};
 use crate::{config::PpaassVpnServerConfig, device::SmoltcpDevice};
 use crate::{error::ClientEndpointError, transport::remote::RemoteTcpEndpoint};
 use smoltcp::socket::tcp::SocketBuffer as SmoltcpTcpSocketBuffer;
 
 use super::{
     ClientOutputPacket, TransportId,
-    {
-        poll_and_transfer_smoltcp_data_to_client,
-        prepare_smoltcp_iface_and_device,
-    },
+    {poll_smoltcp_and_flush, prepare_smoltcp_iface_and_device},
 };
 
 type ClientTcpRecvBuf = RwLock<VecDeque<u8>>;
@@ -69,8 +66,8 @@ pub(crate) struct ClientTcpEndpoint<'buf> {
     ctl: ClientTcpEndpointCtl<'buf>,
     smoltcp_socket_handle: SocketHandle,
     recv_buffer: Arc<ClientTcpRecvBuf>,
-    client_output_tx: Sender<ClientOutputPacket>,
-    remove_tcp_transports_tx: Sender<TransportId>,
+    client_output_tx: UnboundedSender<ClientOutputPacket>,
+    repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
     _config: &'static PpaassVpnServerConfig,
 }
 
@@ -80,8 +77,8 @@ where
 {
     pub(crate) fn new(
         transport_id: TransportId,
-        client_output_tx: Sender<ClientOutputPacket>,
-        remove_tcp_transports_tx: Sender<TransportId>,
+        client_output_tx: UnboundedSender<ClientOutputPacket>,
+        repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
         config: &'static PpaassVpnServerConfig,
     ) -> Result<ClientTcpEndpoint<'_>, ClientEndpointError> {
         let (smoltcp_iface, smoltcp_device) =
@@ -101,7 +98,7 @@ where
             transport_id,
             smoltcp_socket_handle,
             ctl,
-            remove_tcp_transports_tx,
+            repo_cmd_tx,
             recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(
                 config.get_client_endpoint_tcp_recv_buffer_size(),
             ))),
@@ -168,7 +165,7 @@ where
             .get_mut::<SmoltcpTcpSocket>(self.smoltcp_socket_handle);
         if smoltcp_socket.may_send() {
             let send_result = smoltcp_socket.send_slice(data)?;
-            poll_and_transfer_smoltcp_data_to_client(
+            poll_smoltcp_and_flush(
                 self.transport_id,
                 &mut smoltcp_socket_set,
                 &mut smoltcp_iface,
@@ -194,7 +191,7 @@ where
         } = self.ctl.lock().await;
 
         smoltcp_device.push_rx(client_data);
-        if poll_and_transfer_smoltcp_data_to_client(
+        if poll_smoltcp_and_flush(
             self.transport_id,
             &mut smoltcp_socket_set,
             &mut smoltcp_iface,
@@ -238,7 +235,7 @@ where
         let smoltcp_socket = smoltcp_socket_set
             .get_mut::<SmoltcpTcpSocket>(self.smoltcp_socket_handle);
         smoltcp_socket.abort();
-        poll_and_transfer_smoltcp_data_to_client(
+        poll_smoltcp_and_flush(
             self.transport_id,
             &mut smoltcp_socket_set,
             &mut smoltcp_iface,
@@ -256,7 +253,7 @@ where
         let smoltcp_socket = smoltcp_socket_set
             .get_mut::<SmoltcpTcpSocket>(self.smoltcp_socket_handle);
         smoltcp_socket.close();
-        poll_and_transfer_smoltcp_data_to_client(
+        poll_smoltcp_and_flush(
             self.transport_id,
             &mut smoltcp_socket_set,
             &mut smoltcp_iface,
@@ -275,8 +272,9 @@ where
         smoltcp_socket_set.remove(self.smoltcp_socket_handle);
         smoltcp_device.destory();
         self.recv_buffer.write().await.clear();
-        if let Err(e) =
-            self.remove_tcp_transports_tx.send(self.transport_id).await
+        if let Err(e) = self
+            .repo_cmd_tx
+            .send(TcpTransportsRepoCmd::Remove(self.transport_id))
         {
             error!("###### Transport {} fail to send remove transports signal because of error: {e:?}", self.transport_id)
         }
