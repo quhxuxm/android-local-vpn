@@ -9,10 +9,7 @@ use smoltcp::{
     iface::{SocketHandle, SocketSet},
     socket::tcp::State,
 };
-use tokio::sync::{
-    mpsc::{Sender, UnboundedSender},
-    Mutex, MutexGuard, RwLock,
-};
+use tokio::sync::{mpsc::UnboundedSender, Mutex, MutexGuard, RwLock};
 
 use crate::error::RemoteEndpointError;
 use crate::{config, repository::TcpTransportsRepoCmd};
@@ -69,7 +66,7 @@ pub(crate) struct ClientTcpEndpoint<'buf> {
     ctl: ClientTcpEndpointCtl<'buf>,
     smoltcp_socket_handle: SocketHandle,
     recv_buffer: Arc<ClientTcpRecvBuf>,
-    client_output_tx: Sender<ClientOutputPacket>,
+    client_output_tx: UnboundedSender<ClientOutputPacket>,
     repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
     _config: &'static PpaassVpnServerConfig,
 }
@@ -80,7 +77,7 @@ where
 {
     pub(crate) fn new(
         transport_id: TransportId,
-        client_output_tx: Sender<ClientOutputPacket>,
+        client_output_tx: UnboundedSender<ClientOutputPacket>,
         repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
         config: &'static PpaassVpnServerConfig,
     ) -> Result<ClientTcpEndpoint<'_>, ClientEndpointError> {

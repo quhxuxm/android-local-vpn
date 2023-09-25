@@ -25,7 +25,7 @@ pub(crate) struct TcpTransportsRepository {
 
 impl TcpTransportsRepository {
     pub(crate) fn new(
-        client_output_tx: mpsc::Sender<ClientOutputPacket>,
+        client_output_tx: mpsc::UnboundedSender<ClientOutputPacket>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         vpn_server_config: &'static PpaassVpnServerConfig,
     ) -> Self {
@@ -62,7 +62,7 @@ impl TcpTransportsRepository {
     async fn handle_cmd(
         repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
         mut repo_cmd_rx: UnboundedReceiver<TcpTransportsRepoCmd>,
-        client_output_tx: mpsc::Sender<ClientOutputPacket>,
+        client_output_tx: mpsc::UnboundedSender<ClientOutputPacket>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         vpn_server_config: &'static PpaassVpnServerConfig,
     ) -> Result<(), TcpTransportRepositoryError> {

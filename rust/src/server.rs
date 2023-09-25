@@ -9,17 +9,17 @@ use anyhow::Result;
 use bytes::BytesMut;
 use log::{debug, error, info, trace};
 
+use tokio::task::yield_now;
 use tokio::{
     runtime::{Builder as TokioRuntimeBuilder, Runtime as TokioRuntime},
     sync::{
-        mpsc::Sender as MpscSender,
+        mpsc::{self, UnboundedSender},
         oneshot::{
             channel as OneshotChannel, Receiver as OneshotReceiver,
             Sender as OneshotSender,
         },
     },
 };
-use tokio::{sync::mpsc::channel as MpscChannel, task::yield_now};
 
 use crate::util::AgentRsaCryptoFetcher;
 use crate::{
@@ -77,7 +77,7 @@ impl PpaassVpnServer {
         let mut client_file_write =
             unsafe { File::from_raw_fd(file_descriptor) };
         let (client_output_tx, mut client_output_rx) =
-            MpscChannel::<ClientOutputPacket>(65536);
+            mpsc::unbounded_channel::<ClientOutputPacket>();
 
         let ppaass_server_config = self.config;
         let (stop_signal_tx, stop_signal_rx) = OneshotChannel();
@@ -116,7 +116,7 @@ impl PpaassVpnServer {
     async fn start_handle_client_rx(
         mut client_file_read: File,
         mut stop_signal_rx: OneshotReceiver<bool>,
-        client_output_tx: MpscSender<ClientOutputPacket>,
+        client_output_tx: UnboundedSender<ClientOutputPacket>,
         agent_rsa_crypto_fetcher: &'static AgentRsaCryptoFetcher,
         config: &'static PpaassVpnServerConfig,
     ) {

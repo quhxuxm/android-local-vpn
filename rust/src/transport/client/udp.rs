@@ -11,7 +11,7 @@ use smoltcp::{
     phy::PacketMeta,
     socket::udp::UdpMetadata,
 };
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 
 use super::{
     ClientOutputPacket, TransportId,
@@ -36,7 +36,7 @@ pub(crate) struct ClientUdpEndpoint<'buf> {
     smoltcp_iface: Interface,
     smoltcp_device: SmoltcpDevice,
     recv_buffer: ClientUdpRecvBuf,
-    client_output_tx: Sender<ClientOutputPacket>,
+    client_output_tx: UnboundedSender<ClientOutputPacket>,
     _config: &'static PpaassVpnServerConfig,
 }
 
@@ -46,7 +46,7 @@ where
 {
     pub(crate) fn new(
         transport_id: TransportId,
-        client_output_tx: Sender<ClientOutputPacket>,
+        client_output_tx: UnboundedSender<ClientOutputPacket>,
         config: &'static PpaassVpnServerConfig,
     ) -> Result<ClientUdpEndpoint<'_>, ClientEndpointError> {
         let (smoltcp_iface, smoltcp_device) =

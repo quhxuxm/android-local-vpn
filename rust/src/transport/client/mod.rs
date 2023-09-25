@@ -4,7 +4,7 @@ mod udp;
 use smoltcp::iface::SocketSet;
 
 use smoltcp::iface::Interface;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::device::SmoltcpDevice;
 use crate::error::ClientEndpointError;
@@ -53,17 +53,14 @@ async fn poll_smoltcp_and_flush(
     smoltcp_socket_set: &mut SocketSet<'_>,
     smoltcp_iface: &mut Interface,
     smoltcp_device: &mut SmoltcpDevice,
-    client_output_tx: &Sender<ClientOutputPacket>,
+    client_output_tx: &UnboundedSender<ClientOutputPacket>,
 ) -> bool {
     poll_smoltcp(smoltcp_socket_set, smoltcp_iface, smoltcp_device).await;
     while let Some(data) = smoltcp_device.pop_tx() {
-        if let Err(e) = client_output_tx
-            .send(ClientOutputPacket {
-                transport_id,
-                data: data.freeze(),
-            })
-            .await
-        {
+        if let Err(e) = client_output_tx.send(ClientOutputPacket {
+            transport_id,
+            data: data.freeze(),
+        }) {
             error!("<<<< Transport {transport_id} fail to transfer smoltcp data for output because of error: {e:?}");
             break;
         };

@@ -24,7 +24,7 @@ use super::{
 #[derive(Debug)]
 pub(crate) struct TcpTransport {
     transport_id: TransportId,
-    client_output_tx: Sender<ClientOutputPacket>,
+    client_output_tx: UnboundedSender<ClientOutputPacket>,
     client_input_rx: Receiver<BytesMut>,
 }
 
@@ -34,7 +34,7 @@ impl TcpTransport {
     /// * client_output_tx: The sender which send output packe to client.
     pub(crate) fn new(
         transport_id: TransportId,
-        client_output_tx: Sender<ClientOutputPacket>,
+        client_output_tx: UnboundedSender<ClientOutputPacket>,
     ) -> (Self, Sender<BytesMut>) {
         let (client_input_tx, client_input_rx) =
             mpsc::channel::<BytesMut>(65536);

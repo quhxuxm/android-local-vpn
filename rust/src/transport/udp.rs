@@ -3,7 +3,7 @@ use std::time::Duration;
 use bytes::{Bytes, BytesMut};
 use log::{debug, error, trace};
 
-use tokio::{sync::mpsc::Sender, time::timeout};
+use tokio::{sync::mpsc::UnboundedSender, time::timeout};
 
 use crate::{
     config::PpaassVpnServerConfig,
@@ -19,13 +19,13 @@ use super::{
 #[derive(Debug)]
 pub(crate) struct UdpTransport {
     transport_id: TransportId,
-    client_output_tx: Sender<ClientOutputPacket>,
+    client_output_tx: UnboundedSender<ClientOutputPacket>,
 }
 
 impl UdpTransport {
     pub(crate) fn new(
         transport_id: TransportId,
-        client_output_tx: Sender<ClientOutputPacket>,
+        client_output_tx: UnboundedSender<ClientOutputPacket>,
     ) -> Self {
         Self {
             transport_id,
