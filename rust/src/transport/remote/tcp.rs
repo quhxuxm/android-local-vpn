@@ -79,7 +79,6 @@ impl RemoteTcpEndpoint {
             transport_id,
             proxy_connection_read: Mutex::new(proxy_connection_read),
             proxy_connection_write: Mutex::new(proxy_connection_write),
-            // recv_buffer: Arc::new(RwLock::new(BytesMut::with_capacity(65536))),
             recv_buf_cmd_tx,
             config,
         })
