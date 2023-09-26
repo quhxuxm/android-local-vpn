@@ -14,10 +14,8 @@ pub(crate) struct PpaassVpnServerConfig {
     smoltcp_udp_tx_packet_buffer_number: usize,
     client_endpoint_tcp_recv_buffer_size: usize,
     client_endpoint_udp_recv_buffer_size: usize,
-
     remote_endpoint_tcp_recv_buffer_size: usize,
     remote_endpoint_udp_recv_buffer_size: usize,
-
     remote_tcp_recv_timeout: u64,
     remote_udp_recv_timeout: u64,
     client_tcp_recv_timeout: u64,
