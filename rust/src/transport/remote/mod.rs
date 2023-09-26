@@ -9,8 +9,9 @@ use crate::util::AgentRsaCryptoFetcher;
 use super::TransportId;
 use ppaass_common::{proxy::PpaassProxyConnection, PpaassAgentMessage};
 pub(crate) use tcp::RemoteTcpEndpoint;
-pub(crate) use udp::RemoteUdpEndpoint;
 pub(crate) use tcp::RemoteTcpEndpointRecvBufCmd;
+pub(crate) use udp::RemoteUdpEndpoint;
+
 type ProxyConnectionWrite = SplitSink<
     PpaassProxyConnection<
         'static,
