@@ -63,7 +63,7 @@ impl<'buf> ClientTcpEndpointCtl<'buf> {
 }
 
 pub(crate) enum ClientTcpEndpointRecvBufCmd {
-    Dump(Arc<RemoteTcpEndpoint>),
+    DumpToRemote(Arc<RemoteTcpEndpoint>),
     Extend(Vec<u8>),
     Clear,
 }
@@ -105,9 +105,7 @@ where
             mpsc::unbounded_channel::<ClientTcpEndpointRecvBufCmd>();
         tokio::spawn(Self::handle_recv_buf_cmd(
             transport_id,
-            VecDeque::with_capacity(
-                config.get_client_endpoint_tcp_recv_buffer_size(),
-            ),
+            config,
             recv_buf_cmd_rx,
         ));
         Ok(Self {
@@ -123,12 +121,15 @@ where
 
     async fn handle_recv_buf_cmd(
         transport_id: TransportId,
-        mut recv_buffer: VecDeque<u8>,
+        config: &'static PpaassVpnServerConfig,
         mut recv_buf_cmd_rx: UnboundedReceiver<ClientTcpEndpointRecvBufCmd>,
     ) {
+        let mut recv_buffer = VecDeque::with_capacity(
+            config.get_client_endpoint_tcp_recv_buffer_size(),
+        );
         while let Some(cmd) = recv_buf_cmd_rx.recv().await {
             match cmd {
-                ClientTcpEndpointRecvBufCmd::Dump(remote) => {
+                ClientTcpEndpointRecvBufCmd::DumpToRemote(remote) => {
                     if recv_buffer.is_empty() {
                         continue;
                     }
@@ -183,7 +184,7 @@ where
         remote: Arc<RemoteTcpEndpoint>,
     ) -> Result<(), ClientEndpointError> {
         self.recv_buf_cmd_tx
-            .send(ClientTcpEndpointRecvBufCmd::Dump(remote))?;
+            .send(ClientTcpEndpointRecvBufCmd::DumpToRemote(remote))?;
         Ok(())
     }
 

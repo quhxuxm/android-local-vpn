@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
-use bytes::{Bytes, BytesMut};
-use log::{debug, error, trace};
+use bytes::BytesMut;
+use log::{debug, error};
 use smoltcp::socket::tcp::State;
 use tokio::{
     sync::mpsc,
@@ -183,10 +183,7 @@ impl TcpTransport {
                     Err(_) => {
                         error!("<<<< Transport {transport_id} receive tcp from remote timeout in 10 seconds.");
                         if let Err(e) = remote_endpoint
-                            .consume_recv_buffer(
-                                &client_endpoint,
-                                Self::consume_remote_recv_buf_fn,
-                            )
+                            .consume_recv_buffer(Arc::clone(&client_endpoint))
                             .await
                         {
                             error!("<<<< Transport {transport_id} error happen when flush remote receive buffer to client because of the error: {e:?}");
@@ -198,10 +195,7 @@ impl TcpTransport {
                     Ok(Ok(exhausted)) => {
                         // Remote endpoint still have data to read
                         if let Err(e) = remote_endpoint
-                            .consume_recv_buffer(
-                                &client_endpoint,
-                                Self::consume_remote_recv_buf_fn,
-                            )
+                            .consume_recv_buffer(Arc::clone(&client_endpoint))
                             .await
                         {
                             client_endpoint.close().await;
@@ -221,10 +215,7 @@ impl TcpTransport {
                     Ok(Err(e)) => {
                         error!("<<<< Transport {transport_id} error happen when read from remote endpoint because of the error: {e:?}");
                         if let Err(e) = remote_endpoint
-                            .consume_recv_buffer(
-                                &client_endpoint,
-                                Self::consume_remote_recv_buf_fn,
-                            )
+                            .consume_recv_buffer(Arc::clone(&client_endpoint))
                             .await
                         {
                             error!("<<<< Transport {transport_id} error happen when flush remote receive buffer to client because of the error: {e:?}");
@@ -236,24 +227,5 @@ impl TcpTransport {
                 }
             }
         });
-    }
-
-    /// The concrete function to forward remote receive buffer to client.
-    /// * transport_id: The transportation id.
-    /// * data: The data going to send to remote.
-    /// * client: The client endpoint.
-    async fn consume_remote_recv_buf_fn<'b>(
-        transport_id: TransportId,
-        data: Bytes,
-        client_endpoint: &ClientTcpEndpoint<'b>,
-    ) -> Result<usize, ClientEndpointError>
-    where
-        'b: 'static,
-    {
-        trace!(
-            ">>>> Transport {transport_id} write data to smoltcp: {}",
-            pretty_hex::pretty_hex(&data)
-        );
-        client_endpoint.send_to_smoltcp(&data).await
     }
 }

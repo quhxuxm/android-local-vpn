@@ -10,7 +10,7 @@ use super::TransportId;
 use ppaass_common::{proxy::PpaassProxyConnection, PpaassAgentMessage};
 pub(crate) use tcp::RemoteTcpEndpoint;
 pub(crate) use udp::RemoteUdpEndpoint;
-
+pub(crate) use tcp::RemoteTcpEndpointRecvBufCmd;
 type ProxyConnectionWrite = SplitSink<
     PpaassProxyConnection<
         'static,
