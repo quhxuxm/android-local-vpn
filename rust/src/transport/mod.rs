@@ -10,6 +10,7 @@ use std::{fmt::Display, net::SocketAddr};
 
 use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv6Packet, TcpPacket, UdpPacket};
 
+pub(crate) use self::client::ClientTcpEndpointRecvBufCmd;
 pub(crate) use self::tcp::TcpTransport;
 pub(crate) use self::udp::UdpTransport;
 

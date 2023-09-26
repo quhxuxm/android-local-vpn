@@ -1,7 +1,10 @@
 #![allow(unused)]
 use std::net::AddrParseError;
 
-use crate::{repository::TcpTransportsRepoCmd, transport::TransportId};
+use crate::{
+    repository::TcpTransportsRepoCmd,
+    transport::{ClientTcpEndpointRecvBufCmd, TransportId},
+};
 use bytes::BytesMut;
 use ppaass_common::{CommonError, PpaassMessageProxyProtocol};
 use smoltcp::{
@@ -87,4 +90,6 @@ pub(crate) enum ClientEndpointError {
     SmoltcpUdpSendError(#[from] SmoltcpUdpSendError),
     #[error("Smoltcp router table error happen: {0:?}")]
     SmoltcpRouterTableError(#[from] SmoltcpRouteTableFullError),
+    #[error("Send recv buffer command error happen: {0:?}")]
+    SendRecvBufferCmd(#[from] SendError<ClientTcpEndpointRecvBufCmd>),
 }

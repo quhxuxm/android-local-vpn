@@ -14,7 +14,6 @@ use tokio::sync::{
     Mutex, MutexGuard,
 };
 
-use crate::error::RemoteEndpointError;
 use crate::{config, repository::TcpTransportsRepoCmd};
 use crate::{config::PpaassVpnServerConfig, device::SmoltcpDevice};
 use crate::{error::ClientEndpointError, transport::remote::RemoteTcpEndpoint};
@@ -65,7 +64,7 @@ impl<'buf> ClientTcpEndpointCtl<'buf> {
 
 pub(crate) enum ClientTcpEndpointRecvBufCmd {
     Dump(Arc<RemoteTcpEndpoint>),
-    Extend(Bytes),
+    Extend(Vec<u8>),
     Clear,
 }
 
@@ -182,9 +181,9 @@ where
     pub(crate) async fn consume_recv_buffer(
         &self,
         remote: Arc<RemoteTcpEndpoint>,
-    ) -> Result<(), RemoteEndpointError> {
+    ) -> Result<(), ClientEndpointError> {
         self.recv_buf_cmd_tx
-            .send(ClientTcpEndpointRecvBufCmd::Dump(remote));
+            .send(ClientTcpEndpointRecvBufCmd::Dump(remote))?;
         Ok(())
     }
 
@@ -253,10 +252,9 @@ where
                         );
                     }
                 };
-                self.recv_buf_cmd_tx
-                    .send(ClientTcpEndpointRecvBufCmd::Extend(Bytes::from(
-                        tcp_data.to_vec(),
-                    )));
+                self.recv_buf_cmd_tx.send(
+                    ClientTcpEndpointRecvBufCmd::Extend(tcp_data.to_vec()),
+                )?;
             }
             return Ok(smoltcp_tcp_socket.state());
         }
@@ -310,13 +308,18 @@ where
         } = self.ctl.lock().await;
         smoltcp_socket_set.remove(self.smoltcp_socket_handle);
         smoltcp_device.destory();
-        self.recv_buf_cmd_tx
-            .send(ClientTcpEndpointRecvBufCmd::Clear);
+        if let Err(e) = self
+            .recv_buf_cmd_tx
+            .send(ClientTcpEndpointRecvBufCmd::Clear)
+        {
+            error!("###### Transport {} fail to send clear recv buffer command because of error: {e:?}", self.transport_id)
+        };
         if let Err(e) = self
             .repo_cmd_tx
             .send(TcpTransportsRepoCmd::Remove(self.transport_id))
         {
             error!("###### Transport {} fail to send remove transports signal because of error: {e:?}", self.transport_id)
         }
+        self.recv_buf_cmd_tx.closed().await;
     }
 }
