@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, future::Future, sync::Arc};
+use std::{collections::VecDeque, sync::Arc};
 
 use anyhow::Result;
 
@@ -9,9 +9,11 @@ use smoltcp::{
     iface::{SocketHandle, SocketSet},
     socket::tcp::State,
 };
-use tokio::sync::{mpsc::UnboundedSender, Mutex, MutexGuard, RwLock};
+use tokio::sync::{
+    mpsc::{self, UnboundedReceiver, UnboundedSender},
+    Mutex, MutexGuard,
+};
 
-use crate::error::RemoteEndpointError;
 use crate::{config, repository::TcpTransportsRepoCmd};
 use crate::{config::PpaassVpnServerConfig, device::SmoltcpDevice};
 use crate::{error::ClientEndpointError, transport::remote::RemoteTcpEndpoint};
@@ -21,8 +23,6 @@ use super::{
     ClientOutputPacket, TransportId,
     {poll_smoltcp_and_flush, prepare_smoltcp_iface_and_device},
 };
-
-type ClientTcpRecvBuf = RwLock<VecDeque<u8>>;
 
 struct ClientTcpEndpointCtlLockGuard<'lock, 'buf> {
     smoltcp_socket_set: MutexGuard<'lock, SocketSet<'buf>>,
@@ -61,11 +61,18 @@ impl<'buf> ClientTcpEndpointCtl<'buf> {
         }
     }
 }
+
+pub(crate) enum ClientTcpEndpointRecvBufCmd {
+    DumpToRemote(Arc<RemoteTcpEndpoint>),
+    Extend(Vec<u8>),
+    Clear,
+}
+
 pub(crate) struct ClientTcpEndpoint<'buf> {
     transport_id: TransportId,
     ctl: ClientTcpEndpointCtl<'buf>,
     smoltcp_socket_handle: SocketHandle,
-    recv_buffer: Arc<ClientTcpRecvBuf>,
+    recv_buf_cmd_tx: UnboundedSender<ClientTcpEndpointRecvBufCmd>,
     client_output_tx: UnboundedSender<ClientOutputPacket>,
     repo_cmd_tx: UnboundedSender<TcpTransportsRepoCmd>,
     _config: &'static PpaassVpnServerConfig,
@@ -94,17 +101,58 @@ where
             Mutex::new(smoltcp_iface),
             Mutex::new(smoltcp_device),
         );
+        let (recv_buf_cmd_tx, recv_buf_cmd_rx) =
+            mpsc::unbounded_channel::<ClientTcpEndpointRecvBufCmd>();
+        tokio::spawn(Self::handle_recv_buf_cmd(
+            transport_id,
+            config,
+            recv_buf_cmd_rx,
+        ));
         Ok(Self {
             transport_id,
             smoltcp_socket_handle,
             ctl,
             repo_cmd_tx,
-            recv_buffer: Arc::new(RwLock::new(VecDeque::with_capacity(
-                config.get_client_endpoint_tcp_recv_buffer_size(),
-            ))),
+            recv_buf_cmd_tx,
             client_output_tx,
             _config: config,
         })
+    }
+
+    async fn handle_recv_buf_cmd(
+        transport_id: TransportId,
+        config: &'static PpaassVpnServerConfig,
+        mut recv_buf_cmd_rx: UnboundedReceiver<ClientTcpEndpointRecvBufCmd>,
+    ) {
+        let mut recv_buffer = VecDeque::with_capacity(
+            config.get_client_endpoint_tcp_recv_buffer_size(),
+        );
+        while let Some(cmd) = recv_buf_cmd_rx.recv().await {
+            match cmd {
+                ClientTcpEndpointRecvBufCmd::DumpToRemote(remote) => {
+                    if recv_buffer.is_empty() {
+                        continue;
+                    }
+                    let recv_buffer_data =
+                        Bytes::from(recv_buffer.make_contiguous().to_vec());
+                    let consume_size = match remote
+                        .write_to_remote(recv_buffer_data)
+                        .await
+                    {
+                        Ok(consume_size) => consume_size,
+                        Err(e) => {
+                            error!(">>>> Transport {transport_id} fail to dump client endpoint receive buffer to remote endpoint because of error: {e:?}");
+                            continue;
+                        }
+                    };
+                    recv_buffer.drain(..consume_size);
+                }
+                ClientTcpEndpointRecvBufCmd::Extend(data) => {
+                    recv_buffer.extend(&data);
+                }
+                ClientTcpEndpointRecvBufCmd::Clear => recv_buffer.clear(),
+            }
+        }
     }
 
     fn create_smoltcp_tcp_socket<'a>(
@@ -131,24 +179,12 @@ where
         Ok(socket)
     }
 
-    pub(crate) async fn consume_recv_buffer<'r, F, Fut>(
+    pub(crate) async fn consume_recv_buffer(
         &self,
-        remote: &'r RemoteTcpEndpoint,
-        mut consume_fn: F,
-    ) -> Result<(), RemoteEndpointError>
-    where
-        F: FnMut(TransportId, Bytes, &'r RemoteTcpEndpoint) -> Fut,
-        Fut: Future<Output = Result<usize, RemoteEndpointError>>,
-    {
-        if self.recv_buffer.read().await.is_empty() {
-            return Ok(());
-        }
-        let mut recv_buffer = self.recv_buffer.write().await;
-        let recv_buffer_data =
-            Bytes::from(recv_buffer.make_contiguous().to_vec());
-        let consume_size =
-            consume_fn(self.transport_id, recv_buffer_data, remote).await?;
-        recv_buffer.drain(..consume_size);
+        remote: Arc<RemoteTcpEndpoint>,
+    ) -> Result<(), ClientEndpointError> {
+        self.recv_buf_cmd_tx
+            .send(ClientTcpEndpointRecvBufCmd::DumpToRemote(remote))?;
         Ok(())
     }
 
@@ -217,7 +253,9 @@ where
                         );
                     }
                 };
-                self.recv_buffer.write().await.extend(tcp_data);
+                self.recv_buf_cmd_tx.send(
+                    ClientTcpEndpointRecvBufCmd::Extend(tcp_data.to_vec()),
+                )?;
             }
             return Ok(smoltcp_tcp_socket.state());
         }
@@ -271,12 +309,18 @@ where
         } = self.ctl.lock().await;
         smoltcp_socket_set.remove(self.smoltcp_socket_handle);
         smoltcp_device.destory();
-        self.recv_buffer.write().await.clear();
+        if let Err(e) = self
+            .recv_buf_cmd_tx
+            .send(ClientTcpEndpointRecvBufCmd::Clear)
+        {
+            error!("###### Transport {} fail to send clear recv buffer command because of error: {e:?}", self.transport_id)
+        };
         if let Err(e) = self
             .repo_cmd_tx
             .send(TcpTransportsRepoCmd::Remove(self.transport_id))
         {
             error!("###### Transport {} fail to send remove transports signal because of error: {e:?}", self.transport_id)
         }
+        self.recv_buf_cmd_tx.closed().await;
     }
 }

@@ -16,6 +16,7 @@ use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 use smoltcp::{iface::Config, time::Instant, wire::HardwareAddress};
 
 pub(crate) use tcp::ClientTcpEndpoint;
+pub(crate) use tcp::ClientTcpEndpointRecvBufCmd;
 pub(crate) use udp::ClientUdpEndpoint;
 
 static DEFAULT_GATEWAY_IPV4_ADDR: Ipv4Address = Ipv4Address::new(0, 0, 0, 1);
